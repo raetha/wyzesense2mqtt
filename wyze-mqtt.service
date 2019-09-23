@@ -1,0 +1,13 @@
+[Unit]
+Description=Wyzesense via Mqtt
+Documentation=https://www.github.com/ozczecho
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/mike/wyze
+ExecStart=/home/mike/wyze/service.sh
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
