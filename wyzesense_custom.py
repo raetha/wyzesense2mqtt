@@ -14,15 +14,15 @@ import binascii
 import errno
 
 import logging
-log = logging.getLogger(__name__)
-
+logging.basicConfig(filename="wyze_impl.log", level=logging.DEBUG, filemode="w", format="%(asctime)s|%(process)d|%(levelname)s|%(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+logging.info("started")
+log = logging.getLogger("wyzesense_custom")
 
 def bytes_to_hex(s):
     if s:
         return binascii.hexlify(s)
     else:
         return "<None>"
-
 
 def checksum_from_bytes(s):
     return sum(bytes(s)) & 0xFFFF
@@ -37,7 +37,7 @@ def MAKE_CMD(type, cmd):
 
 
 class Packet(object):
-    _CMD_TIMEOUT = 5
+    _CMD_TIMEOUT = 9
 
     # Sync packets:
     # Commands initiated from host side
@@ -110,8 +110,19 @@ class Packet(object):
         checksum = checksum_from_bytes(pkt)
         pkt += struct.pack(">H", checksum)
         log.debug("Sending: %s", bytes_to_hex(pkt))
-        ss = os.write(fd, pkt)
-        assert ss == len(pkt)
+
+        success = False
+        for i in range(3):
+            if (success is False):
+                try:
+                    ss = os.write(fd, pkt)
+                    assert ss == len(pkt)
+                    success = True
+                except TimeoutError as err:
+                    log.info("Got a timeout retrying now")
+            else:
+                success = True
+                break
 
     @classmethod
     def Parse(cls, s):
@@ -248,7 +259,7 @@ class SensorEvent(object):
 
 
 class Dongle(object):
-    _CMD_TIMEOUT = 5
+    _CMD_TIMEOUT = 11
 
     class CmdContext(object):
         def __init__(self, **kwargs):
@@ -385,7 +396,7 @@ class Dongle(object):
                     s = s[pkt.Length:]
                     self._HandlePacket(pkt)
             except OSError as e:
-                log.error(e)
+                log.error(e, exc_info=True)
                 break
 
     def _DoCommand(self, pkt, handler, timeout=_CMD_TIMEOUT):
@@ -393,8 +404,7 @@ class Dongle(object):
         oldHandler = self._SetHandler(pkt.Cmd + 1, lambda pkt: handler(pkt, e))
         self._SendPacket(pkt)
         result = e.wait(timeout)
-        self._SetHandler(pkt.Cmd + 1, oldHandler)
-
+        self._SetHandler(pkt.Cmd + 1, oldHandler)    
         if not result:
             raise TimeoutError("_DoCommand")
 
