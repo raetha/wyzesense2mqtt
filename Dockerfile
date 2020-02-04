@@ -3,7 +3,7 @@ FROM alpine:latest
 MAINTAINER Raetha
 
 RUN apk add --update python3 py-pip git && \
-    pip3 install paho-mqtt six && \
+    pip3 install -r requirements.txt && \
     rm -rf /var/cache/apk/* && \
     mkdir -p /data/wyze-mqtt && \
     git clone https://github.com/raetha/wyze-mqtt.git /data/wyze-mqtt && \
