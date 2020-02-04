@@ -1,0 +1,3 @@
+# Pip requirements file
+paho-mqtt
+six
