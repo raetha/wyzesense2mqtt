@@ -1,0 +1,17 @@
+version: "3.7"
+services:
+  wyze-mqtt:
+    container_name: wyze-mqtt
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: raetha/wyze-mqtt
+    restart: always
+    tty: true
+    stop_signal: SIGINT
+    devices:
+      - "/dev/hidraw0:/dev/hidraw0"
+    volumes:
+      - "/docker/wyze-mqtt/config.json:/data/wyze-mqtt/config.json"
+    environment:
+      TZ: "America/New_York"
