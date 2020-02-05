@@ -4,8 +4,12 @@ import socket
 from wyzesense_custom import *
 
 import sys
+import os
+if not os.path.exists("logs"):
+    os.makedirs("logs")
 import logging
 log = logging.getLogger("wyze-mqtt")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)-8s %(message)s", datefmt="%a, %d %b %Y %H:%M:%S", filename="logs/wyze-mqtt.log", filemode="w")
 
 diff = lambda l1, l2: [x for x in l1 if x not in l2]
 
