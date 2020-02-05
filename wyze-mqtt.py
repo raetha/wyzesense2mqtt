@@ -48,7 +48,7 @@ def on_message_remove(client, userdata, msg):
     log.debug(msg.topic+" " + str(msg.payload))          
 
 def read_config():
-    with open("../config/config.json") as config_file:
+    with open("config/config.json") as config_file:
         data = json.load(config_file)
     return data
 
