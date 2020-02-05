@@ -12,6 +12,6 @@ services:
     devices:
       - "/dev/hidraw0:/dev/hidraw0"
     volumes:
-      - "/docker/wyze-mqtt/config.json:/data/wyze-mqtt/config.json"
+      - "/docker/wyze-mqtt/config:/opt/wyze-mqtt/config"
     environment:
       TZ: "America/New_York"

@@ -1,0 +1,14 @@
+{
+    "mqtt":{
+        "host": "<host>",
+        "port": 1883,
+        "user": "<user>",
+        "password": "<password>",
+        "client": "wyze-mqtt"
+    },
+    "publishTopic":"wyze/",
+    "publishScanResult":"home/wyze/newdevice",
+    "subscribeScanTopic":"wyze/scan",
+    "subscribeRemoveTopic": "wyze/remove",
+    "usb":"/dev/hidraw0"
+}

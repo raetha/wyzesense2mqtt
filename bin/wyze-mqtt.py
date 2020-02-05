@@ -38,9 +38,9 @@ def on_message_scan(client, userdata, msg):
 
     if s != []:
         jsonData = json.dumps({"macs": s})
-        topic = "home/wyze/newdevice" 
+        topic = config["publishScanResult"]
         log.debug(jsonData)
-        client.publish(topic , jsonData)
+        client.publish(topic, payload = jsonData)
     else:
         log.debug("Empty Scan")
 
@@ -53,11 +53,11 @@ def read_config():
     return data
 
 config = read_config()
-client = mqtt.Client(config["mqtt"]["client"])
-client.username_pw_set(username=config["mqtt"]["user"], password=config["mqtt"]["password"])
-client.connect(config["mqtt"]["host"], config["mqtt"]["port"], keepalive=120)    
+client = mqtt.Client(client_id = config["mqtt"]["client"], clean_session = False)
+client.username_pw_set(username = config["mqtt"]["user"], password = config["mqtt"]["password"])
+client.connect(config["mqtt"]["host"], port = config["mqtt"]["port"], keepalive = 60)    
 
-client.subscribe([(config["subscribeScanTopic"], 1), (config["subscribeRemoveTopic"],1)])
+client.subscribe([(config["subscribeScanTopic"], 1), (config["subscribeRemoveTopic"], 1)])
 client.on_connect = on_connect
 client.on_disconnect = on_disconnect
 client.on_message = on_message
@@ -72,16 +72,16 @@ def on_event(ws, event):
                 "available": True,
                 "mac": event.MAC,
                 "state": 1 if sensor_state == "open" or sensor_state == "active" else 0,
-                "device class": "device motion" if sensor_type == "motion" else "device door",
-                "device class timestamp": event.Timestamp.isoformat(),
-                "rsssi": sensor_signal * -1,
-                "battery level": sensor_battery
+                "device_class": "device motion" if sensor_type == "motion" else "device door",
+                "device_class_timestamp": event.Timestamp.isoformat(),
+                "rssi": sensor_signal * -1,
+                "battery_level": sensor_battery
             }
 
             jsonData = json.dumps(data)
             topic = config["publishTopic"]+"{0}".format(event.MAC)
             log.debug(data)
-            client.publish(topic , payload = jsonData, retain = True)
+            client.publish(topic , payload = jsonData, qos = 2, retain = True)
         except TimeoutError as err:
             log.debug(err)
         except socket.timeout as err:            
@@ -100,4 +100,4 @@ ws = beginConn()
 
 # Message Loop
 log.debug("Loop Forever")
-client.loop_forever()
+client.loop_forever(retry_first_connection = True)
