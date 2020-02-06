@@ -59,48 +59,48 @@ def read_config():
     return data
 
 # Send HASS discovery topics to MQTT
-def send_discovery_topics(event):
+def send_discovery_topics(sensor_mac, sensor_type):
     device_data = {
-        "identifiers": ["wyze-mqtt_"+event.MAC],
+        "identifiers": ["wyze-mqtt_"+sensor_mac],
         "manufacturer": "Wyze",
-        "name": "Wyze Sense Motion Sensor" if event.Data["sensor_type"] == "motion" else "Wyze Sense Contact Sensor"
+        "name": "Wyze Sense Motion Sensor" if sensor_type == "motion" else "Wyze Sense Contact Sensor"
     }
 
     state_data = {
         "device": device_data,
-        "name": event.MAC+" State",
-        "unique_id": "wyze-mqtt_"+event.MAC+"_state",
-        "device_class": "motion" if event.Data["sensor_type"] == "motion" else "door",
-        "state_topic": config["publishTopic"]+event.MAC,
+        "name": sensor_mac+" State",
+        "unique_id": "wyze-mqtt_"+sensor_mac+"_state",
+        "device_class": "motion" if sensor_type == "motion" else "door",
+        "state_topic": config["publishTopic"]+sensor_mac,
         "value_template": "{{ value_json.state }}",
         "payload_off": "0",
         "payload_on": "1"
     }
-    state_topic = config["discoveryTopic"]+"binary_sensor/wyze-mqtt_{0}_state/config".format(event.MAC)
+    state_topic = config["discoveryTopic"]+"binary_sensor/wyze-mqtt_{0}_state/config".format(sensor_mac)
     client.publish(state_topic , payload = json.dumps(state_data), qos = int(config["mqtt"]["qos"]), retain = bool(config["mqtt"]["retain"]))
 
     rssi_data = {
         "device": device_data,
-        "name": event.MAC+" Signal Strength",
-        "unique_id": "wyze-mqtt_"+event.MAC+"_rssi",
+        "name": sensor_mac+" Signal Strength",
+        "unique_id": "wyze-mqtt_"+sensor_mac+"_rssi",
         "device_class": "signal_strength",
-        "state_topic": config["publishTopic"]+event.MAC,
+        "state_topic": config["publishTopic"]+sensor_mac,
         "value_template": "{{ value_json.rssi }}",
         "unit_of_measurement": "dBm"
     }
-    rssi_topic = config["discoveryTopic"]+"sensor/wyze-mqtt_{0}_rssi/config".format(event.MAC)
+    rssi_topic = config["discoveryTopic"]+"sensor/wyze-mqtt_{0}_rssi/config".format(sensor_mac)
     client.publish(rssi_topic , payload = json.dumps(rssi_data), qos = int(config["mqtt"]["qos"]), retain = bool(config["mqtt"]["retain"]))
 
     battery_data = {
         "device": device_data,
-        "name": event.MAC+" Battery",
-        "unique_id": "wyze-mqtt_"+event.MAC+"_battery",
+        "name": sensor_mac+" Battery",
+        "unique_id": "wyze-mqtt_"+sensor_mac+"_battery",
         "device_class": "battery",
-        "state_topic": config["publishTopic"]+event.MAC,
+        "state_topic": config["publishTopic"]+sensor_mac,
         "value_template": "{{ value_json.battery_level }}",
         "unit_of_measurement": "%"
     }
-    battery_topic = config["discoveryTopic"]+"sensor/wyze-mqtt_{0}_battery/config".format(event.MAC)
+    battery_topic = config["discoveryTopic"]+"sensor/wyze-mqtt_{0}_battery/config".format(sensor_mac)
     client.publish(battery_topic , payload = json.dumps(battery_data), qos = int(config["mqtt"]["qos"]), retain = bool(config["mqtt"]["retain"]))
 
 config = read_config()
@@ -135,7 +135,7 @@ def on_event(ws, event):
             client.publish(topic , payload = jsonData, qos = int(config["mqtt"]["qos"]), retain = bool(config["mqtt"]["retain"]))
 
             if bool(config["performDiscovery"]) == True:
-                send_discovery_topics(event)
+                send_discovery_topics(event.MAC, sensor_type)
 
         except TimeoutError as err:
             log.debug(err)
