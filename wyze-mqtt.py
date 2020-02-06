@@ -104,7 +104,7 @@ def send_discovery_topics(event):
     client.publish(battery_topic , payload = json.dumps(battery_data), qos = config["mqtt"]["qos"], retain = config["mqtt"]["retain"])
 
 config = read_config()
-client = mqtt.Client(client_id = config["mqtt"]["client"], clean_session = config["mqqt"]["clean_session"])
+client = mqtt.Client(client_id = config["mqtt"]["client"], clean_session = config["mqtt"]["clean_session"])
 client.username_pw_set(username = config["mqtt"]["user"], password = config["mqtt"]["password"])
 client.connect(config["mqtt"]["host"], port = config["mqtt"]["port"], keepalive = config["mqtt"]["keepalive"])
 
