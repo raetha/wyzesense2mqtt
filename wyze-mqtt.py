@@ -67,7 +67,7 @@ def send_discovery_topics(event):
         "device": device_data,
         "name": event.MAC+" State",
         "unique_id": "wyze-mqtt_"+event.MAC+"_state",
-        "device_class": "motion" if event.Data["sensor_type"] == "motion" else "door"
+        "device_class": "motion" if event.Data["sensor_type"] == "motion" else "door",
         "state_topic": config["publishTopic"]+event.MAC,
         "value_template": "{{ value_json.state }}",
         "payload_off": "0",
