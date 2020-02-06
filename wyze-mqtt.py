@@ -2,10 +2,13 @@ import paho.mqtt.client as mqtt
 import json
 import socket
 import sys
+import os
+import logging
 from retrying import retry
 from wyzesense_custom import *
 
-import logging
+if not os.path.exists("logs"):
+    os.makedirs("logs")
 log = logging.getLogger("wyze-mqtt")
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)-8s %(message)s", datefmt="%a, %d %b %Y %H:%M:%S", filename="logs/wyze-mqtt.log", filemode="w")
 
