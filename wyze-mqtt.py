@@ -106,7 +106,7 @@ def send_discovery_topics(event):
 config = read_config()
 client = mqtt.Client(client_id = config["mqtt"]["client"], clean_session = config["mqtt"]["clean_session"])
 client.username_pw_set(username = config["mqtt"]["user"], password = config["mqtt"]["password"])
-client.connect(config["mqtt"]["host"], port = config["mqtt"]["port"], keepalive = config["mqtt"]["keepalive"])
+client.connect(config["mqtt"]["host"], port = config["mqtt"]["port"], keepalive = int(config["mqtt"]["keepalive"]))
 
 client.subscribe([(config["subscribeScanTopic"], 1), (config["subscribeRemoveTopic"], 1)])
 client.on_connect = on_connect
