@@ -1,12 +1,10 @@
 import paho.mqtt.client as mqtt
 import json
 import socket
+import sys
+from retrying import retry
 from wyzesense_custom import *
 
-import sys
-import os
-if not os.path.exists("logs"):
-    os.makedirs("logs")
 import logging
 log = logging.getLogger("wyze-mqtt")
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)-8s %(message)s", datefmt="%a, %d %b %Y %H:%M:%S", filename="logs/wyze-mqtt.log", filemode="w")
@@ -34,6 +32,7 @@ def on_message_scan(client, userdata, msg):
     log.debug("Result of prescan {0}".format(prescan_result))   
 
     ws.Scan()
+
     postscan_result = ws.List()
     log.debug("Result of postscan {0}".format(postscan_result))  
 
@@ -56,16 +55,60 @@ def read_config():
         data = json.load(config_file)
     return data
 
+# Send HASS discovery topics to MQTT
+def send_discovery_topics(event):
+    device_data = {
+        "identifiers": ["wyze-mqtt_"+event.MAC],
+        "manufacturer": "Wyze",
+        "name": "Wyze Sense Motion Sensor" if event.Data["sensor_type"] == "motion" else "Wyze Sense Contact Sensor"
+    }
+
+    state_data = {
+        "device": device_data,
+        "name": event.MAC+" State",
+        "unique_id": "wyze-mqtt_"+event.MAC+"_state",
+        "device_class": "motion" if event.Data["sensor_type"] == "motion" else "door"
+        "state_topic": config["publishTopic"]+event.MAC,
+        "value_template": "{{ value_json.state }}",
+        "payload_off": "0",
+        "payload_on": "1"
+    }
+    state_topic = config["discoveryTopic"]+"binary_sensor/wyze-mqtt_{0}_state/config".format(event.MAC)
+    client.publish(state_topic , payload = json.dumps(state_data), qos = config["mqtt"]["qos"], retain = config["mqtt"]["retain"])
+
+    rssi_data = {
+        "device": device_data,
+        "name": event.MAC+" Signal Strength",
+        "unique_id": "wyze-mqtt_"+event.MAC+"_rssi",
+        "device_class": "signal_strength",
+        "state_topic": config["publishTopic"]+event.MAC,
+        "value_template": "{{ value_json.rssi }}",
+        "unit_of_measurement": "dBm"
+    }
+    rssi_topic = config["discoveryTopic"]+"sensor/wyze-mqtt_{0}_rssi/config".format(event.MAC)
+    client.publish(rssi_topic , payload = json.dumps(rssi_data), qos = config["mqtt"]["qos"], retain = config["mqtt"]["retain"])
+
+    battery_data = {
+        "device": device_data,
+        "name": event.MAC+" Battery",
+        "unique_id": "wyze-mqtt_"+event.MAC+"_battery",
+        "device_class": "battery",
+        "state_topic": config["publishTopic"]+event.MAC,
+        "value_template": "{{ value_json.battery_level }}",
+        "unit_of_measurement": "%"
+    }
+    battery_topic = config["discoveryTopic"]+"sensor/wyze-mqtt_{0}_battery/config".format(event.MAC)
+    client.publish(battery_topic , payload = json.dumps(battery_data), qos = config["mqtt"]["qos"], retain = config["mqtt"]["retain"])
+
 config = read_config()
-client = mqtt.Client(client_id = config["mqtt"]["client"], clean_session = False)
+client = mqtt.Client(client_id = config["mqtt"]["client"], clean_session = config["mqqt"]["clean_session"])
 client.username_pw_set(username = config["mqtt"]["user"], password = config["mqtt"]["password"])
-client.connect(config["mqtt"]["host"], port = config["mqtt"]["port"], keepalive = 60)    
+client.connect(config["mqtt"]["host"], port = config["mqtt"]["port"], keepalive = config["mqtt"]["keepalive"])
 
 client.subscribe([(config["subscribeScanTopic"], 1), (config["subscribeRemoveTopic"], 1)])
 client.on_connect = on_connect
 client.on_disconnect = on_disconnect
 client.on_message = on_message
-
 
 def on_event(ws, event):
     log.debug("In Event")
@@ -82,10 +125,15 @@ def on_event(ws, event):
                 "battery_level": sensor_battery
             }
 
+            log.debug(data)
+
             jsonData = json.dumps(data)
             topic = config["publishTopic"]+"{0}".format(event.MAC)
-            log.debug(data)
-            client.publish(topic , payload = jsonData, qos = 2, retain = True)
+            client.publish(topic , payload = jsonData, qos = config["mqtt"]["qos"], retain = config["mqtt"]["retain"])
+
+            if config["performDiscovery"] == True:
+                send_discovery_topics(event)
+
         except TimeoutError as err:
             log.debug(err)
         except socket.timeout as err:            
@@ -94,7 +142,7 @@ def on_event(ws, event):
             e = sys.exc_info()[0]
             log.debug("Error: {0}".format(e))
 
-
+@retry(wait_exponential_multiplier=1000, wait_exponential_max=10000)
 def beginConn():
     log.debug("In beginConn")
     return Open(config["usb"], on_event)

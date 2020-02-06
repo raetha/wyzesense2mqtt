@@ -15,3 +15,5 @@ services:
       - "/docker/wyze-mqtt/config:/opt/wyze-mqtt/config"
     environment:
       TZ: "America/New_York"
+networks:
+  default:
