@@ -77,7 +77,7 @@ def send_discovery_topics(sensor_mac, sensor_type):
         "payload_on": "1"
     }
     state_topic = config["discoveryTopic"]+"binary_sensor/wyze-mqtt_{0}_state/config".format(sensor_mac)
-    client.publish(state_topic , payload = json.dumps(state_data), qos = int(config["mqtt"]["qos"]), retain = bool(config["mqtt"]["retain"]))
+    client.publish(state_topic , payload = json.dumps(state_data), qos = config["mqtt"]["qos"], retain = config["mqtt"]["retain"])
 
     rssi_data = {
         "device": device_data,
@@ -89,7 +89,7 @@ def send_discovery_topics(sensor_mac, sensor_type):
         "unit_of_measurement": "dBm"
     }
     rssi_topic = config["discoveryTopic"]+"sensor/wyze-mqtt_{0}_rssi/config".format(sensor_mac)
-    client.publish(rssi_topic , payload = json.dumps(rssi_data), qos = int(config["mqtt"]["qos"]), retain = bool(config["mqtt"]["retain"]))
+    client.publish(rssi_topic , payload = json.dumps(rssi_data), qos = config["mqtt"]["qos"], retain = config["mqtt"]["retain"])
 
     battery_data = {
         "device": device_data,
@@ -101,12 +101,12 @@ def send_discovery_topics(sensor_mac, sensor_type):
         "unit_of_measurement": "%"
     }
     battery_topic = config["discoveryTopic"]+"sensor/wyze-mqtt_{0}_battery/config".format(sensor_mac)
-    client.publish(battery_topic , payload = json.dumps(battery_data), qos = int(config["mqtt"]["qos"]), retain = bool(config["mqtt"]["retain"]))
+    client.publish(battery_topic , payload = json.dumps(battery_data), qos = config["mqtt"]["qos"], retain = config["mqtt"]["retain"])
 
 config = read_config()
-client = mqtt.Client(client_id = config["mqtt"]["client"], clean_session = bool(config["mqtt"]["clean_session"]))
+client = mqtt.Client(client_id = config["mqtt"]["client"], clean_session = config["mqtt"]["clean_session"])
 client.username_pw_set(username = config["mqtt"]["user"], password = config["mqtt"]["password"])
-client.connect(config["mqtt"]["host"], port = config["mqtt"]["port"], keepalive = int(config["mqtt"]["keepalive"]))
+client.connect(config["mqtt"]["host"], port = config["mqtt"]["port"], keepalive = config["mqtt"]["keepalive"])
 
 client.subscribe([(config["subscribeScanTopic"], 1), (config["subscribeRemoveTopic"], 1)])
 client.on_connect = on_connect
@@ -132,9 +132,9 @@ def on_event(ws, event):
 
             jsonData = json.dumps(data)
             topic = config["publishTopic"]+"{0}".format(event.MAC)
-            client.publish(topic , payload = jsonData, qos = int(config["mqtt"]["qos"]), retain = bool(config["mqtt"]["retain"]))
+            client.publish(topic , payload = jsonData, qos = config["mqtt"]["qos"], retain = config["mqtt"]["retain"])
 
-            if bool(config["performDiscovery"]) == True:
+            if config["performDiscovery"] == True:
                 send_discovery_topics(event.MAC, sensor_type)
 
         except TimeoutError as err:
