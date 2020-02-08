@@ -5,12 +5,12 @@
         "user": "<user>",
         "password": "<password>",
         "client": "wyze-mqtt",
-	"clean_session": "False",
-	"keepalive": "60",
-	"qos": "0",
-	"retain": "False"
+	"clean_session": false,
+	"keepalive": 60,
+	"qos": 2,
+	"retain": true
     },
-    "performDiscovery": "True",
+    "performDiscovery": true,
     "discoveryTopic": "homeassistant/",
     "publishTopic": "wyze-mqtt/",
     "publishScanResult": "home/wyze/newdevice",
