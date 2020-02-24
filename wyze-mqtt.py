@@ -61,15 +61,15 @@ def read_config():
 # Send HASS discovery topics to MQTT
 def send_discovery_topics(sensor_mac, sensor_type):
     device_data = {
-        "identifiers": ["wyze-mqtt_"+sensor_mac],
+        "identifiers": ["wyzesense_{0}".format(sensor_mac)],
         "manufacturer": "Wyze",
         "name": "Wyze Sense Motion Sensor" if sensor_type == "motion" else "Wyze Sense Contact Sensor"
     }
 
     state_data = {
         "device": device_data,
-        "name": sensor_mac+" State",
-        "unique_id": "wyze-mqtt_"+sensor_mac+"_state",
+        "name": "Wyze Sense {0} State".format(sensor_mac),
+        "unique_id": "wyzesense_{0}_state".format(sensor_mac),
         "device_class": "motion" if sensor_type == "motion" else "door",
         "state_topic": config["publishTopic"]+sensor_mac,
         "value_template": "{{ value_json.state }}",
@@ -81,8 +81,8 @@ def send_discovery_topics(sensor_mac, sensor_type):
 
     rssi_data = {
         "device": device_data,
-        "name": sensor_mac+" Signal Strength",
-        "unique_id": "wyze-mqtt_"+sensor_mac+"_rssi",
+        "name": "Wyze Sense {0} Signal Strength".format(sensor_mac),
+        "unique_id": "wyzesense_{0}_signal_strength".format(sensor_mac),
         "device_class": "signal_strength",
         "state_topic": config["publishTopic"]+sensor_mac,
         "value_template": "{{ value_json.rssi }}",
@@ -93,8 +93,8 @@ def send_discovery_topics(sensor_mac, sensor_type):
 
     battery_data = {
         "device": device_data,
-        "name": sensor_mac+" Battery",
-        "unique_id": "wyze-mqtt_"+sensor_mac+"_battery",
+        "name": "Wyze Sense {0} Battery".format(sensor_mac),
+        "unique_id": "wyzesense_{0}_battery".format(sensor_mac),
         "device_class": "battery",
         "state_topic": config["publishTopic"]+sensor_mac,
         "value_template": "{{ value_json.battery_level }}",
