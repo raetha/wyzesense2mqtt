@@ -9,8 +9,8 @@ from wyzesense_custom import *
 
 if not os.path.exists("logs"):
     os.makedirs("logs")
-log = logging.getLogger("wyze-mqtt")
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)-8s %(message)s", datefmt="%a, %d %b %Y %H:%M:%S", filename="logs/wyze-mqtt.log", filemode="w")
+log = logging.getLogger("wyzesense2mqtt")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)-8s %(message)s", datefmt="%a, %d %b %Y %H:%M:%S", filename="logs/wyzesense2mqtt.log", filemode="w")
 
 diff = lambda l1, l2: [x for x in l1 if x not in l2]
 
@@ -76,7 +76,7 @@ def send_discovery_topics(sensor_mac, sensor_type):
         "payload_off": "0",
         "payload_on": "1"
     }
-    state_topic = config["discoveryTopic"]+"binary_sensor/wyze-mqtt_{0}_state/config".format(sensor_mac)
+    state_topic = config["discoveryTopic"]+"binary_sensor/wyzesense_{0}_state/config".format(sensor_mac)
     client.publish(state_topic , payload = json.dumps(state_data), qos = config["mqtt"]["qos"], retain = config["mqtt"]["retain"])
 
     rssi_data = {
@@ -88,7 +88,7 @@ def send_discovery_topics(sensor_mac, sensor_type):
         "value_template": "{{ value_json.rssi }}",
         "unit_of_measurement": "dBm"
     }
-    rssi_topic = config["discoveryTopic"]+"sensor/wyze-mqtt_{0}_rssi/config".format(sensor_mac)
+    rssi_topic = config["discoveryTopic"]+"sensor/wyzesense_{0}_signal_strength/config".format(sensor_mac)
     client.publish(rssi_topic , payload = json.dumps(rssi_data), qos = config["mqtt"]["qos"], retain = config["mqtt"]["retain"])
 
     battery_data = {
@@ -100,7 +100,7 @@ def send_discovery_topics(sensor_mac, sensor_type):
         "value_template": "{{ value_json.battery_level }}",
         "unit_of_measurement": "%"
     }
-    battery_topic = config["discoveryTopic"]+"sensor/wyze-mqtt_{0}_battery/config".format(sensor_mac)
+    battery_topic = config["discoveryTopic"]+"sensor/wyzesense_{0}_battery/config".format(sensor_mac)
     client.publish(battery_topic , payload = json.dumps(battery_data), qos = config["mqtt"]["qos"], retain = config["mqtt"]["retain"])
 
 config = read_config()

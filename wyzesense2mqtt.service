@@ -1,0 +1,13 @@
+[Unit]
+Description=Wyze Sense via Mqtt
+Documentation=https://www.github.com/raetha/wyzesense2mqtt
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wyzesense2mqtt
+ExecStart=/opt/wyzesense2mqtt/service.sh
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,5 @@
-# Wyze sense Mqtt wrapper
-A wrapper for the excellent Kevin Vincent (https://github.com/kevinvincent/ha-wyzesense) wyze sense library.Kevins library needs the wyze sense hub to be plugged into a USB port where Home Assistant is running. All my USB ports were taken so I wrote this little wrapper that allows me to run the wyze hub on another machine and communicate with Home Assistant via MQTT. 
+# Wyze Sense Mqtt wrapper
+A wrapper for the excellent Kevin Vincent (https://github.com/kevinvincent/ha-wyzesense) Wyze Sense library.Kevins library needs the Wyze Sense hub to be plugged into a USB port where Home Assistant is running. All my USB ports were taken so I wrote this little wrapper that allows me to run the Wyze hub on another machine and communicate with Home Assistant via MQTT. 
 
 ## Setup
 
@@ -33,9 +33,9 @@ The wrapper relies on a config file to be present in the same directory. The con
 ``` 
 ### Home Assistant
 
-To add sensors to the `wyze hub`, you need to publish a message from Home Assistant that will trigger the scan on the `wyze-mqtt` wrapper. This is done by publishing to topic defined under `subscribeScanTopic`. If successful the wrapper will respond with the newly added sensors MAC address. Add the following automation in home assisant to receive the newly added MAC addresses
+To add sensors to the `Wyze hub`, you need to publish a message from Home Assistant that will trigger the scan on the `wyze-mqtt` wrapper. This is done by publishing to topic defined under `subscribeScanTopic`. If successful the wrapper will respond with the newly added sensors MAC address. Add the following automation in home assisant to receive the newly added MAC addresses
 ```yaml
-- alias: Listen for new wyze sense sensors added to hub.
+- alias: Listen for new Wyze Sense sensors added to hub.
   initial_state: true
   trigger:
     - platform: mqtt

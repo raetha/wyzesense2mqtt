@@ -4,7 +4,7 @@
         "port": 1883,
         "user": "<user>",
         "password": "<password>",
-        "client": "wyze-mqtt",
+        "client": "wyzesense2mqtt",
 	"clean_session": false,
 	"keepalive": 60,
 	"qos": 2,
@@ -12,9 +12,9 @@
     },
     "performDiscovery": true,
     "discoveryTopic": "homeassistant/",
-    "publishTopic": "wyze-mqtt/",
+    "publishTopic": "wyzesense2mqtt/",
     "publishScanResult": "home/wyze/newdevice",
-    "subscribeScanTopic": "wyze-mqtt/scan",
-    "subscribeRemoveTopic": "wyze-mqtt/remove",
+    "subscribeScanTopic": "wyzesense2mqtt/scan",
+    "subscribeRemoveTopic": "wyzesense2mqtt/remove",
     "usb": "/dev/hidraw0"
 }
