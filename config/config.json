@@ -13,7 +13,7 @@
     "performDiscovery": true,
     "discoveryTopic": "homeassistant/",
     "publishTopic": "wyzesense2mqtt/",
-    "publishScanResult": "home/wyze/newdevice",
+    "publishScanResult": "wyzesense2mqtt/newdevice",
     "subscribeScanTopic": "wyzesense2mqtt/scan",
     "subscribeRemoveTopic": "wyzesense2mqtt/remove",
     "usb": "/dev/hidraw0"
