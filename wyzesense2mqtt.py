@@ -86,7 +86,7 @@ def init_logging():
     }
     logging.config.dictConfig(LOGGING)
     global _LOGGER
-    _LOGGER = logging.getLogger("__name__")
+    _LOGGER = logging.getLogger("wyzesense2mqtt")
 
 def findDongle():
     df = subprocess.check_output(["ls", "-la", "/sys/class/hidraw"]).decode('utf-8').lower()
