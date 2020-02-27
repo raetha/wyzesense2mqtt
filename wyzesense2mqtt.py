@@ -103,16 +103,20 @@ def send_discovery_topics(sensor_mac, sensor_type):
     device_payload = {
         "identifiers": ["wyzesense_{0}".format(sensor_mac)],
         "manufacturer": "Wyze",
+        "model": "Motion Sensor" if sensor_type == "motion" else "Contact Sensor",
         "name": "Wyze Sense Motion Sensor" if sensor_type == "motion" else "Wyze Sense Contact Sensor"
     }
 
     binary_sensor_payload = {
+        "~": WYZESENSE2MQTT_TOPIC_ROOT+sensor_mac,
         "device": device_payload,
         "name": "Wyze Sense {0}".format(sensor_mac),
         "unique_id": "wyzesense_{0}".format(sensor_mac),
         "device_class": "motion" if sensor_type == "motion" else "opening",
-        "state_topic": WYZESENSE2MQTT_TOPIC_ROOT+sensor_mac,
+        "state_topic": "~",
         "value_template": "{{ value_json.state }}",
+        "battery_level_topic": "~",
+        "battery_level_template": "{{ value_json.battery_level }}",
         "payload_off": "0",
         "payload_on": "1"
     }
