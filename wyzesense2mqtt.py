@@ -1,9 +1,9 @@
-""" 
+''' 
 
 Wyze Sense 2 MQTT
-v0.2.1
+v0.3
 
-"""
+'''
 import json
 import logging
 import logging.config
@@ -26,21 +26,22 @@ def read_config():
 config = read_config()
 
 # Set Config File Variables
-MQTT_HOST = config["mqtt"]["host"]
-MQTT_PORT = config["mqtt"]["port"]
-MQTT_USERNAME = config["mqtt"]["username"]
-MQTT_PASSWORD = config["mqtt"]["password"]
-MQTT_CLIENT_ID = config["mqtt"]["client_id"]
-MQTT_CLEAN_SESSION = config["mqtt"]["clean_session"]
-MQTT_KEEPALIVE = config["mqtt"]["keepalive"]
-MQTT_QOS = config["mqtt"]["qos"]
-MQTT_RETAIN = config["mqtt"]["retain"]
-PERFORM_HASS_DISCOVERY = config["perform_hass_discovery"]
-HASS_TOPIC_ROOT = config["hass_topic_root"]
-WYZESENSE2MQTT_TOPIC_ROOT = config["wyzesense2mqtt_topic_root"]
-USB_DEVICE = config["usb_device"]
-LOG_FILENAME = config["log"]["filename"]
-LOG_PATH = config["log"]["path"]
+MQTT_HOST = config['mqtt']['host']
+MQTT_PORT = config['mqtt']['port']
+MQTT_USERNAME = config['mqtt']['username']
+MQTT_PASSWORD = config['mqtt']['password']
+MQTT_CLIENT_ID = config['mqtt']['client_id']
+MQTT_CLEAN_SESSION = config['mqtt']['clean_session']
+MQTT_KEEPALIVE = config['mqtt']['keepalive']
+MQTT_QOS = config['mqtt']['qos']
+MQTT_RETAIN = config['mqtt']['retain']
+PERFORM_HASS_DISCOVERY = config['perform_hass_discovery']
+HASS_TOPIC_ROOT = config['hass_topic_root']
+WYZESENSE2MQTT_TOPIC_ROOT = config['wyzesense2mqtt_topic_root']
+USB_DEVICE = config['usb_device']
+LOG_FILENAME = config['log']['filename']
+LOG_PATH = config['log']['path']
+LOGGING = config['logging']
 
 # Set MQTT Topics
 SCAN_TOPIC = "{0}scan".format(WYZESENSE2MQTT_TOPIC_ROOT)
@@ -52,47 +53,15 @@ diff = lambda l1, l2: [x for x in l1 if x not in l2]
 def init_logging():
     if not os.path.exists(LOG_PATH):
         os.makedirs(LOG_PATH)
-    LOGGING = {
-        'version': 1,
-        'formatters': {
-            'verbose': {
-                'format': '%(asctime)s %(levelname)-8s %(name)-15s %(message)s',
-                'datefmt': '%Y-%m-%d %H:%M:%S'
-            },
-            'simple': {
-                'format': '%(message)s'
-            }
-        },
-        'handlers': {
-            'file':{
-                'class': 'logging.handlers.TimedRotatingFileHandler',
-                'level': 'INFO',
-                'formatter': 'verbose',
-                'filename': LOG_PATH + LOG_FILENAME,
-                'when': 'midnight',
-                'backupCount': 7,
-                'encoding': 'utf-8'
-            },
-            'console': {
-                'class': 'logging.StreamHandler',
-                'level': 'DEBUG',
-                'formatter': 'simple'
-            }
-        },
-        'root': {
-            'handlers': ['file', 'console'],
-            'level': 'DEBUG'
-        }
-    }
     logging.config.dictConfig(LOGGING)
     global _LOGGER
     _LOGGER = logging.getLogger("wyzesense2mqtt")
 
 def findDongle():
-    df = subprocess.check_output(["ls", "-la", "/sys/class/hidraw"]).decode('utf-8').lower()
-    for l in df.split('\n'):
+    df = subprocess.check_output(["ls", "-la", "/sys/class/hidraw"]).decode("utf-8").lower()
+    for l in df.split("\n"):
         if ("e024" in l and "1a86" in l):
-            for w in l.split(' '):
+            for w in l.split(" "):
                 if ("hidraw" in w):
                     return "/dev/%s" % w
 
@@ -126,7 +95,7 @@ def on_message_scan(client, userdata, msg):
     _LOGGER.info("Diff is {0}".format(s))  
 
     if s != []:
-        jsonData = json.dumps({"macs": s})
+        jsonData = json.dumps({'macs': s})
         _LOGGER.debug(jsonData)
         client.publish(SCAN_RESULT_TOPIC, payload = jsonData)
     else:
@@ -145,48 +114,48 @@ def on_message_remove(client, userdata, msg):
 def send_discovery_topics(sensor_mac, sensor_type):
     _LOGGER.info("Publishing discovery topics")
     device_payload = {
-        "identifiers": ["wyzesense_{0}".format(sensor_mac), sensor_mac],
-        "manufacturer": "Wyze",
-        "model": "Motion Sensor" if sensor_type == "motion" else "Contact Sensor",
-        "name": "Wyze Sense Motion Sensor" if sensor_type == "motion" else "Wyze Sense Contact Sensor"
+        'identifiers': ["wyzesense_{0}".format(sensor_mac), sensor_mac],
+        'manufacturer': "Wyze",
+        'model': ("Motion Sensor" if sensor_type == "motion" else "Contact Sensor"),
+        'name': ("Wyze Sense Motion Sensor" if sensor_type == "motion" else "Wyze Sense Contact Sensor")
     }
 
     binary_sensor_payload = {
-        "state_topic": WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
-        "name": "Wyze Sense {0}".format(sensor_mac),
-        "payload_on": "1",
-        "payload_off": "0",
-        "json_attributes_topic": WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
-        "value_template": "{{ value_json.state }}",
-        "unique_id": "wyzesense_{0}".format(sensor_mac),
-        "device_class": "motion" if sensor_type == "motion" else "opening",
-        "device": device_payload
+        'state_topic': WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
+        'name': "Wyze Sense {0}".format(sensor_mac),
+        'payload_on': "1",
+        'payload_off': "0",
+        'json_attributes_topic': WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
+        'value_template': "{{ value_json.state }}",
+        'unique_id': "wyzesense_{0}".format(sensor_mac),
+        'device_class': ("motion" if sensor_type == "motion" else "opening"),
+        'device': device_payload
     }
     _LOGGER.debug(binary_sensor_payload)
     binary_sensor_topic = "{0}binary_sensor/wyzesense_{1}/config".format(HASS_TOPIC_ROOT, sensor_mac)
     client.publish(binary_sensor_topic, payload = json.dumps(binary_sensor_payload), qos = MQTT_QOS, retain = MQTT_RETAIN)
 
     signal_strength_sensor_payload = {
-        "state_topic": WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
-        "name": "Wyze Sense {0} Signal Strength".format(sensor_mac),
-        "unit_of_measurement": "dBm",
-        "value_template": "{{ value_json.signal_strength }}",
-        "unique_id": "wyzesense_{0}_signal_strength".format(sensor_mac),
-        "device_class": "signal_strength",
-        "device": device_payload
+        'state_topic': WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
+        'name': "Wyze Sense {0} Signal Strength".format(sensor_mac),
+        'unit_of_measurement': "dBm",
+        'value_template': "{{ value_json.signal_strength }}",
+        'unique_id': "wyzesense_{0}_signal_strength".format(sensor_mac),
+        'device_class': "signal_strength",
+        'device': device_payload
     }
     _LOGGER.debug(signal_strength_sensor_payload)
     signal_strength_sensor_topic = "{0}sensor/wyzesense_{1}_signal_strength/config".format(HASS_TOPIC_ROOT, sensor_mac)
     client.publish(signal_strength_sensor_topic, payload = json.dumps(signal_strength_sensor_payload), qos = MQTT_QOS, retain = MQTT_RETAIN)
 
     battery_sensor_payload = {
-        "state_topic": WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
-        "name": "Wyze Sense {0} Battery".format(sensor_mac),
-        "unit_of_measurement": "%",
-        "value_template": "{{ value_json.battery_level }}",
-        "unique_id": "wyzesense_{0}_battery".format(sensor_mac),
-        "device_class": "battery",
-        "device": device_payload
+        'state_topic': WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
+        'name': "Wyze Sense {0} Battery".format(sensor_mac),
+        'unit_of_measurement': "%",
+        'value_template': "{{ value_json.battery_level }}",
+        'unique_id': "wyzesense_{0}_battery".format(sensor_mac),
+        'device_class': "battery",
+        'device': device_payload
     }
     _LOGGER.debug(battery_sensor_payload)
     battery_sensor_topic = "{0}sensor/wyzesense_{1}_battery/config".format(HASS_TOPIC_ROOT, sensor_mac)
@@ -210,17 +179,17 @@ def clear_retained_mqtt_topics(sensor_mac):
 def on_event(ws, event):
     _LOGGER.info("Processing Event")
     _LOGGER.debug("Event data: {0}".format(event))
-    if event.Type == 'state':
+    if event.Type == "state":
         try:
             (sensor_type, sensor_state, sensor_battery, sensor_signal) = event.Data
             event_payload = {
-                "available": True,
-                "mac": event.MAC,
-                "state": 1 if sensor_state == "open" or sensor_state == "active" else 0,
-                "device_class": "motion" if sensor_type == "motion" else "opening",
-                "device_class_timestamp": event.Timestamp.isoformat(),
-                "signal_strength": sensor_signal * -1,
-                "battery_level": sensor_battery
+                'available': True,
+                'mac': event.MAC,
+                'state': (1 if sensor_state == "open" or sensor_state == "active" else 0),
+                'device_class': ("motion" if sensor_type == "motion" else "opening"),
+                'device_class_timestamp': event.Timestamp.isoformat(),
+                'signal_strength': sensor_signal * -1,
+                'battery_level': sensor_battery
             }
 
             _LOGGER.debug(event_payload)
@@ -247,7 +216,7 @@ def beginConn():
 init_logging()
 
 #Connect to USB dongle
-if USB_DEVICE.lower() == 'auto': 
+if USB_DEVICE.lower() == "auto": 
     USB_DEVICE = findDongle()
 _LOGGER.info("Attempting to open connection to hub at {0}".format(USB_DEVICE))
 ws = beginConn()

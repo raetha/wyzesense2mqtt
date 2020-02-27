@@ -17,5 +17,37 @@
     "log": {
         "filename": "wyzesense2mqtt.log",
         "path": "/opt/wyzesense2mqtt/logs/"
+    },
+    "logging": {
+        "version": 1,
+        "formatters": {
+            "verbose": {
+                "format": "%(asctime)s %(levelname)-8s %(name)-15s %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S"
+            },
+            "simple": {
+                "format": "%(message)s"
+            }
+        },
+        "handlers": {
+            "file":{
+                "class": "logging.handlers.TimedRotatingFileHandler",
+                "level": "INFO",
+                "formatter": "verbose",
+                "filename": LOG_PATH + LOG_FILENAME,
+                "when": "midnight",
+                "backupCount": 7,
+                "encoding": "utf-8"
+            },
+            "console": {
+                "class": "logging.StreamHandler",
+                "level": "DEBUG",
+                "formatter": "simple"
+            }
+        },
+        "root": {
+            "handlers": ["file", "console"],
+            "level": "DEBUG"
+        }
     }
 }
