@@ -14,5 +14,8 @@
     "hass_topic_root": "homeassistant/",
     "wyzesense2mqtt_topic_root": "wyzesense2mqtt/",
     "usb_device": "auto",
-    "log_filename": "wyzesense2mqtt.log"
+    "log": {
+        "filename": "wyzesense2mqtt.log",
+        "path": "/opt/wyzesense2mqtt/logs/"
+    }
 }

@@ -1,4 +1,7 @@
 # Pip requirements file
-paho-mqtt
+#
+# ha-wyzesense
 six
+# wyzesense2mqtt
+paho-mqtt
 retrying

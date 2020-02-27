@@ -4,15 +4,16 @@ Wyze Sense 2 MQTT
 v0.2.1
 
 """
-
-import paho.mqtt.client as mqtt
 import json
-import socket
-import sys
 import logging
 import logging.config
 import logging.handlers
+import os
+import socket
+import sys
 import subprocess
+
+import paho.mqtt.client as mqtt
 from retrying import retry
 from wyzesense_custom import *
 
@@ -38,16 +39,19 @@ PERFORM_HASS_DISCOVERY = config["perform_hass_discovery"]
 HASS_TOPIC_ROOT = config["hass_topic_root"]
 WYZESENSE2MQTT_TOPIC_ROOT = config["wyzesense2mqtt_topic_root"]
 USB_DEVICE = config["usb_device"]
-LOG_FILENAME = config["log_filename"]
+LOG_FILENAME = config["log"]["filename"]
+LOG_PATH = config["log"]["path"]
 
 # Set MQTT Topics
-SCAN_TOPIC = WYZESENSE2MQTT_TOPIC_ROOT + "scan"
-SCAN_RESULT_TOPIC = WYZESENSE2MQTT_TOPIC_ROOT + "scan_result"
-REMOVE_TOPIC = WYZESENSE2MQTT_TOPIC_ROOT + "remove"
+SCAN_TOPIC = "{0}scan".format(WYZESENSE2MQTT_TOPIC_ROOT)
+SCAN_RESULT_TOPIC = "{0}scan_result".format(WYZESENSE2MQTT_TOPIC_ROOT)
+REMOVE_TOPIC = "{0}remove".format(WYZESENSE2MQTT_TOPIC_ROOT)
 
 diff = lambda l1, l2: [x for x in l1 if x not in l2]
 
 def init_logging():
+    if not os.path.exists(LOG_PATH):
+        os.makedirs(LOG_PATH)
     LOGGING = {
         'version': 1,
         'formatters': {
@@ -64,7 +68,7 @@ def init_logging():
                 'class': 'logging.handlers.TimedRotatingFileHandler',
                 'level': 'INFO',
                 'formatter': 'verbose',
-                'filename': LOG_FILENAME,
+                'filename': LOG_PATH + LOG_FILENAME,
                 'when': 'midnight',
                 'backupCount': 7,
                 'encoding': 'utf-8'
@@ -93,19 +97,19 @@ def findDongle():
                     return "/dev/%s" % w
 
 def on_connect(client, userdata, flags, rc):
-    _LOGGER.info("Connected with result code " + str(rc))
+    _LOGGER.info("Connected with result code {0}".format(str(rc)))
     client.subscribe([(SCAN_TOPIC, MQTT_QOS), (REMOVE_TOPIC, MQTT_QOS)])
     client.message_callback_add(SCAN_TOPIC, on_message_scan)
     client.message_callback_add(REMOVE_TOPIC, on_message_remove)
 
 def on_disconnect(client, userdata, rc):
-    _LOGGER.info("Disconnected with result code " + str(rc))
+    _LOGGER.info("Disconnected with result code {0}".format(str(rc)))
     client.message_callback_remove(SCAN_TOPIC)
     client.message_callback_remove(REMOVE_TOPIC)
 
 # Process messages
 def on_message(client, userdata, msg):
-    _LOGGER.info(msg.topic+" " + str(msg.payload))  
+    _LOGGER.info("{0} {1}".format(msg.topic, str(msg.payload)))
 
 # Process message to scan for new devices
 def on_message_scan(client, userdata, msg):
@@ -148,22 +152,22 @@ def send_discovery_topics(sensor_mac, sensor_type):
     }
 
     binary_sensor_payload = {
-        "state_topic": WYZESENSE2MQTT_TOPIC_ROOT+sensor_mac,
+        "state_topic": WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
         "name": "Wyze Sense {0}".format(sensor_mac),
         "payload_on": "1",
         "payload_off": "0",
-        "json_attributes_topic": WYZESENSE2MQTT_TOPIC_ROOT+sensor_mac,
+        "json_attributes_topic": WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
         "value_template": "{{ value_json.state }}",
         "unique_id": "wyzesense_{0}".format(sensor_mac),
         "device_class": "motion" if sensor_type == "motion" else "opening",
         "device": device_payload
     }
     _LOGGER.debug(binary_sensor_payload)
-    binary_sensor_topic = HASS_TOPIC_ROOT+"binary_sensor/wyzesense_{0}/config".format(sensor_mac)
+    binary_sensor_topic = "{0}binary_sensor/wyzesense_{1}/config".format(HASS_TOPIC_ROOT, sensor_mac)
     client.publish(binary_sensor_topic, payload = json.dumps(binary_sensor_payload), qos = MQTT_QOS, retain = MQTT_RETAIN)
 
     signal_strength_sensor_payload = {
-        "state_topic": WYZESENSE2MQTT_TOPIC_ROOT+sensor_mac,
+        "state_topic": WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
         "name": "Wyze Sense {0} Signal Strength".format(sensor_mac),
         "unit_of_measurement": "dBm",
         "value_template": "{{ value_json.signal_strength }}",
@@ -172,11 +176,11 @@ def send_discovery_topics(sensor_mac, sensor_type):
         "device": device_payload
     }
     _LOGGER.debug(signal_strength_sensor_payload)
-    signal_strength_sensor_topic = HASS_TOPIC_ROOT+"sensor/wyzesense_{0}_signal_strength/config".format(sensor_mac)
+    signal_strength_sensor_topic = "{0}sensor/wyzesense_{1}_signal_strength/config".format(HASS_TOPIC_ROOT, sensor_mac)
     client.publish(signal_strength_sensor_topic, payload = json.dumps(signal_strength_sensor_payload), qos = MQTT_QOS, retain = MQTT_RETAIN)
 
     battery_sensor_payload = {
-        "state_topic": WYZESENSE2MQTT_TOPIC_ROOT+sensor_mac,
+        "state_topic": WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
         "name": "Wyze Sense {0} Battery".format(sensor_mac),
         "unit_of_measurement": "%",
         "value_template": "{{ value_json.battery_level }}",
@@ -185,22 +189,22 @@ def send_discovery_topics(sensor_mac, sensor_type):
         "device": device_payload
     }
     _LOGGER.debug(battery_sensor_payload)
-    battery_sensor_topic = HASS_TOPIC_ROOT+"sensor/wyzesense_{0}_battery/config".format(sensor_mac)
+    battery_sensor_topic = "{0}sensor/wyzesense_{1}_battery/config".format(HASS_TOPIC_ROOT, sensor_mac)
     client.publish(battery_sensor_topic, payload = json.dumps(battery_sensor_payload), qos = MQTT_QOS, retain = MQTT_RETAIN)
 
 # Clear any retained topics in MQTT
 def clear_retained_mqtt_topics(sensor_mac):
     _LOGGER.info("Clearing device topics")
-    event_topic = WYZESENSE2MQTT_TOPIC_ROOT+"{0}".format(event.MAC)
+    event_topic = "{0}{1}".format(WYZESENSE2MQTT_TOPIC_ROOT, sensor_mac)
     client.publish(event_topic, payload = None, qos = MQTT_QOS, retain = MQTT_RETAIN)
 
-    binary_sensor_topic = HASS_TOPIC_ROOT+"binary_sensor/wyzesense_{0}/config".format(sensor_mac)
+    binary_sensor_topic = "{0}binary_sensor/wyzesense_{1}/config".format(HASS_TOPIC_ROOT, sensor_mac)
     client.publish(binary_sensor_topic, payload = None, qos = MQTT_QOS, retain = MQTT_RETAIN)
 
-    signal_strength_sensor_topic = HASS_TOPIC_ROOT+"sensor/wyzesense_{0}_signal_strength/config".format(sensor_mac)
+    signal_strength_sensor_topic = "{0}sensor/wyzesense_{1}_signal_strength/config".format(HASS_TOPIC_ROOT, sensor_mac)
     client.publish(signal_strength_sensor_topic, payload = None, qos = MQTT_QOS, retain = MQTT_RETAIN)
 
-    battery_sensor_topic = HASS_TOPIC_ROOT+"sensor/wyzesense_{0}_battery/config".format(sensor_mac)
+    battery_sensor_topic = "{0}sensor/wyzesense_{1}_battery/config".format(HASS_TOPIC_ROOT, sensor_mac)
     client.publish(battery_sensor_topic, payload = None, qos = MQTT_QOS, retain = MQTT_RETAIN)
 
 def on_event(ws, event):
@@ -221,7 +225,7 @@ def on_event(ws, event):
 
             _LOGGER.debug(event_payload)
 
-            event_topic = WYZESENSE2MQTT_TOPIC_ROOT+"{0}".format(event.MAC)
+            event_topic = "{0}{1}".format(WYZESENSE2MQTT_TOPIC_ROOT, event.MAC)
             client.publish(event_topic, payload = json.dumps(event_payload), qos = MQTT_QOS, retain = MQTT_RETAIN)
 
             if PERFORM_HASS_DISCOVERY == True:
