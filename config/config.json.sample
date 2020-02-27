@@ -13,11 +13,6 @@
     "perform_hass_discovery": true,
     "hass_topic_root": "homeassistant/",
     "wyzesense2mqtt_topic_root": "wyzesense2mqtt/",
-    "usb_device": "/dev/hidraw0",
-    "logging":{
-        "filename": "wyzesense2mqtt.log",
-        "filemode": "w",
-        "format": "%(asctime)s %(levelname)-8s %(message)s",
-        "datefmt": "%a, %d %b %Y %H:%M:%S"
-    }
+    "usb_device": "auto",
+    "log_filename": "wyzesense2mqtt.log"
 }
