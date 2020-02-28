@@ -1,7 +1,7 @@
 ''' 
 
 Wyze Sense 2 MQTT
-v0.3
+v0.4
 
 '''
 import json
