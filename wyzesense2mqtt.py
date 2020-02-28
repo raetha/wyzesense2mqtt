@@ -53,6 +53,7 @@ diff = lambda l1, l2: [x for x in l1 if x not in l2]
 def init_logging():
     if not os.path.exists(LOG_PATH):
         os.makedirs(LOG_PATH)
+    LOGGING['handlers']['file']['filename'] = LOG_PATH + LOG_FILENAME
     logging.config.dictConfig(LOGGING)
     global _LOGGER
     _LOGGER = logging.getLogger("wyzesense2mqtt")
@@ -151,8 +152,8 @@ def send_discovery_topics(sensor_mac, sensor_type):
 
         device_class_topic = "{0}{1}/wyzesense_{2}_{3}/config".format(HASS_TOPIC_ROOT, sensor_type, sensor_mac, device_class)
         client.publish(device_class_topic, payload = json.dumps(device_classes[device_class]), qos = MQTT_QOS, retain = MQTT_RETAIN)
-        _LOGGER.info("  Topic: {0}".format(device_class_topic))
-        _LOGGER.debug("    JSON: {0}".format(json.dumps(device_classes[device_class])))
+        _LOGGER.info("  {0}".format(device_class_topic))
+        _LOGGER.debug("  {0}".format(json.dumps(device_classes[device_class])))
 
 # Clear any retained topics in MQTT
 def clear_retained_mqtt_topics(sensor_mac):

@@ -34,7 +34,7 @@
                 "class": "logging.handlers.TimedRotatingFileHandler",
                 "level": "INFO",
                 "formatter": "verbose",
-                "filename": LOG_PATH + LOG_FILENAME,
+                "filename": null,
                 "when": "midnight",
                 "backupCount": 7,
                 "encoding": "utf-8"
