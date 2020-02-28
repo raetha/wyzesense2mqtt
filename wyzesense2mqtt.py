@@ -144,7 +144,7 @@ def send_discovery_topics(sensor_mac, sensor_type):
 
     # Send Discovery Topics
     for device_class in device_classes :
-        device_classes[device_class]['val_tpl'] = "{{ value_json.{0} }}".format(device_class)
+        device_classes[device_class]['val_tpl'] = "{{{{ value_json.{0} }}}}".format(device_class)
         device_classes[device_class]['uniq_id'] = "wyzesense_{0}_{1}".format(sensor_mac, device_class)
         device_classes[device_class]['stat_t'] = WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac
         device_classes[device_class]['dev'] = device_payload
