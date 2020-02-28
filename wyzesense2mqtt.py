@@ -113,6 +113,7 @@ def on_message_remove(client, userdata, msg):
 # Send HASS discovery topics to MQTT
 def send_discovery_topics(sensor_mac, sensor_type):
     _LOGGER.info("Publishing discovery topics")
+
     device_payload = {
         'identifiers': ["wyzesense_{0}".format(sensor_mac), sensor_mac],
         'manufacturer': "Wyze",
@@ -120,46 +121,38 @@ def send_discovery_topics(sensor_mac, sensor_type):
         'name': ("Wyze Sense Motion Sensor" if sensor_type == "motion" else "Wyze Sense Contact Sensor")
     }
 
-    binary_sensor_payload = {
-        'state_topic': WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
-        'name': "Wyze Sense {0}".format(sensor_mac),
-        'payload_on': "1",
-        'payload_off': "0",
-        'json_attributes_topic': WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
-        'value_template': "{{ value_json.state }}",
-        'unique_id': "wyzesense_{0}".format(sensor_mac),
-        'device_class': ("motion" if sensor_type == "motion" else "opening"),
-        'device': device_payload
+    device_classes = {
+        'state': {
+            'name': "Wyze Sense {0}".format(sensor_mac),
+            'dev_cla': ("motion" if sensor_type == "motion" else "opening"),
+            'pl_on': "1",
+            'pl_off': "0",
+            'json_attr_t': WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac
+        },
+        'signal_strength': {
+            'name': "Wyze Sense {0} Signal Strength".format(sensor_mac),
+            'dev_cla': "signal_strength",
+            'unit_of_meas': "dBm"
+        },
+        'battery': {
+            'name': "Wyze Sense {0} Battery".format(sensor_mac),
+            'dev_cla': "battery",
+            'unit_of_meas': "%"
+        }
     }
-    _LOGGER.debug(binary_sensor_payload)
-    binary_sensor_topic = "{0}binary_sensor/wyzesense_{1}/config".format(HASS_TOPIC_ROOT, sensor_mac)
-    client.publish(binary_sensor_topic, payload = json.dumps(binary_sensor_payload), qos = MQTT_QOS, retain = MQTT_RETAIN)
 
-    signal_strength_sensor_payload = {
-        'state_topic': WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
-        'name': "Wyze Sense {0} Signal Strength".format(sensor_mac),
-        'unit_of_measurement': "dBm",
-        'value_template': "{{ value_json.signal_strength }}",
-        'unique_id': "wyzesense_{0}_signal_strength".format(sensor_mac),
-        'device_class': "signal_strength",
-        'device': device_payload
-    }
-    _LOGGER.debug(signal_strength_sensor_payload)
-    signal_strength_sensor_topic = "{0}sensor/wyzesense_{1}_signal_strength/config".format(HASS_TOPIC_ROOT, sensor_mac)
-    client.publish(signal_strength_sensor_topic, payload = json.dumps(signal_strength_sensor_payload), qos = MQTT_QOS, retain = MQTT_RETAIN)
+    # Send Discovery Topics
+    for device_class in device_classes :
+        device_classes[device_class]['val_tpl'] = "{{ value_json.{0} }}".format(device_class)
+        device_classes[device_class]['uniq_id'] = "wyzesense_{0}_{1}".format(sensor_mac, device_class)
+        device_classes[device_class]['stat_t'] = WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac
+        device_classes[device_class]['dev'] = device_payload
+        sensor_type = ("binary_sensor" if device_class == "state" else "sensor")
 
-    battery_sensor_payload = {
-        'state_topic': WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac,
-        'name': "Wyze Sense {0} Battery".format(sensor_mac),
-        'unit_of_measurement': "%",
-        'value_template': "{{ value_json.battery_level }}",
-        'unique_id': "wyzesense_{0}_battery".format(sensor_mac),
-        'device_class': "battery",
-        'device': device_payload
-    }
-    _LOGGER.debug(battery_sensor_payload)
-    battery_sensor_topic = "{0}sensor/wyzesense_{1}_battery/config".format(HASS_TOPIC_ROOT, sensor_mac)
-    client.publish(battery_sensor_topic, payload = json.dumps(battery_sensor_payload), qos = MQTT_QOS, retain = MQTT_RETAIN)
+        device_class_topic = "{0}{1}/wyzesense_{2}_{3}/config".format(HASS_TOPIC_ROOT, sensor_type, sensor_mac, device_class)
+        client.publish(device_class_topic, payload = json.dumps(device_classes[device_class]), qos = MQTT_QOS, retain = MQTT_RETAIN)
+        _LOGGER.info("  Topic: {0}".format(device_class_topic))
+        _LOGGER.debug("    JSON: {0}".format(json.dumps(device_classes[device_class])))
 
 # Clear any retained topics in MQTT
 def clear_retained_mqtt_topics(sensor_mac):
@@ -189,7 +182,7 @@ def on_event(ws, event):
                 'device_class': ("motion" if sensor_type == "motion" else "opening"),
                 'device_class_timestamp': event.Timestamp.isoformat(),
                 'signal_strength': sensor_signal * -1,
-                'battery_level': sensor_battery
+                'battery': sensor_battery
             }
 
             _LOGGER.debug(event_payload)
