@@ -1,0 +1,17 @@
+mqtt:
+  host: <host>
+  port: 1883
+  username: <user>
+  password: <password>
+  client_id: wyzesense2mqtt
+  clean_session: false
+  keepalive: 60
+  qos: 2
+  retain: true
+log:
+  filename: wyzesense2mqtt.log
+  path: /opt/wyzesense2mqtt/logs/
+perform_hass_discovery: true
+hass_topic_root: homeassistant/
+wyzesense2mqtt_topic_root: wyzesense2mqtt/
+usb_device: auto

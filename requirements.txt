@@ -5,3 +5,4 @@ six
 # wyzesense2mqtt
 paho-mqtt
 retrying
+pyyaml

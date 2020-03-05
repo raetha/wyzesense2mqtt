@@ -1,10 +1,11 @@
 ''' 
 
 Wyze Sense 2 MQTT
-v0.4
+v0.5
 
 '''
 import json
+import yaml
 import logging
 import logging.config
 import logging.handlers
@@ -17,31 +18,44 @@ import paho.mqtt.client as mqtt
 from retrying import retry
 from wyzesense_custom import *
 
-# Read configuration file
+def read_yaml_file(filename):
+    try:
+        with open(filename) as yaml_file:
+            data = yaml.safe_load(yaml_file)
+            return data
+    except IOError as error:
+        print('File error: ' + str(error))
+
+def write_yaml_file(filename, data):
+    try:
+        with open(filename, 'w') as yaml_file:
+            yaml_file.write(yaml.safe_dump(data))
+    except IOError as err:
+        _LOGGER.error('File error: {0}'.format(str(error)))
+
+# Configuration Files
+LOGGING_FILE = "config/logging.json"
 CONFIG_FILE = "config/config.json"
-def read_config():
-    with open(CONFIG_FILE) as config_file:
-        data = json.load(config_file)
-    return data
-config = read_config()
+DEVICES_FILE = "config/devices.yaml"
+
+# Load configuration files
+CONFIG = read_yaml_file(CONFIG_FILE)
+DEVICES = read_yaml_file(DEVICES_FILE)
 
 # Set Config File Variables
-MQTT_HOST = config['mqtt']['host']
-MQTT_PORT = config['mqtt']['port']
-MQTT_USERNAME = config['mqtt']['username']
-MQTT_PASSWORD = config['mqtt']['password']
-MQTT_CLIENT_ID = config['mqtt']['client_id']
-MQTT_CLEAN_SESSION = config['mqtt']['clean_session']
-MQTT_KEEPALIVE = config['mqtt']['keepalive']
-MQTT_QOS = config['mqtt']['qos']
-MQTT_RETAIN = config['mqtt']['retain']
-PERFORM_HASS_DISCOVERY = config['perform_hass_discovery']
-HASS_TOPIC_ROOT = config['hass_topic_root']
-WYZESENSE2MQTT_TOPIC_ROOT = config['wyzesense2mqtt_topic_root']
-USB_DEVICE = config['usb_device']
-LOG_FILENAME = config['log']['filename']
-LOG_PATH = config['log']['path']
-LOGGING = config['logging']
+MQTT_HOST = CONFIG['mqtt']['host']
+MQTT_PORT = CONFIG['mqtt']['port']
+MQTT_USERNAME = CONFIG['mqtt']['username']
+MQTT_PASSWORD = CONFIG['mqtt']['password']
+MQTT_CLIENT_ID = CONFIG['mqtt']['client_id']
+MQTT_CLEAN_SESSION = CONFIG['mqtt']['clean_session']
+MQTT_KEEPALIVE = CONFIG['mqtt']['keepalive']
+MQTT_QOS = CONFIG['mqtt']['qos']
+MQTT_RETAIN = CONFIG['mqtt']['retain']
+PERFORM_HASS_DISCOVERY = CONFIG['perform_hass_discovery']
+HASS_TOPIC_ROOT = CONFIG['hass_topic_root']
+WYZESENSE2MQTT_TOPIC_ROOT = CONFIG['wyzesense2mqtt_topic_root']
+USB_DEVICE = CONFIG['usb_device']
 
 # Set MQTT Topics
 SCAN_TOPIC = "{0}scan".format(WYZESENSE2MQTT_TOPIC_ROOT)
@@ -51,11 +65,14 @@ REMOVE_TOPIC = "{0}remove".format(WYZESENSE2MQTT_TOPIC_ROOT)
 diff = lambda l1, l2: [x for x in l1 if x not in l2]
 
 def init_logging():
+    global _LOGGER, CONFIG, LOGGING_FILE
+    LOG_FILENAME = CONFIG['log']['filename']
+    LOG_PATH = CONFIG['log']['path']
     if not os.path.exists(LOG_PATH):
         os.makedirs(LOG_PATH)
-    LOGGING['handlers']['file']['filename'] = LOG_PATH + LOG_FILENAME
-    logging.config.dictConfig(LOGGING)
-    global _LOGGER
+    logging_config = read_yaml_file(LOGGING_FILE)
+    logging_config['handlers']['file']['filename'] = LOG_PATH + LOG_FILENAME
+    logging.config.dictConfig(logging_config)
     _LOGGER = logging.getLogger("wyzesense2mqtt")
 
 def findDongle():
@@ -113,47 +130,58 @@ def on_message_remove(client, userdata, msg):
 
 # Send HASS discovery topics to MQTT
 def send_discovery_topics(sensor_mac, sensor_type):
+    global DEVICES, DEVICES_FILE
     _LOGGER.info("Publishing discovery topics")
+
+    # Capture new device
+    if DEVICES.get(sensor_mac) is None:
+        DEVICES[sensor_mac] = dict()
+        DEVICES[sensor_mac]['name'] = "Wyze Sense {0}".format(sensor_mac)
+        DEVICES[sensor_mac]['device_class'] = ("motion" if sensor_type == "motion" else "opening")
+        write_yaml_file(DEVICES_FILE, DEVICES)
+
+    device_name = DEVICES[sensor_mac]['name']
+    device_class = DEVICES[sensor_mac]['device_class']
 
     device_payload = {
         'identifiers': ["wyzesense_{0}".format(sensor_mac), sensor_mac],
         'manufacturer': "Wyze",
-        'model': ("Motion Sensor" if sensor_type == "motion" else "Contact Sensor"),
-        'name': ("Wyze Sense Motion Sensor" if sensor_type == "motion" else "Wyze Sense Contact Sensor")
+        'model': ("Sense Motion Sensor" if sensor_type == "motion" else "Sense Contact Sensor"),
+        'name': device_name
     }
 
-    device_classes = {
+    entities = {
         'state': {
-            'name': "Wyze Sense {0}".format(sensor_mac),
-            'dev_cla': ("motion" if sensor_type == "motion" else "opening"),
+            'name': device_name,
+            'dev_cla': device_class,
             'pl_on': "1",
             'pl_off': "0",
             'json_attr_t': WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac
         },
         'signal_strength': {
-            'name': "Wyze Sense {0} Signal Strength".format(sensor_mac),
+            'name': "{0} Signal Strength".format(device_name),
             'dev_cla': "signal_strength",
             'unit_of_meas': "dBm"
         },
         'battery': {
-            'name': "Wyze Sense {0} Battery".format(sensor_mac),
+            'name': "{0} Battery".format(device_name),
             'dev_cla': "battery",
             'unit_of_meas': "%"
         }
     }
 
     # Send Discovery Topics
-    for device_class in device_classes :
-        device_classes[device_class]['val_tpl'] = "{{{{ value_json.{0} }}}}".format(device_class)
-        device_classes[device_class]['uniq_id'] = "wyzesense_{0}_{1}".format(sensor_mac, device_class)
-        device_classes[device_class]['stat_t'] = WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac
-        device_classes[device_class]['dev'] = device_payload
-        sensor_type = ("binary_sensor" if device_class == "state" else "sensor")
+    for entity in entities :
+        entities[entity]['val_tpl'] = "{{{{ value_json.{0} }}}}".format(entity)
+        entities[entity]['uniq_id'] = "wyzesense_{0}_{1}".format(sensor_mac, entity)
+        entities[entity]['stat_t'] = WYZESENSE2MQTT_TOPIC_ROOT + sensor_mac
+        entities[entity]['dev'] = device_payload
+        sensor_type = ("binary_sensor" if entity == "state" else "sensor")
 
-        device_class_topic = "{0}{1}/wyzesense_{2}_{3}/config".format(HASS_TOPIC_ROOT, sensor_type, sensor_mac, device_class)
-        client.publish(device_class_topic, payload = json.dumps(device_classes[device_class]), qos = MQTT_QOS, retain = MQTT_RETAIN)
-        _LOGGER.info("  {0}".format(device_class_topic))
-        _LOGGER.debug("  {0}".format(json.dumps(device_classes[device_class])))
+        entity_topic = "{0}{1}/wyzesense_{2}_{3}/config".format(HASS_TOPIC_ROOT, sensor_type, sensor_mac, entity)
+        client.publish(entity_topic, payload = json.dumps(entities[entity]), qos = MQTT_QOS, retain = MQTT_RETAIN)
+        _LOGGER.info("  {0}".format(entity_topic))
+        _LOGGER.debug("  {0}".format(json.dumps(entities[entity])))
 
 # Clear any retained topics in MQTT
 def clear_retained_mqtt_topics(sensor_mac):
