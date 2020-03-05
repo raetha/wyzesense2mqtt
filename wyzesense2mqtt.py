@@ -34,8 +34,8 @@ def write_yaml_file(filename, data):
         _LOGGER.error('File error: {0}'.format(str(error)))
 
 # Configuration Files
-LOGGING_FILE = "config/logging.json"
-CONFIG_FILE = "config/config.json"
+LOGGING_FILE = "config/logging.yaml"
+CONFIG_FILE = "config/config.yaml"
 DEVICES_FILE = "config/devices.yaml"
 
 # Load configuration files
