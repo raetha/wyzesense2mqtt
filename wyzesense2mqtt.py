@@ -47,9 +47,9 @@ def write_yaml_file(filename, data):
             _LOGGER.error("File error: {0}".format(str(error)))
 
 # Initialize logging
-def init_logging(LOGGING_CONFIG_FILE):
+def init_logging(logging_config_file):
     global _LOGGER
-    logging_config = read_yaml_file(LOGGING_CONFIG_FILE)
+    logging_config = read_yaml_file(logging_config_file)
     try:
         log_path = os.path.dirname(logging_config['handlers']['file']['filename'])
         if not os.path.exists(log_path):
@@ -60,15 +60,15 @@ def init_logging(LOGGING_CONFIG_FILE):
     _LOGGER = logging.getLogger("wyzesense2mqtt")
 
 # Initialize Config
-def init_config(GENERAL_CONFIG_FILE):
+def init_config(general_config_file):
     global CONFIG
-    CONFIG = read_yaml_file(GENERAL_CONFIG_FILE)
+    CONFIG = read_yaml_file(general_config_file)
 
 # Initialize Devices
-def init_devices(DEVICES_CONFIG_FILE):
+def init_devices(devices_config_file):
     global DEVICES
     try:
-        DEVICES = read_yaml_file(DEVICES_CONFIG_FILE)
+        DEVICES = read_yaml_file(devices_config_file)
         for device in DEVICES:
             send_discovery_topics(device, DEVICES[device]['name'], DEVICES[device]['class'])
     except:
