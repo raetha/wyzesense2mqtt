@@ -1,5 +1,11 @@
 # Wyze Sense Mqtt wrapper
-A wrapper for the excellent Kevin Vincent (https://github.com/kevinvincent/ha-wyzesense) Wyze Sense library.Kevins library needs the Wyze Sense hub to be plugged into a USB port where Home Assistant is running. All my USB ports were taken so I wrote this little wrapper that allows me to run the Wyze hub on another machine and communicate with Home Assistant via MQTT. 
+
+> Special thanks to [HcLX](https://hclxing.wordpress.com) and his work on [WyzeSensePy](https://github.com/HclX/WyzeSensePy) which is the core library this component uses.
+> Also to Kevin Vincent (https://github.com/kevinvincent/ha-wyzesense) for his work on HA-WyseSense which this is heavily based on.
+> Lastly to ozczecho (https://github.com/ozczecho/wyze-mqtt) for his work on wyze-mqtt which was the original base code for this project.
+
+
+## !!! The rest of this readme is currently out of date and needs to be updated. If you are familiar with Docker, Python, and YAML, it shouldn't be too hard to figure out how to get this running and update the config files for your environment. !!!
 
 ## Setup
 
