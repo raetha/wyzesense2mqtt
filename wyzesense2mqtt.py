@@ -92,7 +92,7 @@ def init_sensors(sensors_config_file):
 
 # Validate sensor_mac
 def valid_sensor_mac(sensor_mac):
-    if len(sensor_mac) == 8 and event.MAC != '00000000':
+    if len(sensor_mac) == 8 and sensor_mac != '00000000':
         return True
     else:
         return False
@@ -241,7 +241,7 @@ def on_message_remove(client, userdata, msg):
 def on_event(ws, event):
     _LOGGER.info("Processing Event")
     _LOGGER.debug("Event data: {0}".format(event))
-    if event.Type == "state" and len(event.MAC) == 8 and event.MAC != '00000000':
+    if event.Type == "state" and valid_sensor_mac(event.MAC):
         (sensor_type, sensor_state, sensor_battery, sensor_signal) = event.Data
         event_payload = {
             'available': True,
