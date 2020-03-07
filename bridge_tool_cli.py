@@ -3,7 +3,7 @@
 """Example of using WyzeSense USB bridge.
 
 **Usage:** ::
-  sample.py [options]
+  bridge_tool_cli.py [options]
 
 **Options:**
 
@@ -13,7 +13,7 @@
 
 **Examples:** ::
 
-  sample.py --device /dev/hidraw0   # Using WyzeSense USB bridge /dev/hidraw0
+  bridge_tool_cli.py --device /dev/hidraw0   # Using WyzeSense USB bridge /dev/hidraw0
 
 """
 from __future__ import print_function
@@ -100,7 +100,7 @@ def main(args):
             'L': ('L to list', List),
             'P': ('P to pair', Pair),
             'U': ('U to unpair', Unpair),
-            'F': ('F to Fix invalid sensor', Fix),
+            'F': ('F to fix bad MAC', Fix),
             'X': ('X to exit', None),
         }
 
