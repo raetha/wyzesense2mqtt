@@ -262,6 +262,7 @@ def on_event(ws, event):
             add_sensor_to_config(event.MAC, sensor_type, None)
             send_discovery_topics(event.MAC)
     else:
+        _LOGGER.warn("Non-state event or invalid MAC detected")
         _LOGGER.warn("Event data: {0}".format(event))
 
 # Initialize configuration
