@@ -15,7 +15,6 @@ import yaml
 import paho.mqtt.client as mqtt
 import wyzesense
 from retrying import retry
-#from wyzesense_custom import *
 
 # Configuration File Locations
 LOGGING_CONFIG_FILE = "config/logging.yaml"
@@ -92,7 +91,7 @@ def init_sensors(sensors_config_file):
 
 # Validate sensor_mac
 def valid_sensor_mac(sensor_mac):
-    if len(sensor_mac) == 8 and sensor_mac != '00000000':
+    if len(sensor_mac) == 8 and sensor_mac != "00000000" and sensor_mac != "\0\0\0\0\0\0\0\0" and sensor_mac != "\x00\x00\x00\x00\x00\x00\x00\x00":
         return True
     else:
         return False
