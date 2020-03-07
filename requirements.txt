@@ -1,8 +1,9 @@
 # Pip requirements file
 #
-# ha-wyzesense
+# WyseSensePy 
 six
-# wyzesense2mqtt
+# wyzesense2mqtt requirements
 paho-mqtt
 retrying
 pyyaml
+wyzesense
