@@ -2,8 +2,8 @@
 config.yaml
 sensors.yaml
 
-# HA-WyzeSense Files
-wyzesense_custom.py
+# Logs
+logs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
