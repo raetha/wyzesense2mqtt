@@ -15,5 +15,6 @@ services:
       - "/dev/hidraw0:/dev/hidraw0"
     volumes:
       - "/docker/wyzesense2mqtt/config:/opt/wyzesense2mqtt/config"
+      - "/docker/wyzesense2mqtt/logs:/opt/wyzesense2mqtt/logs"
     environment:
       TZ: "America/New_York"
