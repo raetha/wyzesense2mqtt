@@ -10,6 +10,7 @@ import os
 import socket
 import sys
 import subprocess
+import time
 import yaml
 
 import paho.mqtt.client as mqtt
@@ -82,8 +83,8 @@ def init_mqtt_client():
 
 # Initialize USB dongle
 @retry(wait_exponential_multiplier=1000, wait_exponential_max=10000)
-def init_wysesense_dongle():
-    global WYSESENSE_DONGLE, CONFIG
+def init_wyzesense_dongle():
+    global WYZESENSE_DONGLE, CONFIG
     if CONFIG['usb_dongle'].lower() == "auto": 
         df = subprocess.check_output(["ls", "-la", "/sys/class/hidraw"]).decode("utf-8").lower()
         for l in df.split("\n"):
@@ -94,8 +95,11 @@ def init_wysesense_dongle():
                         break
 
     LOGGER.info("Openning connection to dongle {0}".format(CONFIG['usb_dongle']))
-    WYSESENSE_DONGLE = wyzesense.Open(CONFIG['usb_dongle'], on_event)
-    LOGGER.debug("  MAC: {0}, VER: {1}, ENR: {2}".format(WYSESENSE_DONGLE.MAC, WYSESENSE_DONGLE.Version, WYSESENSE_DONGLE.ENR))
+    try:
+        WYZESENSE_DONGLE = wyzesense.Open(CONFIG['usb_dongle'], on_event)
+        LOGGER.debug("  MAC: {0}, VER: {1}, ENR: {2}".format(WYZESENSE_DONGLE.MAC, WYZESENSE_DONGLE.Version, WYZESENSE_DONGLE.ENR))
+    except IOError:
+        LOGGER.warning("No device found on path {0}".format(CONFIG['usb_dongle']))
 
 # Initialize sensor configuration
 def init_sensors():
@@ -111,16 +115,19 @@ def init_sensors():
             send_discovery_topics(sensor_mac)
 
     # Check config against linked sensors
-    result = WYSESENSE_DONGLE.List()
-    LOGGER.debug("Linked sensors: {0}".format(result))
-    if result:
-        for sensor_mac in result:
-            if valid_sensor_mac(sensor_mac):
-                if SENSORS.get(sensor_mac) is None:
-                    add_sensor_to_config(sensor_mac)
-                    send_discovery_topics(sensor_mac)
-    else:
-        LOGGER.warning("Sensor list failed with result: {0}".format(result))
+    try:
+        result = WYZESENSE_DONGLE.List()
+        LOGGER.debug("Linked sensors: {0}".format(result))
+        if result:
+            for sensor_mac in result:
+                if valid_sensor_mac(sensor_mac):
+                    if SENSORS.get(sensor_mac) is None:
+                        add_sensor_to_config(sensor_mac)
+                        send_discovery_topics(sensor_mac)
+        else:
+            LOGGER.warning("Sensor list failed with result: {0}".format(result))
+    except:
+        pass
 
 # Validate sensor MAC
 def valid_sensor_mac(sensor_mac):
@@ -227,21 +234,22 @@ def on_message_scan(MQTT_CLIENT, userdata, msg):
     global SENSORS
     LOGGER.info("In on_message_scan: {0}".format(msg.payload.decode()))
 
-    # TODO Switch scan to automatically add sensor and perform discovery
-    # Testing new method
-    result = WYSESENSE_DONGLE.Scan()
-    LOGGER.debug("Scan result: {0}".format(result))
-
-    if result:
-        sensor_mac, sensor_type, sensor_version = result
-        if valid_sensor_mac(sensor_mac):
-            if SENSORS.get(sensor_mac) is None:
-                add_sensor_to_config(sensor_mac, sensor_type, sensor_version)
-                send_discovery_topics(sensor_mac)
+    try:
+        result = WYZESENSE_DONGLE.Scan()
+        LOGGER.debug("Scan result: {0}".format(result))
+        if result:
+            sensor_mac, sensor_type, sensor_version = result
+            sensor_type = ("motion" if sensor_type == 2 else "opening")
+            if valid_sensor_mac(sensor_mac):
+                if SENSORS.get(sensor_mac) is None:
+                    add_sensor_to_config(sensor_mac, sensor_type, sensor_version)
+                    send_discovery_topics(sensor_mac)
+            else:
+                LOGGER.debug("Invalid sensor found: {0}".format(sensor_mac))
         else:
-            LOGGER.debug("Invalid sensor found: {0}".format(sensor_mac))
-    else:
-        LOGGER.debug("No new sensor found")
+            LOGGER.debug("No new sensor found")
+    except:
+        pass
 
 # Process message to remove sensor
 def on_message_remove(MQTT_CLIENT, userdata, msg):
@@ -249,17 +257,19 @@ def on_message_remove(MQTT_CLIENT, userdata, msg):
     sensor_mac = msg.payload.decode()
 
     if valid_sensor_mac(sensor_mac):
-        WYSESENSE_DONGLE.Delete(sensor_mac)
-        clear_topics(sensor_mac)
+        try:
+            WYZESENSE_DONGLE.Delete(sensor_mac)
+            clear_topics(sensor_mac)
+        except:
+            pass
     else:
         LOGGER.debug("Invalid mac address: {0}".format(sensor_mac))
 
 # Process event
-def on_event(WYSESENSE_DONGLE, event):
+def on_event(WYZESENSE_DONGLE, event):
     if valid_sensor_mac(event.MAC):
         if event.Type == "state":
-            LOGGER.info("Processing state event for {0}".format(event.MAC))
-            LOGGER.debug("Event data: {0}".format(event))
+            LOGGER.info("State event data: {0}".format(event))
             (sensor_type, sensor_state, sensor_battery, sensor_signal) = event.Data
             event_payload = {
                 'available': True,
@@ -280,11 +290,10 @@ def on_event(WYSESENSE_DONGLE, event):
                 add_sensor_to_config(event.MAC, sensor_type, None)
                 send_discovery_topics(event.MAC)
         else:
-            LOGGER.debug("Non-state event")
-            LOGGER.debug("Event data: {0}".format(event))
+            LOGGER.debug("Non-state event data: {0}".format(event))
 
     else:
-        LOGGER.warning("Invalid MAC detected")
+        LOGGER.warning("!Invalid MAC detected!")
         LOGGER.warning("Event data: {0}".format(event))
 
 # Initialize logging
@@ -301,7 +310,7 @@ REMOVE_TOPIC = "{0}remove".format(CONFIG['wyzesense2mqtt_topic_root'])
 init_mqtt_client()
 
 # Initialize USB dongle
-init_wysesense_dongle()
+init_wyzesense_dongle()
 
 # Initialize sensor configuration
 init_sensors()
