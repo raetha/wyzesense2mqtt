@@ -1,9 +1,11 @@
 # WyzeSense2Mqtt Gateway
 
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](http://makeapullrequest.com)
-[![MIT Licence](https://badges.frapsoft.com/os/mit/mit.png?v=103)](https://opensource.org/licenses/mit-license.php)
-![GitHub package.json version](https://img.shields.io/github/package-json/v/raetha/wyzesense2mqtt)
-![GitHub All Releases](https://img.shields.io/github/downloads/raetha/wyzesense2mqtt/total)
+![GitHub License](https://img.shields.io/github/license/raetha/wyzesense2mqtt)
+![GitHub Issues](https://img.shields.io/github/issues/raetha/wyzesense2mqtt)
+![GitHub PRs](https://img.shields.io/github/issues-pr/raetha/wyzesense2mqtt)
+![GitHub Downloads](https://img.shields.io/github/downloads/raetha/wyzesense2mqtt/total)
+![GitHub Release](https://img.shields.io/github/v/release/raetha/wyzesense2mqtt)
 
 Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use its MQTT discovery mechanisms.
 
