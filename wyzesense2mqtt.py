@@ -1,5 +1,5 @@
 '''
-Wyze Sense 2 MQTT
+WyzeSense to MQTT Gateway
 v1.0
 '''
 import json

@@ -1,4 +1,4 @@
-# WyzeSense2Mqtt Gateway
+# WyzeSense to MQTT Gateway
 
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](http://makeapullrequest.com)
 ![GitHub License](https://img.shields.io/github/license/raetha/wyzesense2mqtt)

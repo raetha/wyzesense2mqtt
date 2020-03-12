@@ -1,5 +1,5 @@
 [Unit]
-Description=Wyze Sense via Mqtt
+Description=WyzeSense to MQTT Gateway
 Documentation=https://www.github.com/raetha/wyzesense2mqtt
 After=network.target
 
