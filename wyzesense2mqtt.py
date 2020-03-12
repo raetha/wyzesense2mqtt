@@ -27,7 +27,7 @@ def read_yaml_file(filename):
             data = yaml.safe_load(yaml_file)
             return data
     except IOError as error:
-        if LOGGER is None:
+        if (LOGGER is None):
             print("File error: {0}".format(str(error)))
         else:
             LOGGER.error("File error: {0}".format(str(error)))
@@ -39,7 +39,7 @@ def write_yaml_file(filename, data):
         with open(filename, 'w') as yaml_file:
             yaml_file.write(yaml.safe_dump(data))
     except IOError as error:
-        if LOGGER is None:
+        if (LOGGER is None):
             print("File error: {0}".format(str(error)))
         else:
             LOGGER.error("File error: {0}".format(str(error)))
@@ -51,7 +51,7 @@ def init_logging():
     logging_config = read_yaml_file(LOGGING_CONFIG_FILE)
     log_path = os.path.dirname(logging_config['handlers']['file']['filename'])
     try:
-        if not os.path.exists(log_path):
+        if (not os.path.exists(log_path)):
             os.makedirs(log_path)
     except IOError:
         print("Unable to create log folder")
@@ -100,7 +100,7 @@ def init_mqtt_client():
 @retry(wait_exponential_multiplier=1000, wait_exponential_max=10000)
 def init_wyzesense_dongle():
     global WYZESENSE_DONGLE, CONFIG
-    if CONFIG['usb_dongle'].lower() == "auto":
+    if (CONFIG['usb_dongle'].lower() == "auto"):
         device_list = subprocess.check_output(
                 ["ls", "-la", "/sys/class/hidraw"]
                 ).decode("utf-8").lower()
@@ -131,23 +131,23 @@ def init_wyzesense_dongle():
 def init_sensors():
     global SENSORS
     LOGGER.debug("Reading sensors configuration...")
-    if os.path.isfile(SENSORS_CONFIG_FILE):
+    if (os.path.isfile(SENSORS_CONFIG_FILE)):
         SENSORS = read_yaml_file(SENSORS_CONFIG_FILE)
     else:
         LOGGER.info("No sensors config file found.")
 
     for sensor_mac in SENSORS:
-        if valid_sensor_mac(sensor_mac):
+        if (valid_sensor_mac(sensor_mac)):
             send_discovery_topics(sensor_mac)
 
     # Check config against linked sensors
     try:
         result = WYZESENSE_DONGLE.List()
         LOGGER.debug("Linked sensors: {0}".format(result))
-        if result:
+        if (result):
             for sensor_mac in result:
-                if valid_sensor_mac(sensor_mac):
-                    if SENSORS.get(sensor_mac) is None:
+                if (valid_sensor_mac(sensor_mac)):
+                    if (SENSORS.get(sensor_mac) is None):
                         add_sensor_to_config(sensor_mac)
                         send_discovery_topics(sensor_mac)
         else:
@@ -175,10 +175,10 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
     SENSORS[sensor_mac] = dict()
     SENSORS[sensor_mac]['name'] = "Wyze Sense {0}".format(sensor_mac)
     SENSORS[sensor_mac]['class'] = (
-            "motion" if sensor_type == "motion"
+            "motion" if (sensor_type == "motion")
             else "opening"
             )
-    if sensor_version is not None:
+    if (sensor_version is not None):
         SENSORS[sensor_mac]['sw_version'] = sensor_version
 
     LOGGER.info("Writing Sensors Config File")
@@ -192,7 +192,7 @@ def send_discovery_topics(sensor_mac):
 
     sensor_name = SENSORS[sensor_mac]['name']
     sensor_class = SENSORS[sensor_mac]['class']
-    if SENSORS[sensor_mac].get('sw_version') is not None:
+    if (SENSORS[sensor_mac].get('sw_version') is not None):
         sensor_version = SENSORS[sensor_mac]['sw_version']
     else:
         sensor_version = ""
@@ -201,7 +201,7 @@ def send_discovery_topics(sensor_mac):
         'identifiers': ["wyzesense_{0}".format(sensor_mac), sensor_mac],
         'manufacturer': "Wyze",
         'model': (
-                "Sense Motion Sensor" if sensor_class == "motion"
+                "Sense Motion Sensor" if (sensor_class == "motion")
                 else "Sense Contact Sensor"
                 ),
         'name': sensor_name,
@@ -241,7 +241,7 @@ def send_discovery_topics(sensor_mac):
                 sensor_mac
                 )
         entity_payloads[entity]['dev'] = device_payload
-        sensor_type = ("binary_sensor" if entity == "state" else "sensor")
+        sensor_type = ("binary_sensor" if (entity == "state") else "sensor")
 
         entity_topic = "{0}{1}/wyzesense_{2}/{3}/config".format(
                 CONFIG['hass_topic_root'],
@@ -276,7 +276,7 @@ def clear_topics(sensor_mac):
 
     entity_types = ['state', 'signal_strength', 'battery']
     for entity_type in entity_types:
-        sensor_type = ("binary_sensor" if entity_type == "state" else "sensor")
+        sensor_type = ("binary_sensor" if (entity_type == "state") else "sensor")
         entity_topic = "{0}{1}/wyzesense_{2}/{3}/config".format(
                 CONFIG['hass_topic_root'],
                 sensor_type,
@@ -321,11 +321,11 @@ def on_message_scan(MQTT_CLIENT, userdata, msg):
     try:
         result = WYZESENSE_DONGLE.Scan()
         LOGGER.debug("Scan result: {0}".format(result))
-        if result:
+        if (result):
             sensor_mac, sensor_type, sensor_version = result
-            sensor_type = ("motion" if sensor_type == 2 else "opening")
-            if valid_sensor_mac(sensor_mac):
-                if SENSORS.get(sensor_mac) is None:
+            sensor_type = ("motion" if (sensor_type == 2) else "opening")
+            if (valid_sensor_mac(sensor_mac)):
+                if (SENSORS.get(sensor_mac)) is None:
                     add_sensor_to_config(
                             sensor_mac,
                             sensor_type,
@@ -345,7 +345,7 @@ def on_message_remove(MQTT_CLIENT, userdata, msg):
     LOGGER.info("In on_message_remove: {0}".format(msg.payload.decode()))
     sensor_mac = msg.payload.decode()
 
-    if valid_sensor_mac(sensor_mac):
+    if (valid_sensor_mac(sensor_mac)):
         try:
             WYZESENSE_DONGLE.Delete(sensor_mac)
             clear_topics(sensor_mac)
@@ -357,8 +357,8 @@ def on_message_remove(MQTT_CLIENT, userdata, msg):
 
 # Process event
 def on_event(WYZESENSE_DONGLE, event):
-    if valid_sensor_mac(event.MAC):
-        if event.Type == "state":
+    if (valid_sensor_mac(event.MAC)):
+        if (event.Type == "state"):
             LOGGER.info("State event data: {0}".format(event))
             (sensor_type, sensor_state,
              sensor_battery, sensor_signal) = event.Data
@@ -388,7 +388,7 @@ def on_event(WYZESENSE_DONGLE, event):
                     )
 
             # Add sensor if it doesn't already exist
-            if event.MAC not in SENSORS:
+            if (event.MAC not in SENSORS):
                 add_sensor_to_config(event.MAC, sensor_type, None)
                 send_discovery_topics(event.MAC)
         else:
