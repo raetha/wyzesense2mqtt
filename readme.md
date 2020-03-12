@@ -7,6 +7,8 @@
 ![GitHub Downloads](https://img.shields.io/github/downloads/raetha/wyzesense2mqtt/total)
 ![GitHub Release](https://img.shields.io/github/v/release/raetha/wyzesense2mqtt)
 
+[![dockeri.co](https://dockeri.co/image/raetha/wyzesense2mqtt)](https://hub.docker.com/r/raetha/wyzesense2mqtt)
+
 Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use its MQTT discovery mechanisms.
 
 > Special thanks to [HcLX](https://hclxing.wordpress.com) and his work on [WyzeSensePy](https://github.com/HclX/WyzeSensePy) which is the core library this component uses.
