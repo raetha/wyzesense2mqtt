@@ -5,8 +5,8 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/wyzesense2mqtt
-ExecStart=/opt/wyzesense2mqtt/service.sh
+WorkingDirectory=/wyzesense2mqtt
+ExecStart=/wyzesense2mqtt/service.sh
 Restart=always
 
 [Install]
