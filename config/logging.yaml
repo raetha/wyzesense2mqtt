@@ -20,6 +20,6 @@ handlers:
     when: midnight
 root:
   handlers:
-  - file
-  - console
+    - file
+    - console
   level: DEBUG
