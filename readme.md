@@ -168,7 +168,7 @@ To remove a sensor, publish a message containing the MAC to be removed to the MQ
 
 
 ### Using the command line tool
-The bridge_tool_cli.py script can be used to interact with your bridge a perform a few simple functions. Make sure to specify the correct device for your environment.
+The bridge_tool_cli.py script can be used to interact with your bridge to perform a few simple functions. Make sure to specify the correct device for your environment.
 ```bash
 python3 bridge_tool_cli.py --device /dev/hidraw0
 ```
@@ -180,7 +180,7 @@ Once run it will present a menu of its functions:
 
 
 ## Home Assistant
-Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add devices for each sensor along with entites for the state, battery_level, and signal_strength. By default these additionals will have a device_class of "opening" for contact sensors and "motion" for motion sensors. They will be named for the sensor type and MAC, e.g. Wyze Sense Contact Sensor AABBCCDD. To adjust the device_class to door or window, and set a custom name, update the sensors.yaml configuration file and replace the defaults.
+Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add devices for each sensor along with entites for the state, battery_level, and signal_strength. By default these entities will have a device_class of "opening" for contact sensors and "motion" for motion sensors. They will be named for the sensor type and MAC, e.g. Wyze Sense Contact Sensor AABBCCDD. To adjust the device_class to door or window, and set a custom name, update the sensors.yaml configuration file and replace the defaults, then restart WyzeSense2MQTT.
 
 
 ## Tested
