@@ -14,43 +14,81 @@ Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or o
 > Lastly to ozczecho (https://github.com/ozczecho/wyze-mqtt) for his work on wyze-mqtt which was the original base code for this project.
 
 
-## Setup
+## Installation and Setup
 
 ### Docker Way
-This is the most highly tested method of running the gateway. It allows for persistance and easy migration assuming the hardware dongle moves along with the configuration.
+This is the most highly tested method of running the gateway. It allows for persistance and easy migration assuming the hardware dongle moves along with the configuration. All steps are performed from Docker host, not container.
 
+1. Create a docker compose file similar to the following:
+```yaml
+version: "3.7"
+services:
+  wyzesense2mqtt:
+    container_name: wyzesense2mqtt
+    image: raetha/wyzesense2mqtt:latest
+    hostname: wyzesense2mqtt
+    restart: always
+    tty: true
+    stop_signal: SIGINT
+    network_mode: bridge
+    devices:
+      - "/dev/hidraw0:/dev/hidraw0"
+    volumes:
+      - "/docker/wyzesense2mqtt/config:/wyzesense2mqtt/config"
+      - "/docker/wyzesense2mqtt/logs:/wyzesense2mqtt/logs"
+    environment:
+      TZ: "America/New_York"
+```
+2. Create your local volume mounts
 ```bash
-# -- Download docker folder
-#
-# -- Prep docker-compose file
-mv docker-compose.yml.sample docker-compose.yml
-# Modify docker-compose.yml to fit your environment.
-# Particularly config volume and hidraw0 device locations.
-#
-# -- Download or copy config folder files to config volume
-#
-# -- Prep config files
-mv config.yaml.sample config.yaml
-# Edit configuration to your desired settings.
-# Default logger settings are in logging.yaml but can be changed if desired.
-#
-# -- Prep sensors (optional)
-# A sample sensors config is in sensors.yaml.sample.
-# You can preconfigure your sensors if MACs are known.
-# Otherwise the gateway will build this file for you as sensors are found.
-#
-# -- Build and start Docker container
-docker-compose build
+mkdir /docker/wyzesense2mqtt/config
+mkdir /docker/wyzesense2mqtt/logs
+```
+3. Prepare config.yaml file (see sample below or copy from repository)
+```bash
+vim /docker/wyzesense2mqtt/config/config.yaml
+```
+4. Prepare logging.yaml file (see sample below or copy from repository)
+```bash
+vim /docker/wyzesense2mqtt/config/logging.yaml
+```
+5. If desired, pre-populate a sensors.yaml file with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below or copy from repository)
+```bash
+vim /docker/wyzesense2mqtt/config/sensors.yaml
+```
+6. Start up docker container
+```bash
 docker-compose up -d
 ```
 
 ### Linux Systemd Way
 
-The gateway can be run as a systemd service. Edit the files as required.
-
+The gateway can also be run as a systemd service for those not wanting to use Docker.
+1. Create an application folder
 ```bash
-sudo cp wyzesense2mqtt.service /etc/systemd/system/
-# Edit the `service` file to suit your requirements
+mkdir /wyzesense2mqtt
+cd /wyzesense2mqtt
+```
+2. Pull down a copy of the repository
+```bash
+git clone https://github.com/raetha/wyzesense2mqtt.git
+```
+3. Prepare config.yaml file (see sample below)
+```bash
+cp /wyzesense2mqtt/config/config.yaml.sample /wyzesense2mqtt/config/config.yaml
+vim /wyzesense2mqtt/config/config.yaml
+```
+4. Modify logging.yaml file if desired (optional)
+```bash
+vim /wyzesense2mqtt/config/logging.yaml
+```
+5. If desired, pre-populate a sensors.yaml file with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below)
+```bash
+vim /wyzesense2mqtt/config/sensors.yaml
+```
+6. Start the service. Service file only needs to be modified if not using /wyzesense2mqtt as the application path.
+```bash
+sudo cp /wyzesense2mqtt/wyzesense2mqtt.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl start wyzesense2mqtt
 sudo systemctl status wyzesense2mqtt
@@ -58,7 +96,7 @@ sudo systemctl status wyzesense2mqtt
 
 
 ## Config files
-The gateway uses three config files located in the config directory. Samples of each are below.
+The gateway uses three config files located in the config directory. Samples of each are below and in the repository.
 
 ### config.yaml
 This is the main configuration file. Aside from MQTT host, username, and password, the defaults should work for most people.
