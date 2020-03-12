@@ -125,41 +125,29 @@ DDDDDDDD:
 ```
 
 
+## Usage
+### Adding a new sensor
+To add a new sensor, publish a blank message to the MQTT topic "self_topic_root/scan" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/scan" if you haven't changed the configuration. This can be performed via Home Assistant or any MQTT client.
+
+
+### Removing a sensor
+To remove a sensor, publish a message containing the MAC to be removed to the MQTT topic "self_topic_root/remove" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/remove" if you haven't changed the configuration. The payload should look like "AABBCCDD". This can be performed via Home Assistant or any MQTT client.
+
+
+### Using the command line tool
+The bridge_tool_cli.py script can be used to interact with your bridge a perform a few simple functions. Make sure to specify the correct device for your environment.
+```bash
+python3 bridge_tool_cli.py --device /dev/hidraw0
+```
+Once run it will present a menu of its functions:
+* L - List paired sensor MACs
+* P - Put into scanning mode to pair new sensors
+* U - Unpair the MAC specified after U (e.g. "U AABBCCDD"
+* F - Remove a sensor with MAC 00000000, common problem with failing sensors
+
+
 ## Home Assistant
-
-TODO - Update this section
-To add sensors to the `Wyze hub`, you need to publish a message from Home Assistant that will trigger the scan on the `wyze-mqtt` wrapper. This is done by publishing to topic defined under `subscribeScanTopic`. If successful the wrapper will respond with the newly added sensors MAC address. Add the following automation in home assisant to receive the newly added MAC addresses
-```yaml
-- alias: Listen for new Wyze Sense sensors added to hub.
-  initial_state: true
-  trigger:
-    - platform: mqtt
-      topic: 'home/wyze/newdevice'
-  action:
-    - service: persistent_notification.create
-      data_template:
-        title: Wyze Sense Sensors Discovery
-        message: "{{ trigger.payload}}"
-```
-
-Some sample configurations in Home Assistant. One is for a door / window sensor and the other is for a motion sensor.
-```yaml
-binary_sensor:
-  - platform: mqtt
-    name: A Window
-    state_topic: "home/wyze/123456789"
-    device_class: "window"
-    value_template: "{{ value_json.state }}" 
-    payload_on: 1
-    payload_off: 0
-
-sensor:
-  - platform: mqtt
-    name: A Motion
-    state_topic: "home/wyze/987654321"
-    value_template: "{{ value_json.state }}"  
-    force_update: true  
-```
+Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add devices for each sensor along with entites for the state, battery_level, and signal_strength. By default these additionals will have a device_class of "opening" for contact sensors and "motion" for motion sensors. They will be named for the sensor type and MAC, e.g. Wyze Sense Contact Sensor AABBCCDD. To adjust the device_class to door or window, and set a custom name, update the sensors.yaml configuration file and replace the defaults.
 
 
 ## Tested

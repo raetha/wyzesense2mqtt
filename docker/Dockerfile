@@ -8,7 +8,7 @@ RUN apk add --update python3 py-pip git tzdata && \
     rm -rf /var/cache/apk/*
 
 RUN mkdir -p /opt/wyzesense2mqtt && \
-    git clone -b "v0.5" https://github.com/raetha/wyzesense2mqtt.git /opt/wyzesense2mqtt && \
+    git clone https://github.com/raetha/wyzesense2mqtt.git /opt/wyzesense2mqtt && \
     pip3 install -r /opt/wyzesense2mqtt/requirements.txt && \
     chmod u+x /opt/wyzesense2mqtt/service.sh
 

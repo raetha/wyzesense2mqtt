@@ -30,7 +30,9 @@ import wyzesense
 def on_event(ws, e):
     s = "[%s][%s]" % (e.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), e.MAC)
     if e.Type == 'state':
-        s += "StateEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % e.Data
+        (s_type, s_state, s_battery, s_signal) = e.Data
+        s += f"StateEvent: sensor_type={s_type}, state={s_state}, " \
+             f"battery={s_battery}, signal={s_signal}"
     else:
         s += "RawEvent: type=%s, data=%r" % (e.Type, e.Data)
     print(s)
