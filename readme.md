@@ -10,8 +10,8 @@
 Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use its MQTT discovery mechanisms.
 
 > Special thanks to [HcLX](https://hclxing.wordpress.com) and his work on [WyzeSensePy](https://github.com/HclX/WyzeSensePy) which is the core library this component uses.
-> Also to Kevin Vincent (https://github.com/kevinvincent/ha-wyzesense) for his work on HA-WyseSense which this is heavily based on.
-> Lastly to ozczecho (https://github.com/ozczecho/wyze-mqtt) for his work on wyze-mqtt which was the original base code for this project.
+> Also to [Kevin Vincent](http://kevinvincent.me) for his work on [HA-WyzeSense](https://github.com/kevinvincent/ha-wyzesense) which this is heavily based on.
+> Lastly to [ozczecho](https://github.com/ozczecho) for his work on [wyze-mqtt](https://github.com/ozczecho/wyze-mqtt) which was the original base code for this project.
 
 
 ## Installation and Setup
@@ -44,19 +44,10 @@ services:
 mkdir /docker/wyzesense2mqtt/config
 mkdir /docker/wyzesense2mqtt/logs
 ```
-3. Prepare config.yaml file (see sample below or copy from repository)
-```bash
-vim /docker/wyzesense2mqtt/config/config.yaml
-```
-4. Prepare logging.yaml file (see sample below or copy from repository)
-```bash
-vim /docker/wyzesense2mqtt/config/logging.yaml
-```
-5. If desired, pre-populate a sensors.yaml file with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below or copy from repository)
-```bash
-vim /docker/wyzesense2mqtt/config/sensors.yaml
-```
-6. Start up docker container
+3. Create or copy a config.yaml file into the config folder (see sample below or copy from repository)
+4. Copy a logging.yaml file into the config folder (see sample below or copy from repository)
+5. If desired, pre-populate a sensors.yaml file into the config folder with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below or copy from repository)
+6. Start the Docker container
 ```bash
 docker-compose up -d
 ```
@@ -75,8 +66,8 @@ git clone https://github.com/raetha/wyzesense2mqtt.git
 ```
 3. Prepare config.yaml file (see sample below)
 ```bash
-cp /wyzesense2mqtt/config/config.yaml.sample /wyzesense2mqtt/config/config.yaml
-vim /wyzesense2mqtt/config/config.yaml
+mv /wyzesense2mqtt/config/config.yaml.sample /wyzesense2mqtt/config/config.yaml
+vim /wyzesense2mqtt/config/config.yaml # You must set MQTT host parameters!
 ```
 4. Modify logging.yaml file if desired (optional)
 ```bash
@@ -84,10 +75,12 @@ vim /wyzesense2mqtt/config/logging.yaml
 ```
 5. If desired, pre-populate a sensors.yaml file with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below)
 ```bash
+mv /wyzesense2mqtt/config/sensors.yaml.sample /wyzesense2mqtt/config/sensors.yaml
 vim /wyzesense2mqtt/config/sensors.yaml
 ```
-6. Start the service. Service file only needs to be modified if not using /wyzesense2mqtt as the application path.
+6. Start the service.
 ```bash
+vim /wyzesense2mqtt/wyzesense2mqtt.service # Only modify if not using default application path
 sudo cp /wyzesense2mqtt/wyzesense2mqtt.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl start wyzesense2mqtt
@@ -116,7 +109,7 @@ usb_dongle: auto
 ``` 
 
 ### logging.yaml
-This file contains a yaml dictionary for the logging.config module. Python docs at (https://docs.python.org/3/library/logging.config.html)
+This file contains a yaml dictionary for the logging.config module. Python docs at [logging configuration](https://docs.python.org/3/library/logging.config.html)
 ```yaml
 version: 1
 formatters:
