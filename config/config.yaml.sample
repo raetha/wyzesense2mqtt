@@ -7,6 +7,6 @@ mqtt_clean_session: false
 mqtt_keepalive: 60
 mqtt_qos: 2
 mqtt_retain: true
-hass_topic_root: homeassistant/
-wyzesense2mqtt_topic_root: wyzesense2mqtt/
+self_topic_root: wyzesense2mqtt
+hass_topic_root: homeassistant
 usb_dongle: auto

@@ -28,9 +28,9 @@ def read_yaml_file(filename):
             return data
     except IOError as error:
         if (LOGGER is None):
-            print("File error: {0}".format(str(error)))
+            print(f"File error: {str(error)}")
         else:
-            LOGGER.error("File error: {0}".format(str(error)))
+            LOGGER.error(f"File error: {str(error)}")
 
 
 # Write data to YAML file
@@ -40,9 +40,9 @@ def write_yaml_file(filename, data):
             yaml_file.write(yaml.safe_dump(data))
     except IOError as error:
         if (LOGGER is None):
-            print("File error: {0}".format(str(error)))
+            print(f"File error: {str(error)}")
         else:
-            LOGGER.error("File error: {0}".format(str(error)))
+            LOGGER.error(f"File error: {str(error)}")
 
 
 # Initialize logging
@@ -75,25 +75,23 @@ def init_mqtt_client():
     MQTT_CLIENT = mqtt.Client(
             client_id=CONFIG['mqtt_client_id'],
             clean_session=CONFIG['mqtt_clean_session']
-            )
+    )
     MQTT_CLIENT.username_pw_set(
             username=CONFIG['mqtt_username'],
             password=CONFIG['mqtt_password']
-            )
+    )
     MQTT_CLIENT.reconnect_delay_set(min_delay=1, max_delay=120)
     MQTT_CLIENT.on_connect = on_connect
     MQTT_CLIENT.on_disconnect = on_disconnect
     MQTT_CLIENT.on_message = on_message
 
     # Connect to MQTT
-    LOGGER.info("Attempting to open connection to MQTT host {0}".format(
-            CONFIG['mqtt_host']
-            ))
+    LOGGER.info(f"Connecting to MQTT host {CONFIG['mqtt_host']}")
     MQTT_CLIENT.connect(
             CONFIG['mqtt_host'],
             port=CONFIG['mqtt_port'],
             keepalive=CONFIG['mqtt_keepalive']
-            )
+    )
 
 
 # Initialize USB dongle
@@ -103,7 +101,7 @@ def init_wyzesense_dongle():
     if (CONFIG['usb_dongle'].lower() == "auto"):
         device_list = subprocess.check_output(
                 ["ls", "-la", "/sys/class/hidraw"]
-                ).decode("utf-8").lower()
+        ).decode("utf-8").lower()
         for line in device_list.split("\n"):
             if (("e024" in line) and ("1a86" in line)):
                 for device_name in line.split(" "):
@@ -111,20 +109,14 @@ def init_wyzesense_dongle():
                         CONFIG['usb_dongle'] = "/dev/%s" % device_name
                         break
 
-    LOGGER.info("Openning connection to dongle {0}".format(
-            CONFIG['usb_dongle']
-            ))
+    LOGGER.info(f"Connecting to dongle {CONFIG['usb_dongle']}")
     try:
         WYZESENSE_DONGLE = wyzesense.Open(CONFIG['usb_dongle'], on_event)
-        LOGGER.debug("  MAC: {0}, VER: {1}, ENR: {2}".format(
-                WYZESENSE_DONGLE.MAC,
-                WYZESENSE_DONGLE.Version,
-                WYZESENSE_DONGLE.ENR
-                ))
+        LOGGER.debug(f"  MAC: {WYZESENSE_DONGLE.MAC},"
+                     f"  VER: {WYZESENSE_DONGLE.Version},"
+                     f"  ENR: {WYZESENSE_DONGLE.ENR}")
     except IOError:
-        LOGGER.warning("No device found on path {0}".format(
-                CONFIG['usb_dongle']
-                ))
+        LOGGER.warning(f"No device found on path {CONFIG['usb_dongle']}")
 
 
 # Initialize sensor configuration
@@ -143,7 +135,7 @@ def init_sensors():
     # Check config against linked sensors
     try:
         result = WYZESENSE_DONGLE.List()
-        LOGGER.debug("Linked sensors: {0}".format(result))
+        LOGGER.debug(f"Linked sensors: {result}")
         if (result):
             for sensor_mac in result:
                 if (valid_sensor_mac(sensor_mac)):
@@ -151,9 +143,7 @@ def init_sensors():
                         add_sensor_to_config(sensor_mac)
                         send_discovery_topics(sensor_mac)
         else:
-            LOGGER.warning("Sensor list failed with result: {0}".format(
-                    result
-                    ))
+            LOGGER.warning(f"Sensor list failed with result: {result}")
     except TimeoutError:
         pass
 
@@ -173,11 +163,11 @@ def valid_sensor_mac(sensor_mac):
 def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
     global SENSORS
     SENSORS[sensor_mac] = dict()
-    SENSORS[sensor_mac]['name'] = "Wyze Sense {0}".format(sensor_mac)
+    SENSORS[sensor_mac]['name'] = f"Wyze Sense {sensor_mac}"
     SENSORS[sensor_mac]['class'] = (
             "motion" if (sensor_type == "motion")
             else "opening"
-            )
+    )
     if (sensor_version is not None):
         SENSORS[sensor_mac]['sw_version'] = sensor_version
 
@@ -188,7 +178,7 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
 # Send discovery topics
 def send_discovery_topics(sensor_mac):
     global SENSORS, CONFIG
-    LOGGER.info("Publishing discovery topics for {0}".format(sensor_mac))
+    LOGGER.info(f"Publishing discovery topics for {sensor_mac}")
 
     sensor_name = SENSORS[sensor_mac]['name']
     sensor_class = SENSORS[sensor_mac]['class']
@@ -198,12 +188,12 @@ def send_discovery_topics(sensor_mac):
         sensor_version = ""
 
     device_payload = {
-        'identifiers': ["wyzesense_{0}".format(sensor_mac), sensor_mac],
+        'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
         'manufacturer': "Wyze",
         'model': (
                 "Sense Motion Sensor" if (sensor_class == "motion")
                 else "Sense Contact Sensor"
-                ),
+        ),
         'name': sensor_name,
         'sw_version': sensor_version
     }
@@ -214,113 +204,96 @@ def send_discovery_topics(sensor_mac):
             'dev_cla': sensor_class,
             'pl_on': "1",
             'pl_off': "0",
-            'json_attr_t': CONFIG['wyzesense2mqtt_topic_root'] + sensor_mac
+            'json_attr_t': f"{CONFIG['self_topic_root']}/{sensor_mac}"
         },
         'signal_strength': {
-            'name': "{0} Signal Strength".format(sensor_name),
+            'name': f"{sensor_name} Signal Strength",
             'dev_cla': "signal_strength",
             'unit_of_meas': "dBm"
         },
         'battery': {
-            'name': "{0} Battery".format(sensor_name),
+            'name': f"{sensor_name} Battery",
             'dev_cla': "battery",
             'unit_of_meas': "%"
         }
     }
 
     for entity in entity_payloads:
-        entity_payloads[entity]['val_tpl'] = "{{{{ value_json.{0} }}}}".format(
-                entity
-                )
-        entity_payloads[entity]['uniq_id'] = "wyzesense_{0}_{1}".format(
-                sensor_mac,
-                entity
-                )
-        entity_payloads[entity]['stat_t'] = (
-                CONFIG['wyzesense2mqtt_topic_root'] +
-                sensor_mac
-                )
+        entity_payloads[entity]['val_tpl'] = f"{{{{ value_json.{entity} }}}}"
+        entity_payloads[entity]['uniq_id'] = f"wyzesense_{sensor_mac}_{entity}"
+        entity_payloads[entity]['stat_t'] = \
+            f"{CONFIG['self_topic_root']}/{sensor_mac}"
         entity_payloads[entity]['dev'] = device_payload
         sensor_type = ("binary_sensor" if (entity == "state") else "sensor")
 
-        entity_topic = "{0}{1}/wyzesense_{2}/{3}/config".format(
-                CONFIG['hass_topic_root'],
-                sensor_type,
-                sensor_mac,
-                entity
-                )
+        entity_topic = f"{CONFIG['hass_topic_root']}/{sensor_type}/" \
+                       f"wyzesense_{sensor_mac}/{entity}/config"
         MQTT_CLIENT.publish(
                 entity_topic,
                 payload=json.dumps(entity_payloads[entity]),
                 qos=CONFIG['mqtt_qos'],
                 retain=CONFIG['mqtt_retain']
-                )
-#        LOGGER.debug("  {0}".format(entity_topic))
-#        LOGGER.debug("  {0}".format(json.dumps(entity_payloads[entity])))
+        )
+#        LOGGER.debug(f"  {entity_topic}")
+#        LOGGER.debug(f"  {json.dumps(entity_payloads[entity])}")
 
 
 # Clear any retained topics in MQTT
 def clear_topics(sensor_mac):
     global CONFIG
     LOGGER.info("Clearing sensor topics")
-    state_topic = "{0}{1}".format(
-            CONFIG['wyzesense2mqtt_topic_root'],
-            sensor_mac
-            )
+    state_topic = f"{CONFIG['self_topic_root']}/{sensor_mac}"
     MQTT_CLIENT.publish(
             state_topic,
             payload=None,
             qos=CONFIG['mqtt_qos'],
             retain=CONFIG['mqtt_retain']
-            )
+    )
 
     entity_types = ['state', 'signal_strength', 'battery']
     for entity_type in entity_types:
-        sensor_type = ("binary_sensor" if (entity_type == "state") else "sensor")
-        entity_topic = "{0}{1}/wyzesense_{2}/{3}/config".format(
-                CONFIG['hass_topic_root'],
-                sensor_type,
-                sensor_mac,
-                entity_type
-                )
+        sensor_type = ("binary_sensor" if (entity_type == "state")
+                       else "sensor")
+        entity_topic = f"{CONFIG['hass_topic_root']}/{sensor_type}/" \
+                       f"wyzesense_{sensor_mac}/{entity_type}/config"
         MQTT_CLIENT.publish(
                 entity_topic,
                 payload=None,
                 qos=CONFIG['mqtt_qos'],
                 retain=CONFIG['mqtt_retain']
-                )
+        )
 
 
 def on_connect(MQTT_CLIENT, userdata, flags, rc):
     global CONFIG
-    LOGGER.info("Connected to mqtt with result code {0}".format(str(rc)))
-    MQTT_CLIENT.subscribe([
-        (SCAN_TOPIC, CONFIG['mqtt_qos']),
-        (REMOVE_TOPIC, CONFIG['mqtt_qos'])
-        ])
+    LOGGER.info(f"Connected to mqtt with result code {str(rc)}")
+    MQTT_CLIENT.subscribe(
+            [(SCAN_TOPIC, CONFIG['mqtt_qos']),
+             (REMOVE_TOPIC, CONFIG['mqtt_qos'])]
+    )
     MQTT_CLIENT.message_callback_add(SCAN_TOPIC, on_message_scan)
     MQTT_CLIENT.message_callback_add(REMOVE_TOPIC, on_message_remove)
 
 
 def on_disconnect(MQTT_CLIENT, userdata, rc):
-    LOGGER.info("Disconnected from mqtt with result code {0}".format(str(rc)))
+    LOGGER.info(f"Disconnected from mqtt with result code {str(rc)}")
     MQTT_CLIENT.message_callback_remove(SCAN_TOPIC)
     MQTT_CLIENT.message_callback_remove(REMOVE_TOPIC)
 
 
 # Process messages
 def on_message(MQTT_CLIENT, userdata, msg):
-    LOGGER.info("{0}: {1}".format(msg.topic, str(msg.payload)))
+    LOGGER.info(f"{msg.topic}: {str(msg.payload)}")
 
 
 # Process message to scan for new sensors
 def on_message_scan(MQTT_CLIENT, userdata, msg):
     global SENSORS
-    LOGGER.info("In on_message_scan: {0}".format(msg.payload.decode()))
+    LOGGER.info(f"In on_message_scan: {msg.payload.decode()}")
 
     try:
         result = WYZESENSE_DONGLE.Scan()
-        LOGGER.debug("Scan result: {0}".format(result))
+        LOGGER.debug(f"Scan result: {result}")
         if (result):
             sensor_mac, sensor_type, sensor_version = result
             sensor_type = ("motion" if (sensor_type == 2) else "opening")
@@ -330,10 +303,10 @@ def on_message_scan(MQTT_CLIENT, userdata, msg):
                             sensor_mac,
                             sensor_type,
                             sensor_version
-                            )
+                    )
                     send_discovery_topics(sensor_mac)
             else:
-                LOGGER.debug("Invalid sensor found: {0}".format(sensor_mac))
+                LOGGER.debug(f"Invalid sensor found: {sensor_mac}")
         else:
             LOGGER.debug("No new sensor found")
     except TimeoutError:
@@ -342,7 +315,7 @@ def on_message_scan(MQTT_CLIENT, userdata, msg):
 
 # Process message to remove sensor
 def on_message_remove(MQTT_CLIENT, userdata, msg):
-    LOGGER.info("In on_message_remove: {0}".format(msg.payload.decode()))
+    LOGGER.info(f"In on_message_remove: {msg.payload.decode()}")
     sensor_mac = msg.payload.decode()
 
     if (valid_sensor_mac(sensor_mac)):
@@ -352,14 +325,14 @@ def on_message_remove(MQTT_CLIENT, userdata, msg):
         except TimeoutError:
             pass
     else:
-        LOGGER.debug("Invalid mac address: {0}".format(sensor_mac))
+        LOGGER.debug(f"Invalid mac address: {sensor_mac}")
 
 
 # Process event
 def on_event(WYZESENSE_DONGLE, event):
     if (valid_sensor_mac(event.MAC)):
         if (event.Type == "state"):
-            LOGGER.info("State event data: {0}".format(event))
+            LOGGER.info(f"State event data: {event}")
             (sensor_type, sensor_state,
              sensor_battery, sensor_signal) = event.Data
             event_payload = {
@@ -376,27 +349,24 @@ def on_event(WYZESENSE_DONGLE, event):
             }
 #            LOGGER.debug(event_payload)
 
-            state_topic = "{0}{1}".format(
-                    CONFIG['wyzesense2mqtt_topic_root'],
-                    event.MAC
-                    )
+            state_topic = f"{CONFIG['self_topic_root']}/{event.MAC}"
             MQTT_CLIENT.publish(
                     state_topic,
                     payload=json.dumps(event_payload),
                     qos=CONFIG['mqtt_qos'],
                     retain=CONFIG['mqtt_retain']
-                    )
+            )
 
             # Add sensor if it doesn't already exist
             if (event.MAC not in SENSORS):
                 add_sensor_to_config(event.MAC, sensor_type, None)
                 send_discovery_topics(event.MAC)
         else:
-            LOGGER.debug("Non-state event data: {0}".format(event))
+            LOGGER.debug(f"Non-state event data: {event}")
 
     else:
         LOGGER.warning("!Invalid MAC detected!")
-        LOGGER.warning("Event data: {0}".format(event))
+        LOGGER.warning(f"Event data: {event}")
 
 
 # Initialize logging
@@ -406,8 +376,8 @@ init_logging()
 init_config()
 
 # Set MQTT Topics
-SCAN_TOPIC = "{0}scan".format(CONFIG['wyzesense2mqtt_topic_root'])
-REMOVE_TOPIC = "{0}remove".format(CONFIG['wyzesense2mqtt_topic_root'])
+SCAN_TOPIC = f"{CONFIG['self_topic_root']}/scan"
+REMOVE_TOPIC = f"{CONFIG['self_topic_root']}/remove"
 
 # Initialize MQTT client connection
 init_mqtt_client()
