@@ -8,6 +8,15 @@ readme.md
 hooks
 Dockerfile
 docker-compose.yml.sample
+.dockerignore
+docker
+
+# Git related files
+.git
+.gitignore
+
+# Qemu related files
+qemu-*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
