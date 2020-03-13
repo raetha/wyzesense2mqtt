@@ -11,9 +11,11 @@
 
 Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use its MQTT discovery mechanisms.
 
-> Special thanks to [HcLX](https://hclxing.wordpress.com) and his work on [WyzeSensePy](https://github.com/HclX/WyzeSensePy) which is the core library this component uses.
-> Also to [Kevin Vincent](http://kevinvincent.me) for his work on [HA-WyzeSense](https://github.com/kevinvincent/ha-wyzesense) which this is heavily based on.
-> Lastly to [ozczecho](https://github.com/ozczecho) for his work on [wyze-mqtt](https://github.com/ozczecho/wyze-mqtt) which was the original base code for this project.
+> Special Thanks
+> * [HcLX](https://hclxing.wordpress.com) for [WyzeSensePy](https://github.com/HclX/WyzeSensePy), the core library this component uses.
+> * [Kevin Vincent](http://kevinvincent.me) for [HA-WyzeSense](https://github.com/kevinvincent/ha-wyzesense), the refernce code I used to get things working right with the calls to WyzeSensePy.
+> * [ozczecho](https://github.com/ozczecho) for [wyze-mqtt](https://github.com/ozczecho/wyze-mqtt), the inspiration for this project.
+> * [rmoriz](https://roland.io/) for [multiarch-test](https://github.com/rmoriz/multiarch-test), this allowed the Docker Hub Autobuilder to work for multiple architectures including ARM32v7 (Raspberry Pi) and AMD64 (Linux).
 
 
 ## Installation and Setup
@@ -21,7 +23,7 @@ Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or o
 ### Docker Way
 This is the most highly tested method of running the gateway. It allows for persistance and easy migration assuming the hardware dongle moves along with the configuration. All steps are performed from Docker host, not container.
 
-1. Create a docker compose file similar to the following:
+1. Create a docker compose file similar to the following. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details on the file format and options.
 ```yaml
 version: "3.7"
 services:
@@ -41,7 +43,7 @@ services:
     environment:
       TZ: "America/New_York"
 ```
-2. Create your local volume mounts
+2. Create your local volume mounts. Use the same folders as selected in the Docker Compose file created above.
 ```bash
 mkdir /docker/wyzesense2mqtt/config
 mkdir /docker/wyzesense2mqtt/logs
