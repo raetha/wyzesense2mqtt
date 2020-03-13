@@ -1,9 +1,13 @@
-# Config files
+# WyzeSense2MQTT files
 config.yaml
 sensors.yaml
+logs
+readme.md
 
-# Logs
-logs/
+# Docker related files
+hooks
+Dockerfile
+docker-compose.yml.sample
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

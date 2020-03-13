@@ -1,5 +1,12 @@
-FROM alpine:latest
+# see hooks/build and hooks/.config
+ARG BASE_IMAGE_PREFIX
+FROM ${BASE_IMAGE_PREFIX}alpine
 
+# see hooks/post_checkout
+ARG ARCH
+COPY qemu-${ARCH}-static /usr/bin
+
+# Begin WyzeSense2MQTT
 LABEL maintainer="Raetha"
 
 ENV TZ="America/New_York"
