@@ -15,9 +15,6 @@ docker
 .git
 .gitignore
 
-# Qemu related files
-qemu-*
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

@@ -11,18 +11,22 @@ LABEL maintainer="Raetha"
 
 ENV TZ="America/New_York"
 
+COPY bridge_tool_cli.py \
+     config \
+     LICENSE \
+     requirements.txt \
+     service.sh \
+     wyzesense2mqtt.py \
+     /wyzesense2mqtt/
+
 RUN apk add --update \
         py3-pip \
         python3 \
         tzdata \
-    && rm -rf /var/cache/apk/*
-
-COPY requirements.txt /wyzesense2mqtt/
-RUN pip3 install --upgrade pip \
-    && pip3 install -r /wyzesense2mqtt/requirements.txt
-
-COPY . /wyzesense2mqtt/
-RUN  chmod u+x /wyzesense2mqtt/service.sh
+    && rm -rf /var/cache/apk/* \
+    && pip3 install --no-cache-dir --upgrade pip \
+    && pip3 install --no-cache-dir -r /wyzesense2mqtt/requirements.txt \
+    && chmod u+x /wyzesense2mqtt/service.sh
 
 VOLUME /wyzesense2mqtt/config /wyzesense2mqtt/logs
 
