@@ -1,4 +1,12 @@
+# To set multiarch build for Docker Hub automated build
+FROM alpine:latest AS builder
+WORKDIR /tmp
+RUN apk add --update curl
+RUN curl -L https://github.com/balena-io/qemu/releases/download/v3.0.0%2Bresin/qemu-3.0.0+resin-aarch64.tar.gz | tar zxvf - -C . && mv qemu-3.0.0+resin-aarch64/qemu-aarch64-static .
+
+# Begin WyzeSense2MQTT image
 FROM arm32v7/alpine:latest
+COPY --from=builder /tmp/qemu-aarch64-static /usr/bin/
 
 LABEL maintainer="Raetha"
 
