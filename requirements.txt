@@ -7,3 +7,5 @@ paho-mqtt
 retrying
 pyyaml
 wyzesense
+# bridge_tool_cli requirements
+docopt

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
+# Borrowed from https://github.com/HclX/WyzeSensePy/blob/master/sample.py with slight modifications
 
-"""Example of using WyzeSense USB bridge.
+"""Example of using WyzeSense USB bridge tool
 
 **Usage:** ::
   bridge_tool_cli.py [options]
