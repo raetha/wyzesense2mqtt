@@ -12,8 +12,7 @@ LABEL maintainer="Raetha"
 ENV TZ="America/New_York"
 
 COPY wyzesense2mqtt /wyzesense2mqtt/
-
-#COPY config /wyzesense2mqtt/config/
+COPY wyzesense2mqtt/config /wyzesense2mqtt/config/
 
 RUN apk add --update \
         py3-pip \
