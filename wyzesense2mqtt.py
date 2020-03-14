@@ -150,7 +150,8 @@ def init_sensors():
 
 # Validate sensor MAC
 def valid_sensor_mac(sensor_mac):
-    if ((len(sensor_mac) == 8) and
+    LOGGER.debug(f"sensor_mac: {sensor_mac}")
+    if ((len(str(sensor_mac)) == 8) and
             (sensor_mac != "00000000") and
             (sensor_mac != "\0\0\0\0\0\0\0\0") and
             (sensor_mac != "\x00\x00\x00\x00\x00\x00\x00\x00")):
