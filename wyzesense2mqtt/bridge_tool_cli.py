@@ -29,13 +29,13 @@ import wyzesense
 
 
 def on_event(ws, e):
-    s = "[%s][%s]" % (e.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), e.MAC)
+    s = f"[{e.Timestamp.strftime('%Y-%m-%d %H:%M:%S')}][{e.MAC}]"
     if e.Type == 'state':
         (s_type, s_state, s_battery, s_signal) = e.Data
         s += f"StateEvent: sensor_type={s_type}, state={s_state}, " \
              f"battery={s_battery}, signal={s_signal}"
     else:
-        s += "RawEvent: type=%s, data=%r" % (e.Type, e.Data)
+        s += f"RawEvent: type={e.Type}, data={e.Data}"
     print(s)
 
 
@@ -46,33 +46,34 @@ def main(args):
         logging.getLogger().setLevel(loglevel)
 
     device = args['--device']
-    print("Openning wyzesense gateway [%r]" % device)
+    print(f"Openning wyzesense gateway [{device}]")
     try:
         ws = wyzesense.Open(device, on_event)
         if not ws:
             print("Open wyzesense gateway failed")
             return 1
         print("Gateway info:")
-        print("\tMAC:%s" % ws.MAC)
-        print("\tVER:%s" % ws.Version)
-        print("\tENR:%s" % binascii.hexlify(ws.ENR))
+        print(f"\tMAC:{ws.MAC}")
+        print(f"\tVER:{ws.Version}")
+        print(f"\tENR:{binascii.hexlify(ws.ENR)}")
     except IOError:
-        print("No device found on path %r" % device)
+        print(f"No device found on path {device}")
         return 2
 
     def List(unused_args):
         result = ws.List()
-        print("%d sensor paired:" % len(result))
-        logging.debug("%d sensor paired:", len(result))
+        print(f"{len(result)} sensor paired:")
+        logging.debug(f"{len(result)} sensor paired:")
         for mac in result:
-            print("\tSensor: %s" % mac)
-            logging.debug("\tSensor: %s", mac)
+            print(f"\tSensor: {mac}")
+            logging.debug(f"\tSensor: {mac}")
 
     def Pair(unused_args):
         result = ws.Scan()
+        (s_mac, s_type, s_version) = result
         if result:
-            print("Sensor found: mac=%s, type=%d, version=%d" % result)
-            logging.debug("Sensor found: mac=%s, type=%d, version=%d", *result)
+            print(f"Sensor found: mac={s_mac}, type={s_type}, version={s_version}")
+            logging.debug(f"Sensor found: mac={s_mac}, type={s_type}, version={s_version}")
         else:
             print("No sensor found!")
             logging.debug("No sensor found!")
@@ -80,31 +81,41 @@ def main(args):
     def Unpair(mac_list):
         for mac in mac_list:
             if len(mac) != 8:
-                print("Invalid mac address, must be 8 characters: %s", mac)
-                logging.debug("Invalid mac address, must be 8 characters: %s",
-                              mac)
+                print(f"Invalid mac address, must be 8 characters: {mac}")
+                logging.debug(f"Invalid mac address, must be 8 characters: {mac}")
                 continue
 
-            print("Un-pairing sensor %s:" % mac)
-            logging.debug("Un-pairing sensor %s:", mac)
-            ws.Delete(mac)
-            print("Sensor %s removed" % mac)
-            logging.debug("Sensor %s removed", mac)
+            print(f"Un-pairing sensor {mac}:")
+            logging.debug(f"Un-pairing sensor {mac}:")
+            result = ws.Delete(mac)
+            if result is not None:
+                print(f"Result: {result}")
+                logging.debug(f"Result: {result}")
+            print(f"Sensor {mac} removed")
+            logging.debug(f"Sensor {mac} removed")
 
-    def Fix(mac_list):
-        mac = "\x00\x00\x00\x00\x00\x00\x00\x00"
-        print("Un-pairing sensor %s:" % mac)
-        logging.debug("Un-pairing sensor %s:", mac)
-        ws.Delete(mac)
-        print("Sensor %s removed" % mac)
-        logging.debug("Sensor %s removed", mac)
+    def Fix(unused_args):
+        invalid_mac_list = [
+                "00000000",
+                "\0\0\0\0\0\0\0\0",
+                "\x00\x00\x00\x00\x00\x00\x00\x00"
+        ]
+        print("Un-pairing bad sensors")
+        logging.debug("Un-pairing bad sensors")
+        for mac in invalid_mac_list:
+            result = ws.Delete(mac)
+            if result is not None:
+                print(f"Result: {result}")
+                logging.debug(f"Result: {result}")
+        print("Bad sensors removed")
+        logging.debug("Bad sensors removed")
 
     def HandleCmd():
         cmd_handlers = {
-            'L': ('L to list', List),
-            'P': ('P to pair', Pair),
-            'U': ('U to unpair', Unpair),
-            'F': ('F to fix bad MAC', Fix),
+            'L': ('L to list paired sensors', List),
+            'P': ('P to pair new sensor', Pair),
+            'U': ('U to unpair sensor', Unpair),
+            'F': ('F to fix invalid sensors', Fix),
             'X': ('X to exit', None),
         }
 
