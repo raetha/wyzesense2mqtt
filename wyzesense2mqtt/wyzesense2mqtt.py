@@ -221,24 +221,24 @@ def send_discovery_topics(sensor_mac):
         }
     }
 
-    for entity in entity_payloads:
-        entity_payloads[entity]['val_tpl'] = f"{{{{ value_json.{entity} }}}}"
-        entity_payloads[entity]['uniq_id'] = f"wyzesense_{sensor_mac}_{entity}"
-        entity_payloads[entity]['stat_t'] = \
+    for entity, entity_payload in entity_payloads.items():
+        entity_payload['val_tpl'] = f"{{{{ value_json.{entity} }}}}"
+        entity_payload['uniq_id'] = f"wyzesense_{sensor_mac}_{entity}"
+        entity_payload['stat_t'] = \
             f"{CONFIG['self_topic_root']}/{sensor_mac}"
-        entity_payloads[entity]['dev'] = device_payload
+        entity_payload['dev'] = device_payload
         sensor_type = ("binary_sensor" if (entity == "state") else "sensor")
 
         entity_topic = f"{CONFIG['hass_topic_root']}/{sensor_type}/" \
                        f"wyzesense_{sensor_mac}/{entity}/config"
         MQTT_CLIENT.publish(
                 entity_topic,
-                payload=json.dumps(entity_payloads[entity]),
+                payload=json.dumps(entity_payload),
                 qos=CONFIG['mqtt_qos'],
                 retain=CONFIG['mqtt_retain']
         )
-#        LOGGER.debug(f"  {entity_topic}")
-#        LOGGER.debug(f"  {json.dumps(entity_payloads[entity])}")
+        LOGGER.debug(f"  {entity_topic}")
+        LOGGER.debug(f"  {json.dumps(entity_payload)}")
 
 
 # Clear any retained topics in MQTT
@@ -342,8 +342,7 @@ def on_event(WYZESENSE_DONGLE, event):
     if (valid_sensor_mac(event.MAC)):
         if (event.Type == "state"):
             LOGGER.info(f"State event data: {event}")
-            (sensor_type, sensor_state,
-             sensor_battery, sensor_signal) = event.Data
+            (sensor_type, sensor_state, sensor_battery, sensor_signal) = event.Data
             event_payload = {
                 'available': True,
                 'mac': event.MAC,
@@ -356,7 +355,7 @@ def on_event(WYZESENSE_DONGLE, event):
                 'signal_strength': sensor_signal * -1,
                 'battery': sensor_battery
             }
-#            LOGGER.debug(event_payload)
+            LOGGER.debug(event_payload)
 
             state_topic = f"{CONFIG['self_topic_root']}/{event.MAC}"
             MQTT_CLIENT.publish(
