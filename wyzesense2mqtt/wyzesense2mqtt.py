@@ -267,17 +267,23 @@ def clear_topics(sensor_mac):
 
 def on_connect(MQTT_CLIENT, userdata, flags, rc):
     global CONFIG
-    LOGGER.info(f"Connected to mqtt with result code {str(rc)}")
-    MQTT_CLIENT.subscribe(
-            [(SCAN_TOPIC, CONFIG['mqtt_qos']),
-             (REMOVE_TOPIC, CONFIG['mqtt_qos'])]
-    )
-    MQTT_CLIENT.message_callback_add(SCAN_TOPIC, on_message_scan)
-    MQTT_CLIENT.message_callback_add(REMOVE_TOPIC, on_message_remove)
+    if rc == 0:
+        MQTT_CLIENT.subscribe(
+                [(SCAN_TOPIC, CONFIG['mqtt_qos']),
+                 (REMOVE_TOPIC, CONFIG['mqtt_qos'])]
+        )
+        MQTT_CLIENT.message_callback_add(SCAN_TOPIC, on_message_scan)
+        MQTT_CLIENT.message_callback_add(REMOVE_TOPIC, on_message_remove)
+        LOGGER.info(f"Connected to MQTT: return code {str(rc)}")
+    elif rc == 3:
+        LOGGER.warning(f"Connect to MQTT failed: server unavailable {str(rc)}")
+    else:
+        LOGGER.warning(f"Connect to MQTT failed: return code {str(rc)}")
+        exit(1)
 
 
 def on_disconnect(MQTT_CLIENT, userdata, rc):
-    LOGGER.info(f"Disconnected from mqtt with result code {str(rc)}")
+    LOGGER.info(f"Disconnected from MQTT: return code {str(rc)}")
     MQTT_CLIENT.message_callback_remove(SCAN_TOPIC)
     MQTT_CLIENT.message_callback_remove(REMOVE_TOPIC)
 
