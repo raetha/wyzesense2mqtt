@@ -20,7 +20,7 @@ Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or o
 
 ## Installation and Setup
 
-### Docker Way
+### Docker
 This is the most highly tested method of running the gateway. It allows for persistance and easy migration assuming the hardware dongle moves along with the configuration. All steps are performed from Docker host, not container.
 
 1. Create a docker compose file similar to the following. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details on the file format and options.
@@ -56,36 +56,42 @@ mkdir /docker/wyzesense2mqtt/logs
 docker-compose up -d
 ```
 
-### Linux Systemd Way
+### Linux Systemd
 
 The gateway can also be run as a systemd service for those not wanting to use Docker.
-1. Create an application folder
+1. Pull down a copy of the repository
 ```bash
-mkdir /wyzesense2mqtt
-cd /wyzesense2mqtt
-```
-2. Pull down a copy of the repository
-```bash
+cd /tmp
 git clone https://github.com/raetha/wyzesense2mqtt.git
 ```
-3. Prepare config.yaml file (see sample below)
+2. Create local application folder (Select a location that works for you, example uses /wyzesense2mqtt)
 ```bash
-mv /wyzesense2mqtt/config/config.yaml.sample /wyzesense2mqtt/config/config.yaml
-vim /wyzesense2mqtt/config/config.yaml # You must set MQTT host parameters!
+mv /tmp/wyzesense2mqtt/wyzesense2mqtt /wyzesense2mqtt
+rm -rf /tmp/wyzesense2mqtt
+cd /wyzesense2mqtt
+```
+3. Prepare config.yaml file. You must set MQTT host parameters! Username and password can be blank if unused. (see sample below)
+```bash
+mv config/config.yaml.sample config/config.yaml
+vim config/config.yaml
 ```
 4. Modify logging.yaml file if desired (optional)
 ```bash
-vim /wyzesense2mqtt/config/logging.yaml
+vim config/logging.yaml
 ```
 5. If desired, pre-populate a sensors.yaml file with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below)
 ```bash
-mv /wyzesense2mqtt/config/sensors.yaml.sample /wyzesense2mqtt/config/sensors.yaml
-vim /wyzesense2mqtt/config/sensors.yaml
+mv config/sensors.yaml.sample config/sensors.yaml
+vim config/sensors.yaml
 ```
-6. Start the service.
+6. Install dependencies
 ```bash
-vim /wyzesense2mqtt/wyzesense2mqtt.service # Only modify if not using default application path
-sudo cp /wyzesense2mqtt/wyzesense2mqtt.service /etc/systemd/system/
+pip3 install -r requirements.txt
+```
+7. Start the service.
+```bash
+vim wyzesense2mqtt.service # Only modify if not using default application path
+sudo cp wyzesense2mqtt.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl start wyzesense2mqtt
 sudo systemctl status wyzesense2mqtt
@@ -177,7 +183,7 @@ python3 bridge_tool_cli.py --device /dev/hidraw0
 Once run it will present a menu of its functions:
 * L - List paired sensor MACs
 * P - Put into scanning mode to pair new sensors
-* U - Unpair the MAC specified after U (e.g. "U AABBCCDD"
+* U - Unpair the MAC specified after U (e.g. "U AABBCCDD")
 * F - Remove a sensor with MAC 00000000, common problem with failing sensors
 
 
