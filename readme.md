@@ -182,10 +182,10 @@ The bridge_tool_cli.py script can be used to interact with your bridge to perfor
 python3 bridge_tool_cli.py --device /dev/hidraw0
 ```
 Once run it will present a menu of its functions:
-* L - List paired sensor MACs
-* P - Put into scanning mode to pair new sensors
-* U - Unpair the MAC specified after U (e.g. "U AABBCCDD")
-* F - Remove a sensor with MAC 00000000, common problem with failing sensors
+* L - List paired sensors
+* P - Pair new sensors
+* U <mac> - Unpair sensor (e.g. "U AABBCCDD")
+* F - Fix invalid sensors (Removes sensors with invalid MACs, common problem with broken sensors or low batteries)
 
 
 ## Home Assistant

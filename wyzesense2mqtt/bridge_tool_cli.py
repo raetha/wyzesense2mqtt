@@ -62,8 +62,8 @@ def main(args):
 
     def List(unused_args):
         result = ws.List()
-        print(f"{len(result)} sensor paired:")
-        logging.debug(f"{len(result)} sensor paired:")
+        print(f"{len(result)} sensors paired:")
+        logging.debug(f"{len(result)} sensors paired:")
         for mac in result:
             print(f"\tSensor: {mac}")
             logging.debug(f"\tSensor: {mac}")
@@ -84,7 +84,6 @@ def main(args):
                 print(f"Invalid mac address, must be 8 characters: {mac}")
                 logging.debug(f"Invalid mac address, must be 8 characters: {mac}")
                 continue
-
             print(f"Un-pairing sensor {mac}:")
             logging.debug(f"Un-pairing sensor {mac}:")
             result = ws.Delete(mac)
@@ -112,11 +111,11 @@ def main(args):
 
     def HandleCmd():
         cmd_handlers = {
-            'L': ('L to list paired sensors', List),
-            'P': ('P to pair new sensor', Pair),
-            'U': ('U to unpair sensor', Unpair),
-            'F': ('F to fix invalid sensors', Fix),
-            'X': ('X to exit', None),
+            'L': ('L - List paired sensors', List),
+            'P': ('P - Pair new sensors', Pair),
+            'U': ('U <mac> - Unpair sensor', Unpair),
+            'F': ('F - Fix invalid sensors', Fix),
+            'X': ('X - Exit tool', None),
         }
 
         for v in list(cmd_handlers.values()):
@@ -134,7 +133,9 @@ def main(args):
         if not handler[1]:
             return False
 
+        print("------------------------")
         handler[1](cmd_and_args[1:])
+        print("------------------------")
         return True
 
     try:
