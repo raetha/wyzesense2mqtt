@@ -2,10 +2,7 @@ version: "3.7"
 services:
   wyzesense2mqtt:
     container_name: wyzesense2mqtt
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: raetha/wyzesense2mqtt
+    image: raetha/wyzesense2mqtt:latest
     hostname: wyzesense2mqtt
     restart: always
     tty: true
@@ -14,6 +11,7 @@ services:
     devices:
       - "/dev/hidraw0:/dev/hidraw0"
     volumes:
-      - "/docker/wyzesense2mqtt/config:/opt/wyzesense2mqtt/config"
+      - "/docker/wyzesense2mqtt/config:/wyzesense2mqtt/config"
+      - "/docker/wyzesense2mqtt/logs:/wyzesense2mqtt/logs"
     environment:
       TZ: "America/New_York"

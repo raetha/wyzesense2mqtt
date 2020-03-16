@@ -1,7 +1,0 @@
-# Pip requirements file
-#
-# ha-wyzesense
-six
-# wyzesense2mqtt
-paho-mqtt
-retrying

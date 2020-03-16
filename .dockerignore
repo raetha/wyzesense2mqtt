@@ -3,6 +3,17 @@ config.yaml
 sensors.yaml
 logs/
 
+# Docker files
+hooks
+Dockerfile
+docker-compose.yml.sample
+.dockerignore
+docker/
+
+# Git files
+.git/
+.gitignore
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

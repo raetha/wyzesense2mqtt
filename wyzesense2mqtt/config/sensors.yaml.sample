@@ -1,0 +1,12 @@
+AAAAAAAA:
+  class: door
+  name: Entry Door
+BBBBBBBB:
+  class: window
+  name: Kitchen Window
+CCCCCCCC:
+  class: opening
+  name: Fridge
+DDDDDDDD:
+  class: motion
+  name: Hallway Motion

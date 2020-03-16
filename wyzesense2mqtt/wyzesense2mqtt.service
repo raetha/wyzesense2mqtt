@@ -1,12 +1,12 @@
 [Unit]
-Description=Wyze Sense via Mqtt
+Description=WyzeSense to MQTT Gateway
 Documentation=https://www.github.com/raetha/wyzesense2mqtt
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/wyzesense2mqtt
-ExecStart=/opt/wyzesense2mqtt/service.sh
+WorkingDirectory=/wyzesense2mqtt
+ExecStart=/wyzesense2mqtt/service.sh
 Restart=always
 
 [Install]

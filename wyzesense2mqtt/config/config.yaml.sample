@@ -1,0 +1,12 @@
+mqtt_host: <host>
+mqtt_port: 1883
+mqtt_username: <user>
+mqtt_password: <password>
+mqtt_client_id: wyzesense2mqtt
+mqtt_clean_session: false
+mqtt_keepalive: 60
+mqtt_qos: 2
+mqtt_retain: true
+self_topic_root: wyzesense2mqtt
+hass_topic_root: homeassistant
+usb_dongle: auto

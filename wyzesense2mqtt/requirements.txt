@@ -1,0 +1,11 @@
+# Pip requirements file
+#
+# WyseSensePy 
+six
+# wyzesense2mqtt requirements
+paho-mqtt
+retrying
+pyyaml
+wyzesense
+# bridge_tool_cli requirements
+docopt
