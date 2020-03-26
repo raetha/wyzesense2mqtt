@@ -1,6 +1,5 @@
 '''
 WyzeSense to MQTT Gateway
-v1.0
 '''
 import json
 import logging
@@ -140,7 +139,7 @@ def init_sensors():
             for sensor_mac in result:
                 if (valid_sensor_mac(sensor_mac)):
                     if (SENSORS.get(sensor_mac) is None):
-                        add_sensor_to_config(sensor_mac)
+                        add_sensor_to_config(sensor_mac, None, None)
                         send_discovery_topics(sensor_mac)
         else:
             LOGGER.warning(f"Sensor list failed with result: {result}")
