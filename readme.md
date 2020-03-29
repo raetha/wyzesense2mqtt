@@ -150,18 +150,18 @@ root:
 ```
 
 ### sensors.yaml
-This file will store basic information about each sensor paired to the Wyse Sense Bridge. The entries can be modified to set the class type and sensor name as it will show in Home Assistant.
+This file will store basic information about each sensor paired to the Wyse Sense Bridge. The entries can be modified to set the class type and sensor name as it will show in Home Assistant. Since this file can be automatically generated, Python may automatically quote the MACs or not depending on if they are fully numeric.
 ```yaml
-AAAAAAAA:
+'AAAAAAAA':
   class: door
   name: Entry Door
-BBBBBBBB:
+'BBBBBBBB':
   class: window
   name: Kitchen Window
-CCCCCCCC:
+'CCCCCCCC':
   class: opening
   name: Fridge
-DDDDDDDD:
+'DDDDDDDD':
   class: motion
   name: Hallway Motion
 ```
@@ -169,11 +169,13 @@ DDDDDDDD:
 
 ## Usage
 ### Adding a new sensor
-To add a new sensor, publish a blank message to the MQTT topic "self_topic_root/scan" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/scan" if you haven't changed the configuration. This can be performed via Home Assistant or any MQTT client.
+At this time only a single sensor can be properly paired at once. So please repeat steps below for each sensor.
+1. Publish a blank message to the MQTT topic "self_topic_root/scan" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/scan" if you haven't changed the configuration. This can be performed via Home Assistant or any MQTT client.
+2. Use the pin tool that came with your Wyze Sense sensors to press the reset switch on the side of the sensor to pair. Hold in until the red led blinks.
 
 
 ### Removing a sensor
-To remove a sensor, publish a message containing the MAC to be removed to the MQTT topic "self_topic_root/remove" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/remove" if you haven't changed the configuration. The payload should look like "AABBCCDD". This can be performed via Home Assistant or any MQTT client.
+1. Publish a message containing the MAC to be removed to the MQTT topic "self_topic_root/remove" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/remove" if you haven't changed the configuration. The payload should look like "AABBCCDD". This can be performed via Home Assistant or any MQTT client.
 
 
 ### Using the command line tool
