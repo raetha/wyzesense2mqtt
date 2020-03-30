@@ -24,7 +24,8 @@ Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or o
 ### Docker
 This is the most highly tested method of running the gateway. It allows for persistance and easy migration assuming the hardware dongle moves along with the configuration. All steps are performed from Docker host, not container.
 
-1. Create a docker compose file similar to the following. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details on the file format and options.
+1. Plug Wyze Sense Bridge into USB port on Docker host. Confirm that it shows up as /dev/hidraw0, if not, update devices entry in Docker Compose file with correct path.
+2. Create a Docker Compose file similar to the following. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details on the file format and options.
 ```yaml
 version: "3.7"
 services:
@@ -44,52 +45,54 @@ services:
     environment:
       TZ: "America/New_York"
 ```
-2. Create your local volume mounts. Use the same folders as selected in the Docker Compose file created above.
+3. Create your local volume mounts. Use the same folders as selected in the Docker Compose file created above.
 ```bash
 mkdir /docker/wyzesense2mqtt/config
 mkdir /docker/wyzesense2mqtt/logs
 ```
-3. Create or copy a config.yaml file into the config folder (see sample below or copy from repository)
-4. Copy a logging.yaml file into the config folder (see sample below or copy from repository)
-5. If desired, pre-populate a sensors.yaml file into the config folder with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below or copy from repository)
-6. Start the Docker container
+4. Create or copy a config.yaml file into the config folder (see sample below or copy from repository)
+5. Copy a logging.yaml file into the config folder (see sample below or copy from repository)
+6. If desired, pre-populate a sensors.yaml file into the config folder with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below or copy from repository)
+7. Start the Docker container
 ```bash
 docker-compose up -d
 ```
+8. Pair sensors following instructions below. You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, but the sensor version will be unknown.
 
 ### Linux Systemd
 
 The gateway can also be run as a systemd service for those not wanting to use Docker.
-1. Pull down a copy of the repository
+1. Plug Wyze Sense Bridge into USB port on Linux host.
+2. Pull down a copy of the repository
 ```bash
 cd /tmp
 git clone https://github.com/raetha/wyzesense2mqtt.git
 ```
-2. Create local application folder (Select a location that works for you, example uses /wyzesense2mqtt)
+3. Create local application folder (Select a location that works for you, example uses /wyzesense2mqtt)
 ```bash
 mv /tmp/wyzesense2mqtt/wyzesense2mqtt /wyzesense2mqtt
 rm -rf /tmp/wyzesense2mqtt
 cd /wyzesense2mqtt
 ```
-3. Prepare config.yaml file. You must set MQTT host parameters! Username and password can be blank if unused. (see sample below)
+4. Prepare config.yaml file. You must set MQTT host parameters! Username and password can be blank if unused. (see sample below)
 ```bash
 mv config/config.yaml.sample config/config.yaml
 vim config/config.yaml
 ```
-4. Modify logging.yaml file if desired (optional)
+5. Modify logging.yaml file if desired (optional)
 ```bash
 vim config/logging.yaml
 ```
-5. If desired, pre-populate a sensors.yaml file with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below)
+6. If desired, pre-populate a sensors.yaml file with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below)
 ```bash
 mv config/sensors.yaml.sample config/sensors.yaml
 vim config/sensors.yaml
 ```
-6. Install dependencies
+7. Install dependencies
 ```bash
 pip3 install -r requirements.txt
 ```
-7. Start the service.
+8. Start the service.
 ```bash
 vim wyzesense2mqtt.service # Only modify if not using default application path
 sudo cp wyzesense2mqtt.service /etc/systemd/system/
@@ -97,6 +100,7 @@ sudo systemctl daemon-reload
 sudo systemctl start wyzesense2mqtt
 sudo systemctl status wyzesense2mqtt
 ```
+9. Pair sensors following instructions below. You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, but the sensor version will be unknown.
 
 
 ## Config files
