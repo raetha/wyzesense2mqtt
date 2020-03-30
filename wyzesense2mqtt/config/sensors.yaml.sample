@@ -1,12 +1,12 @@
-AAAAAAAA:
+'AAAAAAAA':
   class: door
   name: Entry Door
-BBBBBBBB:
+'BBBBBBBB':
   class: window
   name: Kitchen Window
-CCCCCCCC:
+'CCCCCCCC':
   class: opening
   name: Fridge
-DDDDDDDD:
+'DDDDDDDD':
   class: motion
   name: Hallway Motion
