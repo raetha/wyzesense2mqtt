@@ -12,14 +12,31 @@
 
 Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use its MQTT discovery mechanisms.
 
-> Special Thanks
+## Special Thanks
 > * [HcLX](https://hclxing.wordpress.com) for [WyzeSensePy](https://github.com/HclX/WyzeSensePy), the core library this component uses.
 > * [Kevin Vincent](http://kevinvincent.me) for [HA-WyzeSense](https://github.com/kevinvincent/ha-wyzesense), the refernce code I used to get things working right with the calls to WyzeSensePy.
 > * [ozczecho](https://github.com/ozczecho) for [wyze-mqtt](https://github.com/ozczecho/wyze-mqtt), the inspiration for this project.
 > * [rmoriz](https://roland.io/) for [multiarch-test](https://github.com/rmoriz/multiarch-test), this allowed the Docker Hub Autobuilder to work for multiple architectures including ARM32v7 (Raspberry Pi) and AMD64 (Linux).
 
+## Table of Contents
+- [WyzeSense to MQTT Gateway](#wyzesense2mqtt)
+  - [Special Thanks](#special_thanks)
+  - [Table of Contents](#table_of_contents)
+  - [Installation](#installation)
+    - [Docker](#docker)
+    - [Linux Systemd](#linux_systemd)
+  - [Config Files](#config_files)
+    - [config.yaml](#config_yaml)
+    - [logging.yaml](#logging_yaml)
+    - [sensors.yaml](#sensors_yaml)
+  - [Usage](#usage)
+    - [Pairing a Sensor](#pairing_sensor)
+    - [Removing a Sensor](#removing_sensor)
+    - [Command Line Tool](#command_line_tool)
+  - [Home Assistant](#home_assistant)
+  - [Tested On](#tested_on)
 
-## Installation and Setup
+## Installation
 
 ### Docker
 This is the most highly tested method of running the gateway. It allows for persistance and easy migration assuming the hardware dongle moves along with the configuration. All steps are performed from Docker host, not container.
@@ -103,7 +120,7 @@ sudo systemctl status wyzesense2mqtt
 9. Pair sensors following instructions below. You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, but the sensor version will be unknown.
 
 
-## Config files
+## Config Files
 The gateway uses three config files located in the config directory. Samples of each are below and in the repository.
 
 ### config.yaml
@@ -172,17 +189,17 @@ This file will store basic information about each sensor paired to the Wyse Sens
 
 
 ## Usage
-### Adding a new sensor
+### Pairing a Sensor
 At this time only a single sensor can be properly paired at once. So please repeat steps below for each sensor.
 1. Publish a blank message to the MQTT topic "self_topic_root/scan" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/scan" if you haven't changed the configuration. This can be performed via Home Assistant or any MQTT client.
 2. Use the pin tool that came with your Wyze Sense sensors to press the reset switch on the side of the sensor to pair. Hold in until the red led blinks.
 
 
-### Removing a sensor
+### Removing a Sensor
 1. Publish a message containing the MAC to be removed to the MQTT topic "self_topic_root/remove" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/remove" if you haven't changed the configuration. The payload should look like "AABBCCDD". This can be performed via Home Assistant or any MQTT client.
 
 
-### Using the command line tool
+### Command Line Tool
 The bridge_tool_cli.py script can be used to interact with your bridge to perform a few simple functions. Make sure to specify the correct device for your environment.
 ```bash
 python3 bridge_tool_cli.py --device /dev/hidraw0
@@ -198,5 +215,6 @@ Once run it will present a menu of its functions:
 Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add devices for each sensor along with entites for the state, battery_level, and signal_strength. By default these entities will have a device_class of "opening" for contact sensors and "motion" for motion sensors. They will be named for the sensor type and MAC, e.g. Wyze Sense Contact Sensor AABBCCDD. To adjust the device_class to door or window, and set a custom name, update the sensors.yaml configuration file and replace the defaults, then restart WyzeSense2MQTT.
 
 
-## Tested
-Tested on Alpine Linux (Docker) and Raspbian
+## Tested On
+* Alpine Linux (Docker)
+* Raspbian
