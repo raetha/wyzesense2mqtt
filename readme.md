@@ -13,28 +13,28 @@
 Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use its MQTT discovery mechanisms.
 
 ## Special Thanks
-> * [HcLX](https://hclxing.wordpress.com) for [WyzeSensePy](https://github.com/HclX/WyzeSensePy), the core library this component uses.
-> * [Kevin Vincent](http://kevinvincent.me) for [HA-WyzeSense](https://github.com/kevinvincent/ha-wyzesense), the refernce code I used to get things working right with the calls to WyzeSensePy.
-> * [ozczecho](https://github.com/ozczecho) for [wyze-mqtt](https://github.com/ozczecho/wyze-mqtt), the inspiration for this project.
-> * [rmoriz](https://roland.io/) for [multiarch-test](https://github.com/rmoriz/multiarch-test), this allowed the Docker Hub Autobuilder to work for multiple architectures including ARM32v7 (Raspberry Pi) and AMD64 (Linux).
+* [HcLX](https://hclxing.wordpress.com) for [WyzeSensePy](https://github.com/HclX/WyzeSensePy), the core library this component uses.
+* [Kevin Vincent](http://kevinvincent.me) for [HA-WyzeSense](https://github.com/kevinvincent/ha-wyzesense), the refernce code I used to get things working right with the calls to WyzeSensePy.
+* [ozczecho](https://github.com/ozczecho) for [wyze-mqtt](https://github.com/ozczecho/wyze-mqtt), the inspiration for this project.
+* [rmoriz](https://roland.io/) for [multiarch-test](https://github.com/rmoriz/multiarch-test), this allowed the Docker Hub Autobuilder to work for multiple architectures including ARM32v7 (Raspberry Pi) and AMD64 (Linux).
 
 ## Table of Contents
-- [WyzeSense to MQTT Gateway](#wyzesense2mqtt)
-  - [Special Thanks](#special_thanks)
-  - [Table of Contents](#table_of_contents)
+- [WyzeSense to MQTT Gateway](#wyzesense-to-mqtt-gateway)
+  - [Special Thanks](#special-thanks)
+  - [Table of Contents](#table-of-contents)
   - [Installation](#installation)
     - [Docker](#docker)
-    - [Linux Systemd](#linux_systemd)
-  - [Config Files](#config_files)
-    - [config.yaml](#config_yaml)
-    - [logging.yaml](#logging_yaml)
-    - [sensors.yaml](#sensors_yaml)
+    - [Linux Systemd](#linux-systemd)
+  - [Config Files](#config-files)
+    - [config.yaml](#configyaml)
+    - [logging.yaml](#loggingyaml)
+    - [sensors.yaml](#sensorsyaml)
   - [Usage](#usage)
-    - [Pairing a Sensor](#pairing_sensor)
-    - [Removing a Sensor](#removing_sensor)
-    - [Command Line Tool](#command_line_tool)
-  - [Home Assistant](#home_assistant)
-  - [Tested On](#tested_on)
+    - [Pairing a Sensor](#pairing-a-sensor)
+    - [Removing a Sensor](#removing-a-sensor)
+    - [Command Line Tool](#command-line-tool)
+  - [Home Assistant](#home-assistant)
+  - [Tested On](#tested-on)
 
 ## Installation
 
