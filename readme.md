@@ -32,6 +32,7 @@ Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or o
   - [Usage](#usage)
     - [Pairing a Sensor](#pairing-a-sensor)
     - [Removing a Sensor](#removing-a-sensor)
+    - [Reload Sensors](#reload-sensors)
     - [Command Line Tool](#command-line-tool)
   - [Home Assistant](#home-assistant)
   - [Tested On](#tested-on)
@@ -197,6 +198,11 @@ At this time only a single sensor can be properly paired at once. So please repe
 
 ### Removing a Sensor
 1. Publish a message containing the MAC to be removed to the MQTT topic "self_topic_root/remove" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/remove" if you haven't changed the configuration. The payload should look like "AABBCCDD". This can be performed via Home Assistant or any MQTT client.
+
+
+### Reload Sensors
+If you've changed your sensors.yaml file while the gateway is running, you can trigger a reload of the sensors.yaml file without restarting the gateway or Docker container.
+1. Publish a blank message to the MQTT topic "self_topic_root/reload" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/reload" if you haven't changed the configuration. This can be performed via Home Assistant or any MQTT client.
 
 
 ### Command Line Tool

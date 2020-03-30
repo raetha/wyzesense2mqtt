@@ -271,10 +271,12 @@ def on_connect(MQTT_CLIENT, userdata, flags, rc):
     if rc == 0:
         MQTT_CLIENT.subscribe(
                 [(SCAN_TOPIC, CONFIG['mqtt_qos']),
-                 (REMOVE_TOPIC, CONFIG['mqtt_qos'])]
+                 (REMOVE_TOPIC, CONFIG['mqtt_qos']),
+                 (RELOAD_TOPIC, CONFIG['mqtt_qos'])]
         )
         MQTT_CLIENT.message_callback_add(SCAN_TOPIC, on_message_scan)
         MQTT_CLIENT.message_callback_add(REMOVE_TOPIC, on_message_remove)
+        MQTT_CLIENT.message_callback_add(RELOAD_TOPIC, on_message_reload)
         LOGGER.info(f"Connected to MQTT: return code {str(rc)}")
     elif rc == 3:
         LOGGER.warning(f"Connect to MQTT failed: server unavailable {str(rc)}")
@@ -287,6 +289,7 @@ def on_disconnect(MQTT_CLIENT, userdata, rc):
     LOGGER.info(f"Disconnected from MQTT: return code {str(rc)}")
     MQTT_CLIENT.message_callback_remove(SCAN_TOPIC)
     MQTT_CLIENT.message_callback_remove(REMOVE_TOPIC)
+    MQTT_CLIENT.message_callback_remove(RELOAD_TOPIC)
 
 
 # Process messages
@@ -334,6 +337,12 @@ def on_message_remove(MQTT_CLIENT, userdata, msg):
             pass
     else:
         LOGGER.debug(f"Invalid mac address: {sensor_mac}")
+
+
+# Process message to reload sensors
+def on_message_reload(MQTT_CLIENT, userdata, msg):
+    LOGGER.info(f"In on_message_reload: {msg.payload.decode()}")
+    init_sensors()
 
 
 # Process event
@@ -385,6 +394,7 @@ init_config()
 # Set MQTT Topics
 SCAN_TOPIC = f"{CONFIG['self_topic_root']}/scan"
 REMOVE_TOPIC = f"{CONFIG['self_topic_root']}/remove"
+RELOAD_TOPIC = f"{CONFIG['self_topic_root']}/reload"
 
 # Initialize MQTT client connection
 init_mqtt_client()
