@@ -1,4 +1,14 @@
 # WyzeSense to MQTT Gateway
+[![GitHub License](https://img.shields.io/github/license/jeblankenship/wyzesense2mqtt)](https://github.com/jeblankenship/wyzesense2mqtt/blob/master/LICENSE)
+[![GitHub Issues](https://img.shields.io/github/issues/jeblankenship/wyzesense2mqtt)](https://github.com/jeblankenship/wyzesense2mqtt/issues)
+[![GitHub PRs](https://img.shields.io/github/issues-pr/jeblankenship/wyzesense2mqtt)](https://github.com/jeblankenship/wyzesense2mqtt/pulls)
+
+[![dockeri.co](https://dockeri.co/image/docscode/wyzesense2mqtt)](https://hub.docker.com/r/docscode/wyzesense2mqtt)
+## This is a fork of [raetha/wyzesense2mqtt](<https://github.com/raetha/wyzesense2mqtt>)
+
+I found this project while attempting to buid a WyzeSense to MQTT bridge for my Garage/Workshop space.  So please give credit to [raeth](https://github.com/raetha). This code is not meant to be a replacement for his hard work, it is simply my working version that I plan to use for testing and/or custimize to my needs.
+
+## Here are the stats for [raetha/wyzesense2mqtt](<https://github.com/raetha/wyzesense2mqtt>)
 
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](http://makeapullrequest.com)
 [![GitHub License](https://img.shields.io/github/license/raetha/wyzesense2mqtt)](https://github.com/raetha/wyzesense2mqtt/blob/master/LICENSE)
@@ -10,9 +20,12 @@
 
 [![dockeri.co](https://dockeri.co/image/raetha/wyzesense2mqtt)](https://hub.docker.com/r/raetha/wyzesense2mqtt)
 
+# The following project description and instructions are from [raetha/wyzesense2mqtt](<https://github.com/raetha/wyzesense2mqtt>)
+
 Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use MQTT discovery mechanisms. The gateway allows direct local access to [Wyze Sense](https://wyze.com/wyze-sense.html) products without the need for a Wyze Cam or cloud services. This project and its dependencies have no relation to Wyze Labs Inc.
 
 ## Special Thanks
+* [raeth](https://github.com/raetha) for [raetha/wyzesense](<https://github.com/raetha/wyzesense2mqtt>) for which this code is based on. 
 * [HcLX](https://hclxing.wordpress.com) for [WyzeSensePy](https://github.com/HclX/WyzeSensePy), the core library this component uses.
 * [Kevin Vincent](http://kevinvincent.me) for [HA-WyzeSense](https://github.com/kevinvincent/ha-wyzesense), the refernce code I used to get things working right with the calls to WyzeSensePy.
 * [ozczecho](https://github.com/ozczecho) for [wyze-mqtt](https://github.com/ozczecho/wyze-mqtt), the inspiration for this project.
