@@ -98,15 +98,18 @@ def init_mqtt_client():
 def init_wyzesense_dongle():
     global WYZESENSE_DONGLE, CONFIG
     if (CONFIG['usb_dongle'].lower() == "auto"):
-        device_list = subprocess.check_output(
-                ["ls", "-la", "/sys/class/hidraw"]
-        ).decode("utf-8").lower()
-        for line in device_list.split("\n"):
-            if (("e024" in line) and ("1a86" in line)):
-                for device_name in line.split(" "):
-                    if ("hidraw" in device_name):
-                        CONFIG['usb_dongle'] = "/dev/%s" % device_name
-                        break
+        if os.path.exists("/dev/wyzesense"):
+            CONFIG['usb_dongle'] = "/dev/wyzesense"
+        else:
+            device_list = subprocess.check_output(
+                    ["ls", "-la", "/sys/class/hidraw"]
+            ).decode("utf-8").lower()
+            for line in device_list.split("\n"):
+                if (("e024" in line) and ("1a86" in line)):
+                    for device_name in line.split(" "):
+                        if ("hidraw" in device_name):
+                            CONFIG['usb_dongle'] = "/dev/%s" % device_name
+                            break
 
     LOGGER.info(f"Connecting to dongle {CONFIG['usb_dongle']}")
     try:
