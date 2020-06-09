@@ -1,11 +1,15 @@
 # Pip requirements file
 #
-# WyseSensePy 
+
+# WyseSensePy requirements
 six
-# wyzesense2mqtt requirements
+
+# WyzeSense2MQTT requirements
 paho-mqtt
 retrying
 pyyaml
-wyzesense
-# bridge_tool_cli requirements
+# Now includes custom WyzeSensePy library to resolve assertion error, issues #12, #17
+#wyzesense
+
+# Bridge Tool CLI Requirements
 docopt
