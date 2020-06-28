@@ -170,6 +170,7 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
             "motion" if (sensor_type == "motion")
             else "opening"
     )
+    SENSORS[sensor_mac]['invert_state'] = False
     if (sensor_version is not None):
         SENSORS[sensor_mac]['sw_version'] = sensor_version
 
@@ -354,15 +355,21 @@ def on_event(WYZESENSE_DONGLE, event):
             event_payload = {
                 'available': True,
                 'mac': event.MAC,
-                'state': (1 if (sensor_state == "open") or
-                               (sensor_state == "active")
-                          else 0),
                 'device_class': ("motion" if (sensor_type == "motion")
                                  else "opening"),
                 'timestamp': event.Timestamp.isoformat(),
                 'signal_strength': sensor_signal * -1,
                 'battery': sensor_battery
             }
+            if (SENSORS[event.MAC].get('invert_state') == True):
+                event_payload['state'] = (0 if (sensor_state == "open") or
+                                               (sensor_state == "active")
+                                          else 1)
+            else:
+                event_payload['state'] = (1 if (sensor_state == "open") or
+                                               (sensor_state == "active")
+                                          else 0)
+
             LOGGER.debug(event_payload)
 
             state_topic = f"{CONFIG['self_topic_root']}/{event.MAC}"
