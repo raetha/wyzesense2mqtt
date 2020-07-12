@@ -357,7 +357,8 @@ def on_event(WYZESENSE_DONGLE, event):
                 'mac': event.MAC,
                 'device_class': ("motion" if (sensor_type == "motion")
                                  else "opening"),
-                'timestamp': event.Timestamp.isoformat(),
+                'last_seen': event.Timestamp,
+                'last_seen_iso': event.Timestamp.isoformat(),
                 'signal_strength': sensor_signal * -1,
                 'battery': sensor_battery
             }
