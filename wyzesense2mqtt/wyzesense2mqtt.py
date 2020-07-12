@@ -348,6 +348,7 @@ def on_message_reload(MQTT_CLIENT, userdata, msg):
 
 # Process event
 def on_event(WYZESENSE_DONGLE, event):
+    global SENSORS
     if (valid_sensor_mac(event.MAC)):
         if (event.Type == "state"):
             LOGGER.info(f"State event data: {event}")
