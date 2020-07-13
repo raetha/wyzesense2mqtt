@@ -369,6 +369,13 @@ def on_event(WYZESENSE_DONGLE, event):
         if (event.Type == "state"):
             LOGGER.info(f"State event data: {event}")
             (sensor_type, sensor_state, sensor_battery, sensor_signal) = event.Data
+
+            # Add sensor if it doesn't already exist
+            if (event.MAC not in SENSORS):
+                add_sensor_to_config(event.MAC, sensor_type, None)
+                send_discovery_topics(event.MAC)
+
+            # Build event payload
             event_payload = {
                 'available': True,
                 'mac': event.MAC,
@@ -380,7 +387,7 @@ def on_event(WYZESENSE_DONGLE, event):
                 'battery': sensor_battery
             }
 
-            if ('publish_sensor_name' in CONFIG and CONFIG['publish_sensor_name'] == True):
+            if (CONFIG.get('publish_sensor_name') == True):
                 event_payload['name'] = SENSORS[event.MAC]['name']
 
             if (SENSORS[event.MAC].get('invert_state') == True):
@@ -401,11 +408,6 @@ def on_event(WYZESENSE_DONGLE, event):
                     qos=CONFIG['mqtt_qos'],
                     retain=CONFIG['mqtt_retain']
             )
-
-            # Add sensor if it doesn't already exist
-            if (event.MAC not in SENSORS):
-                add_sensor_to_config(event.MAC, sensor_type, None)
-                send_discovery_topics(event.MAC)
         else:
             LOGGER.debug(f"Non-state event data: {event}")
 

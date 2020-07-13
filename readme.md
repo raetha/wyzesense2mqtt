@@ -139,6 +139,7 @@ mqtt_qos: 2
 mqtt_retain: true
 self_topic_root: wyzesense2mqtt
 hass_topic_root: homeassistant
+publish_sensor_name: true
 usb_dongle: auto
 ``` 
 
