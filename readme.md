@@ -43,7 +43,7 @@ Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or o
 This is the most highly tested method of running the gateway. It allows for persistance and easy migration assuming the hardware dongle moves along with the configuration. All steps are performed from Docker host, not container.
 
 1. Plug Wyze Sense Bridge into USB port on Docker host. Confirm that it shows up as /dev/hidraw0, if not, update devices entry in Docker Compose file with correct path.
-2. Create a Docker Compose file similar to the following. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details on the file format and options.
+2. Create a Docker Compose file similar to the following. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details on the file format and options. If you would like to help test in development feaures, please change the image to "devel" instead of "latest".
 ```yaml
 version: "3.7"
 services:
@@ -68,8 +68,8 @@ services:
 mkdir /docker/wyzesense2mqtt/config
 mkdir /docker/wyzesense2mqtt/logs
 ```
-4. Create or copy a config.yaml file into the config folder (see sample below or copy from repository)
-5. Copy a logging.yaml file into the config folder (see sample below or copy from repository)
+4. Create or copy a config.yaml file into the config folder (see sample below or copy from repository). The script will automatically create a default config.yaml if one is not found, but it will need to be modified with your MQTT details before things will work.
+5. Copy a logging.yaml file into the config folder (see sample below or copy from repository). The script will automatically create a default logging.yaml if one does not exist. You only need to modify this if more complex logging is required.
 6. If desired, pre-populate a sensors.yaml file into the config folder with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below or copy from repository)
 7. Start the Docker container
 ```bash
@@ -79,7 +79,7 @@ docker-compose up -d
 
 ### Linux Systemd
 
-The gateway can also be run as a systemd service for those not wanting to use Docker.
+The gateway can also be run as a systemd service for those not wanting to use Docker. Requires Python 3.6 or newer.
 1. Plug Wyze Sense Bridge into USB port on Linux host.
 2. Pull down a copy of the repository
 ```bash
@@ -94,16 +94,17 @@ cd /wyzesense2mqtt
 ```
 4. Prepare config.yaml file. You must set MQTT host parameters! Username and password can be blank if unused. (see sample below)
 ```bash
-mv config/config.yaml.sample config/config.yaml
+cp samples/config.yaml config/config.yaml
 vim config/config.yaml
 ```
 5. Modify logging.yaml file if desired (optional)
 ```bash
+cp samples/logging.yaml config/logging.yaml
 vim config/logging.yaml
 ```
-6. If desired, pre-populate a sensors.yaml file with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below)
+6. If desired, pre-populate a sensors.yaml file with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below) (optional)
 ```bash
-mv config/sensors.yaml.sample config/sensors.yaml
+cp samples/sensors.yaml config/sensors.yaml
 vim config/sensors.yaml
 ```
 7. Install dependencies

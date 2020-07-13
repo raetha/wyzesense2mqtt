@@ -6,6 +6,7 @@ import logging
 import logging.config
 import logging.handlers
 import os
+import shutil
 import subprocess
 import yaml
 
@@ -14,9 +15,11 @@ import wyzesense
 from retrying import retry
 
 # Configuration File Locations
-LOGGING_CONFIG_FILE = "config/logging.yaml"
-GENERAL_CONFIG_FILE = "config/config.yaml"
-SENSORS_CONFIG_FILE = "config/sensors.yaml"
+CONFIG_PATH = "config/"
+SAMPLES_PATH = "samples/"
+MAIN_CONFIG_FILE = "config.yaml"
+LOGGING_CONFIG_FILE = "logging.yaml"
+SENSORS_CONFIG_FILE = "sensors.yaml"
 
 
 # Read data from YAML file
@@ -47,7 +50,14 @@ def write_yaml_file(filename, data):
 # Initialize logging
 def init_logging():
     global LOGGER
-    logging_config = read_yaml_file(LOGGING_CONFIG_FILE)
+    if (not os.path.isfile(CONFIG_PATH + LOGGING_CONFIG_FILE)):
+        print("Copying default logging config file...")
+        try:
+            shutil.copy2(SAMPLES_PATH + LOGGING_CONFIG_FILE, CONFIG_PATH)
+        except IOError as error:
+            print(f"Unable to copy default logging config file. {str(error)}")
+    logging_config = read_yaml_file(CONFIG_PATH + LOGGING_CONFIG_FILE)
+
     log_path = os.path.dirname(logging_config['handlers']['file']['filename'])
     try:
         if (not os.path.exists(log_path)):
@@ -63,7 +73,13 @@ def init_logging():
 def init_config():
     global CONFIG
     LOGGER.debug("Reading configuration...")
-    CONFIG = read_yaml_file(GENERAL_CONFIG_FILE)
+    if (not os.path.isfile(CONFIG_PATH + MAIN_CONFIG_FILE)):
+        LOGGER.info("Copying default config file...")
+        try:
+            shutil.copy2(SAMPLES_PATH + MAIN_CONFIG_FILE, CONFIG_PATH)
+        except IOError as error:
+            LOGGER.error(f"Unable to copy default config file. {str(error)}")
+    CONFIG = read_yaml_file(CONFIG_PATH + MAIN_CONFIG_FILE)
 
 
 # Initialize MQTT client connection
@@ -122,8 +138,8 @@ def init_wyzesense_dongle():
 def init_sensors():
     global SENSORS
     LOGGER.debug("Reading sensors configuration...")
-    if (os.path.isfile(SENSORS_CONFIG_FILE)):
-        SENSORS = read_yaml_file(SENSORS_CONFIG_FILE)
+    if (os.path.isfile(CONFIG_PATH + SENSORS_CONFIG_FILE)):
+        SENSORS = read_yaml_file(CONFIG_PATH + SENSORS_CONFIG_FILE)
     else:
         LOGGER.info("No sensors config file found.")
 
@@ -175,7 +191,7 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
         SENSORS[sensor_mac]['sw_version'] = sensor_version
 
     LOGGER.info("Writing Sensors Config File")
-    write_yaml_file(SENSORS_CONFIG_FILE, SENSORS)
+    write_yaml_file(CONFIG_PATH + SENSORS_CONFIG_FILE, SENSORS)
 
 
 # Send discovery topics
