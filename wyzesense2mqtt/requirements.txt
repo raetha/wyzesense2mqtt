@@ -1,9 +1,6 @@
 # Pip requirements file
 #
 
-# WyseSensePy requirements
-six
-
 # WyzeSense2MQTT requirements
 paho-mqtt
 retrying

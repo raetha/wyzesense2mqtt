@@ -3,7 +3,6 @@ from builtins import str
 
 import os
 import time
-import six
 import struct
 import threading
 import datetime
