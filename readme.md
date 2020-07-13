@@ -231,5 +231,5 @@ Home Assistant simply needs to be configured with the MQTT broker that the gatew
 
 
 ## Tested On
-* Alpine Linux (Docker)
-* Raspbian
+* Alpine Linux (Docker image)
+* Raspbian Buster
