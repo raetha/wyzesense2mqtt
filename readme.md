@@ -178,15 +178,23 @@ This file will store basic information about each sensor paired to the Wyse Sens
 'AAAAAAAA':
   class: door
   name: Entry Door
+  invert_state: false
 'BBBBBBBB':
   class: window
-  name: Kitchen Window
+  name: Office Window
+  invert_state: false
 'CCCCCCCC':
   class: opening
-  name: Fridge
+  name: Kitchen Fridge
+  invert_state: false
 'DDDDDDDD':
   class: motion
   name: Hallway Motion
+  invert_state: false
+'EEEEEEEE':
+  class: moisture
+  name: Basement Moisture
+  invert_state: true
 ```
 
 
