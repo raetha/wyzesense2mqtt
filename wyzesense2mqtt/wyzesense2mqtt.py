@@ -379,6 +379,10 @@ def on_event(WYZESENSE_DONGLE, event):
                 'signal_strength': sensor_signal * -1,
                 'battery': sensor_battery
             }
+
+            if ('publish_sensor_name' in CONFIG and CONFIG['publish_sensor_name'] == True):
+                event_payload['name'] = SENSORS[event.MAC]['name']
+
             if (SENSORS[event.MAC].get('invert_state') == True):
                 event_payload['state'] = (0 if (sensor_state == "open") or
                                                (sensor_state == "active")
