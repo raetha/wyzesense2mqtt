@@ -175,7 +175,11 @@ def valid_sensor_mac(sensor_mac):
         return True
     else:
         LOGGER.warning(f"Unpairing bad MAC: {sensor_mac}")
-        WYZESENSE_DONGLE.Delete(sensor_mac)
+        try:
+            WYZESENSE_DONGLE.Delete(sensor_mac)
+            clear_topics(sensor_mac)
+        except TimeoutError:
+            pass
         return False
 
 
@@ -383,16 +387,16 @@ def on_event(WYZESENSE_DONGLE, event):
                 'mac': event.MAC,
                 'device_class': ("motion" if (sensor_type == "motion")
                                  else "opening"),
-                'last_seen': event.Timestamp,
+                'last_seen': event.Timestamp.timestamp(),
                 'last_seen_iso': event.Timestamp.isoformat(),
                 'signal_strength': sensor_signal * -1,
                 'battery': sensor_battery
             }
 
-            if (CONFIG.get('publish_sensor_name') == True):
+            if (CONFIG.get('publish_sensor_name')):
                 event_payload['name'] = SENSORS[event.MAC]['name']
 
-            if (SENSORS[event.MAC].get('invert_state') == True):
+            if (SENSORS[event.MAC].get('invert_state')):
                 event_payload['state'] = (0 if (sensor_state == "open") or
                                                (sensor_state == "active")
                                           else 1)
