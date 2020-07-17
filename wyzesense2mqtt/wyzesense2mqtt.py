@@ -6,6 +6,7 @@ import logging
 import logging.config
 import logging.handlers
 import os
+import shutil
 import subprocess
 import yaml
 
@@ -13,10 +14,13 @@ import paho.mqtt.client as mqtt
 import wyzesense
 from retrying import retry
 
+
 # Configuration File Locations
-LOGGING_CONFIG_FILE = "config/logging.yaml"
-GENERAL_CONFIG_FILE = "config/config.yaml"
-SENSORS_CONFIG_FILE = "config/sensors.yaml"
+CONFIG_PATH = "config/"
+SAMPLES_PATH = "samples/"
+MAIN_CONFIG_FILE = "config.yaml"
+LOGGING_CONFIG_FILE = "logging.yaml"
+SENSORS_CONFIG_FILE = "sensors.yaml"
 
 
 # Read data from YAML file
@@ -47,7 +51,14 @@ def write_yaml_file(filename, data):
 # Initialize logging
 def init_logging():
     global LOGGER
-    logging_config = read_yaml_file(LOGGING_CONFIG_FILE)
+    if (not os.path.isfile(CONFIG_PATH + LOGGING_CONFIG_FILE)):
+        print("Copying default logging config file...")
+        try:
+            shutil.copy2(SAMPLES_PATH + LOGGING_CONFIG_FILE, CONFIG_PATH)
+        except IOError as error:
+            print(f"Unable to copy default logging config file. {str(error)}")
+    logging_config = read_yaml_file(CONFIG_PATH + LOGGING_CONFIG_FILE)
+
     log_path = os.path.dirname(logging_config['handlers']['file']['filename'])
     try:
         if (not os.path.exists(log_path)):
@@ -63,7 +74,13 @@ def init_logging():
 def init_config():
     global CONFIG
     LOGGER.debug("Reading configuration...")
-    CONFIG = read_yaml_file(GENERAL_CONFIG_FILE)
+    if (not os.path.isfile(CONFIG_PATH + MAIN_CONFIG_FILE)):
+        LOGGER.info("Copying default config file...")
+        try:
+            shutil.copy2(SAMPLES_PATH + MAIN_CONFIG_FILE, CONFIG_PATH)
+        except IOError as error:
+            LOGGER.error(f"Unable to copy default config file. {str(error)}")
+    CONFIG = read_yaml_file(CONFIG_PATH + MAIN_CONFIG_FILE)
 
 
 # Initialize MQTT client connection
@@ -122,14 +139,15 @@ def init_wyzesense_dongle():
 def init_sensors():
     global SENSORS
     LOGGER.debug("Reading sensors configuration...")
-    if (os.path.isfile(SENSORS_CONFIG_FILE)):
-        SENSORS = read_yaml_file(SENSORS_CONFIG_FILE)
+    if (os.path.isfile(CONFIG_PATH + SENSORS_CONFIG_FILE)):
+        SENSORS = read_yaml_file(CONFIG_PATH + SENSORS_CONFIG_FILE)
     else:
         LOGGER.info("No sensors config file found.")
 
+    # Add invert_state value if missing
     for sensor_mac in SENSORS:
-        if (valid_sensor_mac(sensor_mac)):
-            send_discovery_topics(sensor_mac)
+        if (SENSORS[sensor_mac].get('invert_state') is None):
+            SENSORS[sensor_mac]['invert_state'] = False
 
     # Check config against linked sensors
     try:
@@ -140,11 +158,15 @@ def init_sensors():
                 if (valid_sensor_mac(sensor_mac)):
                     if (SENSORS.get(sensor_mac) is None):
                         add_sensor_to_config(sensor_mac, None, None)
-                        send_discovery_topics(sensor_mac)
         else:
             LOGGER.warning(f"Sensor list failed with result: {result}")
     except TimeoutError:
         pass
+
+    # Send discovery topics
+    for sensor_mac in SENSORS:
+        if (valid_sensor_mac(sensor_mac)):
+            send_discovery_topics(sensor_mac)
 
 
 # Validate sensor MAC
@@ -158,6 +180,12 @@ def valid_sensor_mac(sensor_mac):
     if ((len(str(sensor_mac)) == 8) and (sensor_mac not in invalid_mac_list)):
         return True
     else:
+        LOGGER.warning(f"Unpairing bad MAC: {sensor_mac}")
+        try:
+            WYZESENSE_DONGLE.Delete(sensor_mac)
+            clear_topics(sensor_mac)
+        except TimeoutError:
+            pass
         return False
 
 
@@ -170,11 +198,12 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
             "motion" if (sensor_type == "motion")
             else "opening"
     )
+    SENSORS[sensor_mac]['invert_state'] = False
     if (sensor_version is not None):
         SENSORS[sensor_mac]['sw_version'] = sensor_version
 
     LOGGER.info("Writing Sensors Config File")
-    write_yaml_file(SENSORS_CONFIG_FILE, SENSORS)
+    write_yaml_file(CONFIG_PATH + SENSORS_CONFIG_FILE, SENSORS)
 
 
 # Send discovery topics
@@ -271,10 +300,12 @@ def on_connect(MQTT_CLIENT, userdata, flags, rc):
     if rc == 0:
         MQTT_CLIENT.subscribe(
                 [(SCAN_TOPIC, CONFIG['mqtt_qos']),
-                 (REMOVE_TOPIC, CONFIG['mqtt_qos'])]
+                 (REMOVE_TOPIC, CONFIG['mqtt_qos']),
+                 (RELOAD_TOPIC, CONFIG['mqtt_qos'])]
         )
         MQTT_CLIENT.message_callback_add(SCAN_TOPIC, on_message_scan)
         MQTT_CLIENT.message_callback_add(REMOVE_TOPIC, on_message_remove)
+        MQTT_CLIENT.message_callback_add(RELOAD_TOPIC, on_message_reload)
         LOGGER.info(f"Connected to MQTT: return code {str(rc)}")
     elif rc == 3:
         LOGGER.warning(f"Connect to MQTT failed: server unavailable {str(rc)}")
@@ -287,6 +318,7 @@ def on_disconnect(MQTT_CLIENT, userdata, rc):
     LOGGER.info(f"Disconnected from MQTT: return code {str(rc)}")
     MQTT_CLIENT.message_callback_remove(SCAN_TOPIC)
     MQTT_CLIENT.message_callback_remove(REMOVE_TOPIC)
+    MQTT_CLIENT.message_callback_remove(RELOAD_TOPIC)
 
 
 # Process messages
@@ -336,24 +368,49 @@ def on_message_remove(MQTT_CLIENT, userdata, msg):
         LOGGER.debug(f"Invalid mac address: {sensor_mac}")
 
 
+# Process message to reload sensors
+def on_message_reload(MQTT_CLIENT, userdata, msg):
+    LOGGER.info(f"In on_message_reload: {msg.payload.decode()}")
+    init_sensors()
+
+
 # Process event
 def on_event(WYZESENSE_DONGLE, event):
+    global SENSORS
     if (valid_sensor_mac(event.MAC)):
         if (event.Type == "state"):
             LOGGER.info(f"State event data: {event}")
             (sensor_type, sensor_state, sensor_battery, sensor_signal) = event.Data
+
+            # Add sensor if it doesn't already exist
+            if (event.MAC not in SENSORS):
+                add_sensor_to_config(event.MAC, sensor_type, None)
+                send_discovery_topics(event.MAC)
+
+            # Build event payload
             event_payload = {
                 'available': True,
                 'mac': event.MAC,
-                'state': (1 if (sensor_state == "open") or
-                               (sensor_state == "active")
-                          else 0),
                 'device_class': ("motion" if (sensor_type == "motion")
                                  else "opening"),
-                'device_class_timestamp': event.Timestamp.isoformat(),
+                'last_seen': event.Timestamp.timestamp(),
+                'last_seen_iso': event.Timestamp.isoformat(),
                 'signal_strength': sensor_signal * -1,
                 'battery': sensor_battery
             }
+
+            if (CONFIG.get('publish_sensor_name')):
+                event_payload['name'] = SENSORS[event.MAC]['name']
+
+            if (SENSORS[event.MAC].get('invert_state')):
+                event_payload['state'] = (0 if (sensor_state == "open") or
+                                               (sensor_state == "active")
+                                          else 1)
+            else:
+                event_payload['state'] = (1 if (sensor_state == "open") or
+                                               (sensor_state == "active")
+                                          else 0)
+
             LOGGER.debug(event_payload)
 
             state_topic = f"{CONFIG['self_topic_root']}/{event.MAC}"
@@ -363,11 +420,6 @@ def on_event(WYZESENSE_DONGLE, event):
                     qos=CONFIG['mqtt_qos'],
                     retain=CONFIG['mqtt_retain']
             )
-
-            # Add sensor if it doesn't already exist
-            if (event.MAC not in SENSORS):
-                add_sensor_to_config(event.MAC, sensor_type, None)
-                send_discovery_topics(event.MAC)
         else:
             LOGGER.debug(f"Non-state event data: {event}")
 
@@ -385,6 +437,7 @@ init_config()
 # Set MQTT Topics
 SCAN_TOPIC = f"{CONFIG['self_topic_root']}/scan"
 REMOVE_TOPIC = f"{CONFIG['self_topic_root']}/remove"
+RELOAD_TOPIC = f"{CONFIG['self_topic_root']}/reload"
 
 # Initialize MQTT client connection
 init_mqtt_client()

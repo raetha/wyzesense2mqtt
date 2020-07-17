@@ -1,6 +1,5 @@
 # WyzeSense2MQTT files
-config.yaml
-sensors.yaml
+config/
 logs/
 
 # Byte-compiled / optimized / DLL files

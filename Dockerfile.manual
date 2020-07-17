@@ -1,17 +1,10 @@
-FROM alpine:latest
+FROM python:3.8-slim-buster
 
 LABEL maintainer="Raetha"
 
-ENV TZ="America/New_York"
-
 COPY wyzesense2mqtt /wyzesense2mqtt/
 
-RUN apk add --update \
-        py3-pip \
-        python3 \
-        tzdata \
-    && rm -rf /var/cache/apk/* \
-    && pip3 install --no-cache-dir --upgrade pip \
+RUN pip3 install --no-cache-dir --upgrade pip \
     && pip3 install --no-cache-dir -r /wyzesense2mqtt/requirements.txt \
     && chmod u+x /wyzesense2mqtt/service.sh
 

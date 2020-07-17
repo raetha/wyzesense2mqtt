@@ -5,7 +5,7 @@
 [![GitHub Issues](https://img.shields.io/github/issues/raetha/wyzesense2mqtt)](https://github.com/raetha/wyzesense2mqtt/issues)
 [![GitHub PRs](https://img.shields.io/github/issues-pr/raetha/wyzesense2mqtt)](https://github.com/raetha/wyzesense2mqtt/pulls)
 [![GitHub Release](https://img.shields.io/github/v/release/raetha/wyzesense2mqtt)](https://github.com/raetha/wyzesense2mqtt/releases)
-[![Python Validation](https://github.com/raetha/wyzesense2mqtt/workflows/Python%20Validation/badge.svg)]()
+[![Python Validation](https://github.com/raetha/wyzesense2mqtt/workflows/Python%20Validation/badge.svg)](https://github.com/raetha/wyzesense2mqtt/actions?query=workflow%3A%22Python+Validation%22)
 [![GitHub Downloads](https://img.shields.io/github/downloads/raetha/wyzesense2mqtt/total)]()
 
 [![dockeri.co](https://dockeri.co/image/raetha/wyzesense2mqtt)](https://hub.docker.com/r/raetha/wyzesense2mqtt)
@@ -32,6 +32,7 @@ Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or o
   - [Usage](#usage)
     - [Pairing a Sensor](#pairing-a-sensor)
     - [Removing a Sensor](#removing-a-sensor)
+    - [Reload Sensors](#reload-sensors)
     - [Command Line Tool](#command-line-tool)
   - [Home Assistant](#home-assistant)
   - [Tested On](#tested-on)
@@ -42,7 +43,7 @@ Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or o
 This is the most highly tested method of running the gateway. It allows for persistance and easy migration assuming the hardware dongle moves along with the configuration. All steps are performed from Docker host, not container.
 
 1. Plug Wyze Sense Bridge into USB port on Docker host. Confirm that it shows up as /dev/hidraw0, if not, update devices entry in Docker Compose file with correct path.
-2. Create a Docker Compose file similar to the following. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details on the file format and options.
+2. Create a Docker Compose file similar to the following. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details on the file format and options. If you would like to help test in development feaures, please change the image to "devel" instead of "latest".
 ```yaml
 version: "3.7"
 services:
@@ -67,8 +68,8 @@ services:
 mkdir /docker/wyzesense2mqtt/config
 mkdir /docker/wyzesense2mqtt/logs
 ```
-4. Create or copy a config.yaml file into the config folder (see sample below or copy from repository)
-5. Copy a logging.yaml file into the config folder (see sample below or copy from repository)
+4. Create or copy a config.yaml file into the config folder (see sample below or copy from repository). The script will automatically create a default config.yaml if one is not found, but it will need to be modified with your MQTT details before things will work.
+5. Copy a logging.yaml file into the config folder (see sample below or copy from repository). The script will automatically create a default logging.yaml if one does not exist. You only need to modify this if more complex logging is required.
 6. If desired, pre-populate a sensors.yaml file into the config folder with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below or copy from repository)
 7. Start the Docker container
 ```bash
@@ -78,7 +79,7 @@ docker-compose up -d
 
 ### Linux Systemd
 
-The gateway can also be run as a systemd service for those not wanting to use Docker.
+The gateway can also be run as a systemd service for those not wanting to use Docker. Requires Python 3.6 or newer.
 1. Plug Wyze Sense Bridge into USB port on Linux host.
 2. Pull down a copy of the repository
 ```bash
@@ -93,16 +94,17 @@ cd /wyzesense2mqtt
 ```
 4. Prepare config.yaml file. You must set MQTT host parameters! Username and password can be blank if unused. (see sample below)
 ```bash
-mv config/config.yaml.sample config/config.yaml
+cp samples/config.yaml config/config.yaml
 vim config/config.yaml
 ```
 5. Modify logging.yaml file if desired (optional)
 ```bash
+cp samples/logging.yaml config/logging.yaml
 vim config/logging.yaml
 ```
-6. If desired, pre-populate a sensors.yaml file with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below)
+6. If desired, pre-populate a sensors.yaml file with your existing sensors. This file will automatically be created if it doesn't exist. (see sample below) (optional)
 ```bash
-mv config/sensors.yaml.sample config/sensors.yaml
+cp samples/sensors.yaml config/sensors.yaml
 vim config/sensors.yaml
 ```
 7. Install dependencies
@@ -137,6 +139,7 @@ mqtt_qos: 2
 mqtt_retain: true
 self_topic_root: wyzesense2mqtt
 hass_topic_root: homeassistant
+publish_sensor_name: true
 usb_dongle: auto
 ``` 
 
@@ -176,15 +179,23 @@ This file will store basic information about each sensor paired to the Wyse Sens
 'AAAAAAAA':
   class: door
   name: Entry Door
+  invert_state: false
 'BBBBBBBB':
   class: window
-  name: Kitchen Window
+  name: Office Window
+  invert_state: false
 'CCCCCCCC':
   class: opening
-  name: Fridge
+  name: Kitchen Fridge
+  invert_state: false
 'DDDDDDDD':
   class: motion
   name: Hallway Motion
+  invert_state: false
+'EEEEEEEE':
+  class: moisture
+  name: Basement Moisture
+  invert_state: true
 ```
 
 
@@ -197,6 +208,11 @@ At this time only a single sensor can be properly paired at once. So please repe
 
 ### Removing a Sensor
 1. Publish a message containing the MAC to be removed to the MQTT topic "self_topic_root/remove" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/remove" if you haven't changed the configuration. The payload should look like "AABBCCDD". This can be performed via Home Assistant or any MQTT client.
+
+
+### Reload Sensors
+If you've changed your sensors.yaml file while the gateway is running, you can trigger a reload of the sensors.yaml file without restarting the gateway or Docker container.
+1. Publish a blank message to the MQTT topic "self_topic_root/reload" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/reload" if you haven't changed the configuration. This can be performed via Home Assistant or any MQTT client.
 
 
 ### Command Line Tool
@@ -216,5 +232,5 @@ Home Assistant simply needs to be configured with the MQTT broker that the gatew
 
 
 ## Tested On
-* Alpine Linux (Docker)
-* Raspbian
+* Alpine Linux (Docker image)
+* Raspbian Buster
