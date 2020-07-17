@@ -5,7 +5,7 @@ mqtt_password: <password>
 mqtt_client_id: wyzesense2mqtt
 mqtt_clean_session: false
 mqtt_keepalive: 60
-mqtt_qos: 2
+mqtt_qos: 0
 mqtt_retain: true
 self_topic_root: wyzesense2mqtt
 hass_topic_root: homeassistant

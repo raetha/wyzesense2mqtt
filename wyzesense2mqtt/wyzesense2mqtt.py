@@ -14,6 +14,7 @@ import paho.mqtt.client as mqtt
 import wyzesense
 from retrying import retry
 
+
 # Configuration File Locations
 CONFIG_PATH = "config/"
 SAMPLES_PATH = "samples/"
@@ -143,9 +144,10 @@ def init_sensors():
     else:
         LOGGER.info("No sensors config file found.")
 
+    # Add invert_state value if missing
     for sensor_mac in SENSORS:
-        if (valid_sensor_mac(sensor_mac)):
-            send_discovery_topics(sensor_mac)
+        if (SENSORS[sensor_mac].get('invert_state') is None):
+            SENSORS[sensor_mac]['invert_state'] = False
 
     # Check config against linked sensors
     try:
@@ -156,11 +158,15 @@ def init_sensors():
                 if (valid_sensor_mac(sensor_mac)):
                     if (SENSORS.get(sensor_mac) is None):
                         add_sensor_to_config(sensor_mac, None, None)
-                        send_discovery_topics(sensor_mac)
         else:
             LOGGER.warning(f"Sensor list failed with result: {result}")
     except TimeoutError:
         pass
+
+    # Send discovery topics
+    for sensor_mac in SENSORS:
+        if (valid_sensor_mac(sensor_mac)):
+            send_discovery_topics(sensor_mac)
 
 
 # Validate sensor MAC
