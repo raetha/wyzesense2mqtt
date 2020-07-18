@@ -82,14 +82,14 @@ class Packet(object):
     @property
     def Cmd(self):
         return self._cmd
-    
+
     @property
     def Payload(self):
         return self._payload
 
     def Send(self, fd):
         pkt = bytes()
-        
+
         pkt += struct.pack(">HB", 0xAA55, self._cmd >> 8)
         if self._cmd == self.ASYNC_ACK:
             pkt += struct.pack("BB", (self._payload & 0xFF), self._cmd & 0xFF)
@@ -143,11 +143,11 @@ class Packet(object):
     @classmethod
     def GetVersion(cls):
         return cls(cls.CMD_GET_DONGLE_VERSION)
-    
+
     @classmethod
     def Inquiry(cls):
         return cls(cls.CMD_INQUIRY)
-    
+
     @classmethod
     def GetEnr(cls, r):
         assert isinstance(r, bytes)
@@ -157,7 +157,7 @@ class Packet(object):
     @classmethod
     def GetMAC(cls):
         return cls(cls.CMD_GET_MAC)
-        
+
     @classmethod
     def GetKey(cls):
         return cls(cls.CMD_GET_KEY)
@@ -188,7 +188,7 @@ class Packet(object):
         assert isinstance(mac, str)
         assert len(mac) == 8
         return cls(cls.CMD_DEL_SENSOR, mac.encode('ascii'))
-    
+
     @classmethod
     def GetSensorR1(cls, mac, r):
         assert isinstance(r, bytes)
@@ -226,7 +226,7 @@ class SensorEvent(object):
         self.Timestamp = timestamp
         self.Type = event_type
         self.Data = event_data
-    
+
     def __str__(self):
         s = "[%s][%s]" % (self.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), self.MAC)
         if self.Type == 'state':
@@ -259,9 +259,19 @@ class Dongle(object):
             elif alarm_data[0] == 0x02:
                 sensor_type = "motion"
                 sensor_state = "active" if alarm_data[5] == 1 else "inactive"
+            elif alarm_data[0] == 0x03:
+                sensor_type = "leak"
+                sensor_state = "wet" if alarm_data[5] == 1 else "dry"
             else:
-                sensor_type = "uknown"
+                sensor_type = "unknown"
                 sensor_state = "unknown"
+            e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
+        elif event_type == 0xE8:
+            if alarm_data[0] == 0x03:
+                # alarm_data[7] might be humidity in some form, but as an integer
+                # is reporting way to high to actually be humidity.
+                sensor_type = "leak:temperature"
+                sensor_state = "%d.%d" % (alarm_data[5], alarm_data[6])
             e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
         else:
             e = SensorEvent(sensor_mac, timestamp, "raw_%02X" % event_type, alarm_data)
@@ -333,7 +343,7 @@ class Dongle(object):
         log.debug("<=== Received: %s", str(pkt))
         with self.__lock:
             handler = self.__handlers.get(pkt.Cmd, self._DefaultHandler)
-        
+
         if (pkt.Cmd >> 8) == TYPE_ASYNC and pkt.Cmd != Packet.ASYNC_ACK:
             #log.info("Sending ACK packet for cmd %04X", pkt.Cmd)
             self._SendPacket(Packet.AsyncAck(pkt.Cmd))
@@ -344,7 +354,7 @@ class Dongle(object):
         while True:
             if self.__exit_event.isSet():
                 break
-            
+
             s += self._ReadRawHID()
             #if s:
             #    log.info("Incoming buffer: %s", bytes_to_hex(s))
@@ -412,14 +422,14 @@ class Dongle(object):
         mac = resp.Payload.decode('ascii')
         log.debug("GetMAC returns %s", mac)
         return mac
-    
+
     def _GetKey(self):
         log.debug("Start GetKey...")
         resp = self._DoSimpleCommand(Packet.GetKey())
         assert len(resp.Payload) == 16
         log.debug("GetKey returns %s", resp.Payload)
         return resp.Payload
-    
+
     def _GetVersion(self):
         log.debug("Start GetVersion...")
         resp = self._DoSimpleCommand(Packet.GetVersion())
@@ -515,7 +525,7 @@ class Dongle(object):
             assert len(pkt.Payload) == 11
             ctx.result = (pkt.Payload[1:9].decode('ascii'), pkt.Payload[9], pkt.Payload[10])
             ctx.evt.set()
-        
+
         old_handler = self._SetHandler(Packet.NOTIFY_SENSOR_SCAN, scan_handler)
         try:
             self._DoSimpleCommand(Packet.EnableScan())
