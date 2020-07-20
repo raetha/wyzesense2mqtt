@@ -89,12 +89,12 @@ def init_mqtt_client():
 
     # Configure MQTT Client
     MQTT_CLIENT = mqtt.Client(
-            client_id=CONFIG['mqtt_client_id'],
-            clean_session=CONFIG['mqtt_clean_session']
+        client_id=CONFIG['mqtt_client_id'],
+        clean_session=CONFIG['mqtt_clean_session']
     )
     MQTT_CLIENT.username_pw_set(
-            username=CONFIG['mqtt_username'],
-            password=CONFIG['mqtt_password']
+        username=CONFIG['mqtt_username'],
+        password=CONFIG['mqtt_password']
     )
     MQTT_CLIENT.reconnect_delay_set(min_delay=1, max_delay=120)
     MQTT_CLIENT.on_connect = on_connect
@@ -104,9 +104,9 @@ def init_mqtt_client():
     # Connect to MQTT
     LOGGER.info(f"Connecting to MQTT host {CONFIG['mqtt_host']}")
     MQTT_CLIENT.connect(
-            CONFIG['mqtt_host'],
-            port=CONFIG['mqtt_port'],
-            keepalive=CONFIG['mqtt_keepalive']
+        CONFIG['mqtt_host'],
+        port=CONFIG['mqtt_port'],
+        keepalive=CONFIG['mqtt_keepalive']
     )
 
 
@@ -116,7 +116,7 @@ def init_wyzesense_dongle():
     global WYZESENSE_DONGLE, CONFIG
     if (CONFIG['usb_dongle'].lower() == "auto"):
         device_list = subprocess.check_output(
-                ["ls", "-la", "/sys/class/hidraw"]
+            ["ls", "-la", "/sys/class/hidraw"]
         ).decode("utf-8").lower()
         for line in device_list.split("\n"):
             if (("e024" in line) and ("1a86" in line)):
@@ -173,9 +173,9 @@ def init_sensors():
 def valid_sensor_mac(sensor_mac):
     LOGGER.debug(f"sensor_mac: {sensor_mac}")
     invalid_mac_list = [
-            "00000000",
-            "\0\0\0\0\0\0\0\0",
-            "\x00\x00\x00\x00\x00\x00\x00\x00"
+        "00000000",
+        "\0\0\0\0\0\0\0\0",
+        "\x00\x00\x00\x00\x00\x00\x00\x00"
     ]
     if ((len(str(sensor_mac)) == 8) and (sensor_mac not in invalid_mac_list)):
         return True
@@ -195,8 +195,8 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
     SENSORS[sensor_mac] = dict()
     SENSORS[sensor_mac]['name'] = f"Wyze Sense {sensor_mac}"
     SENSORS[sensor_mac]['class'] = (
-            "motion" if (sensor_type == "motion")
-            else "opening"
+        "motion" if (sensor_type == "motion")
+        else "opening"
     )
     SENSORS[sensor_mac]['invert_state'] = False
     if (sensor_version is not None):
@@ -222,8 +222,8 @@ def send_discovery_topics(sensor_mac):
         'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
         'manufacturer': "Wyze",
         'model': (
-                "Sense Motion Sensor" if (sensor_class == "motion")
-                else "Sense Contact Sensor"
+            "Sense Motion Sensor" if (sensor_class == "motion")
+            else "Sense Contact Sensor"
         ),
         'name': sensor_name,
         'sw_version': sensor_version
@@ -260,10 +260,10 @@ def send_discovery_topics(sensor_mac):
         entity_topic = f"{CONFIG['hass_topic_root']}/{sensor_type}/" \
                        f"wyzesense_{sensor_mac}/{entity}/config"
         MQTT_CLIENT.publish(
-                entity_topic,
-                payload=json.dumps(entity_payload),
-                qos=CONFIG['mqtt_qos'],
-                retain=CONFIG['mqtt_retain']
+            entity_topic,
+            payload=json.dumps(entity_payload),
+            qos=CONFIG['mqtt_qos'],
+            retain=CONFIG['mqtt_retain']
         )
         LOGGER.debug(f"  {entity_topic}")
         LOGGER.debug(f"  {json.dumps(entity_payload)}")
@@ -275,10 +275,10 @@ def clear_topics(sensor_mac):
     LOGGER.info("Clearing sensor topics")
     state_topic = f"{CONFIG['self_topic_root']}/{sensor_mac}"
     MQTT_CLIENT.publish(
-            state_topic,
-            payload=None,
-            qos=CONFIG['mqtt_qos'],
-            retain=CONFIG['mqtt_retain']
+        state_topic,
+        payload=None,
+        qos=CONFIG['mqtt_qos'],
+        retain=CONFIG['mqtt_retain']
     )
 
     entity_types = ['state', 'signal_strength', 'battery']
@@ -288,10 +288,10 @@ def clear_topics(sensor_mac):
         entity_topic = f"{CONFIG['hass_topic_root']}/{sensor_type}/" \
                        f"wyzesense_{sensor_mac}/{entity_type}/config"
         MQTT_CLIENT.publish(
-                entity_topic,
-                payload=None,
-                qos=CONFIG['mqtt_qos'],
-                retain=CONFIG['mqtt_retain']
+            entity_topic,
+            payload=None,
+            qos=CONFIG['mqtt_qos'],
+            retain=CONFIG['mqtt_retain']
         )
 
 
@@ -299,9 +299,9 @@ def on_connect(MQTT_CLIENT, userdata, flags, rc):
     global CONFIG
     if rc == 0:
         MQTT_CLIENT.subscribe(
-                [(SCAN_TOPIC, CONFIG['mqtt_qos']),
-                 (REMOVE_TOPIC, CONFIG['mqtt_qos']),
-                 (RELOAD_TOPIC, CONFIG['mqtt_qos'])]
+            [(SCAN_TOPIC, CONFIG['mqtt_qos']),
+                (REMOVE_TOPIC, CONFIG['mqtt_qos']),
+                (RELOAD_TOPIC, CONFIG['mqtt_qos'])]
         )
         MQTT_CLIENT.message_callback_add(SCAN_TOPIC, on_message_scan)
         MQTT_CLIENT.message_callback_add(REMOVE_TOPIC, on_message_remove)
@@ -340,9 +340,9 @@ def on_message_scan(MQTT_CLIENT, userdata, msg):
             if (valid_sensor_mac(sensor_mac)):
                 if (SENSORS.get(sensor_mac)) is None:
                     add_sensor_to_config(
-                            sensor_mac,
-                            sensor_type,
-                            sensor_version
+                        sensor_mac,
+                        sensor_type,
+                        sensor_version
                     )
                     send_discovery_topics(sensor_mac)
             else:
@@ -403,22 +403,20 @@ def on_event(WYZESENSE_DONGLE, event):
                 event_payload['name'] = SENSORS[event.MAC]['name']
 
             if (SENSORS[event.MAC].get('invert_state')):
-                event_payload['state'] = (0 if (sensor_state == "open") or
-                                               (sensor_state == "active")
-                                          else 1)
+                event_payload['state'] = (0 if (sensor_state == "open")
+                                          or (sensor_state == "active") else 1)
             else:
-                event_payload['state'] = (1 if (sensor_state == "open") or
-                                               (sensor_state == "active")
-                                          else 0)
+                event_payload['state'] = (1 if (sensor_state == "open")
+                                          or (sensor_state == "active") else 0)
 
             LOGGER.debug(event_payload)
 
             state_topic = f"{CONFIG['self_topic_root']}/{event.MAC}"
             MQTT_CLIENT.publish(
-                    state_topic,
-                    payload=json.dumps(event_payload),
-                    qos=CONFIG['mqtt_qos'],
-                    retain=CONFIG['mqtt_retain']
+                state_topic,
+                payload=json.dumps(event_payload),
+                qos=CONFIG['mqtt_qos'],
+                retain=CONFIG['mqtt_retain']
             )
         else:
             LOGGER.debug(f"Non-state event data: {event}")
