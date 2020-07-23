@@ -377,6 +377,17 @@ def on_message_reload(MQTT_CLIENT, userdata, msg):
 # Process event
 def on_event(WYZESENSE_DONGLE, event):
     global SENSORS
+
+    # Simplify mapping of device classes.
+    DEVICE_CLASSES = {
+        'leak': 'moisture',
+        'motion': 'motion',
+        'switch': 'opening',
+    }
+
+    # List of states that correlate to ON.
+    STATES_ON = ['active', 'open', 'wet']
+
     if (valid_sensor_mac(event.MAC)):
         if (event.Type == "state"):
             LOGGER.info(f"State event data: {event}")
@@ -391,8 +402,7 @@ def on_event(WYZESENSE_DONGLE, event):
             event_payload = {
                 'available': True,
                 'mac': event.MAC,
-                'device_class': ("motion" if (sensor_type == "motion")
-                                 else "opening"),
+                'device_class': DEVICE_CLASSES.get(sensor_type),
                 'last_seen': event.Timestamp.timestamp(),
                 'last_seen_iso': event.Timestamp.isoformat(),
                 'signal_strength': sensor_signal * -1,
@@ -402,14 +412,14 @@ def on_event(WYZESENSE_DONGLE, event):
             if (CONFIG.get('publish_sensor_name')):
                 event_payload['name'] = SENSORS[event.MAC]['name']
 
-            if (SENSORS[event.MAC].get('invert_state')):
-                event_payload['state'] = (0 if (sensor_state == "open") or
-                                               (sensor_state == "active")
-                                          else 1)
-            else:
-                event_payload['state'] = (1 if (sensor_state == "open") or
-                                               (sensor_state == "active")
-                                          else 0)
+            # Set state depending on state string and `invert_state` setting.
+            #     State ON ^ NOT Inverted = True
+            #     State OFF ^ NOT Inverted = False
+            #     State ON ^ Inverted = False
+            #     State OFF ^ Inverted = True
+            event_payload['state'] = int(
+                (sensor_state in STATES_ON)
+                ^ (SENSORS[event.MAC].get('invert_state')))
 
             LOGGER.debug(event_payload)
 
