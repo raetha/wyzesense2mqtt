@@ -305,8 +305,8 @@ def on_connect(MQTT_CLIENT, userdata, flags, rc):
     if rc == 0:
         MQTT_CLIENT.subscribe(
             [(SCAN_TOPIC, CONFIG['mqtt_qos']),
-                (REMOVE_TOPIC, CONFIG['mqtt_qos']),
-                (RELOAD_TOPIC, CONFIG['mqtt_qos'])]
+             (REMOVE_TOPIC, CONFIG['mqtt_qos']),
+             (RELOAD_TOPIC, CONFIG['mqtt_qos'])]
         )
         MQTT_CLIENT.message_callback_add(SCAN_TOPIC, on_message_scan)
         MQTT_CLIENT.message_callback_add(REMOVE_TOPIC, on_message_remove)
