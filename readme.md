@@ -6,15 +6,14 @@
 [![GitHub PRs](https://img.shields.io/github/issues-pr/raetha/wyzesense2mqtt)](https://github.com/raetha/wyzesense2mqtt/pulls)
 [![GitHub Release](https://img.shields.io/github/v/release/raetha/wyzesense2mqtt)](https://github.com/raetha/wyzesense2mqtt/releases)
 [![Python Validation](https://github.com/raetha/wyzesense2mqtt/workflows/Python%20Validation/badge.svg)](https://github.com/raetha/wyzesense2mqtt/actions?query=workflow%3A%22Python+Validation%22)
-[![GitHub Downloads](https://img.shields.io/github/downloads/raetha/wyzesense2mqtt/total)]()
 
 [![dockeri.co](https://dockeri.co/image/raetha/wyzesense2mqtt)](https://hub.docker.com/r/raetha/wyzesense2mqtt)
 
 Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use MQTT discovery mechanisms. The gateway allows direct local access to [Wyze Sense](https://wyze.com/wyze-sense.html) products without the need for a Wyze Cam or cloud services. This project and its dependencies have no relation to Wyze Labs Inc.
 
 ## Special Thanks
-* [HcLX](https://hclxing.wordpress.com) for [WyzeSensePy](https://github.com/HclX/WyzeSensePy), the core library this component uses.
-* [Kevin Vincent](http://kevinvincent.me) for [HA-WyzeSense](https://github.com/kevinvincent/ha-wyzesense), the refernce code I used to get things working right with the calls to WyzeSensePy.
+* [HcLX](https://hclxing.wordpress.com) for [WyzeSensePy](https://github.com/HclX/WyzeSensePy), the core library this project uses.
+* [Kevin Vincent](http://kevinvincent.me) for [HA-WyzeSense](https://github.com/kevinvincent/ha-wyzesense), the reference code I used to get things working right with the calls to WyzeSensePy.
 * [ozczecho](https://github.com/ozczecho) for [wyze-mqtt](https://github.com/ozczecho/wyze-mqtt), the inspiration for this project.
 * [rmoriz](https://roland.io/) for [multiarch-test](https://github.com/rmoriz/multiarch-test), this allowed the Docker Hub Autobuilder to work for multiple architectures including ARM32v7 (Raspberry Pi) and AMD64 (Linux).
 
@@ -75,7 +74,7 @@ mkdir /docker/wyzesense2mqtt/logs
 ```bash
 docker-compose up -d
 ```
-8. Pair sensors following instructions below. You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, but the sensor version will be unknown.
+8. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, but the sensor version will be unknown.
 
 ### Linux Systemd
 
@@ -119,7 +118,7 @@ sudo systemctl daemon-reload
 sudo systemctl start wyzesense2mqtt
 sudo systemctl status wyzesense2mqtt
 ```
-9. Pair sensors following instructions below. You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, but the sensor version will be unknown.
+9. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, but the sensor version will be unknown.
 
 
 ## Config Files
@@ -232,5 +231,5 @@ Home Assistant simply needs to be configured with the MQTT broker that the gatew
 
 
 ## Tested On
-* Alpine Linux (Docker image)
-* Raspbian Buster
+* Debian Buster (Docker)
+* Raspbian Buster (RPi 4)
