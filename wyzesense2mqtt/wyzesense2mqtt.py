@@ -110,8 +110,13 @@ def init_mqtt_client():
     )
 
 
+# Retry forever on IO Error
+def retry_if_io_error(exception):
+    return isinstance(exception, IOError)
+
+
 # Initialize USB dongle
-@retry(wait_exponential_multiplier=1000, wait_exponential_max=10000)
+@retry(wait_exponential_multiplier=1000, wait_exponential_max=30000, retry_on_exception=retry_if_io_error)
 def init_wyzesense_dongle():
     global WYZESENSE_DONGLE, CONFIG
     if (CONFIG['usb_dongle'].lower() == "auto"):
