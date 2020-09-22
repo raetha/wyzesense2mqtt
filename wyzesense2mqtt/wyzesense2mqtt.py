@@ -22,6 +22,9 @@ MAIN_CONFIG_FILE = "config.yaml"
 LOGGING_CONFIG_FILE = "logging.yaml"
 SENSORS_CONFIG_FILE = "sensors.yaml"
 
+# Init globals
+SENSORS = None
+
 
 # Read data from YAML file
 def read_yaml_file(filename):
@@ -131,8 +134,8 @@ def init_wyzesense_dongle():
         LOGGER.debug(f"  MAC: {WYZESENSE_DONGLE.MAC},"
                      f"  VER: {WYZESENSE_DONGLE.Version},"
                      f"  ENR: {WYZESENSE_DONGLE.ENR}")
-    except IOError:
-        LOGGER.warning(f"No device found on path {CONFIG['usb_dongle']}")
+    except IOError as e:
+        LOGGER.warning(f"init_wyzesesnse_dongle - IOError:{e.errno}")
 
 
 # Initialize sensor configuration
@@ -144,11 +147,6 @@ def init_sensors():
     else:
         LOGGER.info("No sensors config file found.")
 
-    # Add invert_state value if missing
-    for sensor_mac in SENSORS:
-        if (SENSORS[sensor_mac].get('invert_state') is None):
-            SENSORS[sensor_mac]['invert_state'] = False
-
     # Check config against linked sensors
     try:
         result = WYZESENSE_DONGLE.List()
@@ -156,15 +154,18 @@ def init_sensors():
         if (result):
             for sensor_mac in result:
                 if (valid_sensor_mac(sensor_mac)):
-                    if (SENSORS.get(sensor_mac) is None):
+                    if (SENSORS is None or SENSORS.get(sensor_mac) is None):
                         add_sensor_to_config(sensor_mac, None, None)
         else:
             LOGGER.warning(f"Sensor list failed with result: {result}")
     except TimeoutError:
         pass
 
+    # Add invert_state value if missing
     # Send discovery topics
     for sensor_mac in SENSORS:
+        if (SENSORS[sensor_mac].get('invert_state') is None):
+            SENSORS[sensor_mac]['invert_state'] = False
         if (valid_sensor_mac(sensor_mac)):
             send_discovery_topics(sensor_mac)
 
@@ -192,6 +193,11 @@ def valid_sensor_mac(sensor_mac):
 # Add sensor to config
 def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
     global SENSORS
+
+    if(SENSORS is None):
+        LOGGER.info("add_sensor_to_config - SENSORS is None - define blank dict")
+        SENSORS = dict()
+
     SENSORS[sensor_mac] = dict()
     SENSORS[sensor_mac]['name'] = f"Wyze Sense {sensor_mac}"
     SENSORS[sensor_mac]['class'] = (
