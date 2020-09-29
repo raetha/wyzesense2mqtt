@@ -88,7 +88,7 @@ def init_config():
 
 # Initialize MQTT client connection
 def init_mqtt_client():
-    global MQTT_CLIENT, CONFIG
+    global MQTT_CLIENT, CONFIG, LOGGER
 
     # Configure MQTT Client
     MQTT_CLIENT = mqtt.Client(
@@ -103,6 +103,7 @@ def init_mqtt_client():
     MQTT_CLIENT.on_connect = on_connect
     MQTT_CLIENT.on_disconnect = on_disconnect
     MQTT_CLIENT.on_message = on_message
+    MQTT_CLIENT.enable_logger(LOGGER)
 
     # Connect to MQTT
     LOGGER.info(f"Connecting to MQTT host {CONFIG['mqtt_host']}")
@@ -215,6 +216,11 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
 # Send discovery topics
 def send_discovery_topics(sensor_mac):
     global SENSORS, CONFIG
+
+    if(CONFIG.get('hass_discovery') is False):
+        LOGGER.debug("send_discovery_topics - not publishing")
+        return
+
     LOGGER.info(f"Publishing discovery topics for {sensor_mac}")
 
     sensor_name = SENSORS[sensor_mac]['name']
@@ -277,15 +283,23 @@ def send_discovery_topics(sensor_mac):
 
 # Clear any retained topics in MQTT
 def clear_topics(sensor_mac):
-    global CONFIG
+    global SENSORS, CONFIG
     LOGGER.info("Clearing sensor topics")
-    state_topic = f"{CONFIG['self_topic_root']}/{sensor_mac}"
+
+    #Clears sensor value
+    state_topic = (f"{CONFIG['self_topic_root']}/{SENSORS[event.MAC].get('alias').replace(' ', '_')}" if (SENSORS[event.MAC].get('alias') is not None)
+                                                                            else f"{CONFIG['self_topic_root']}/{event.MAC}")
     MQTT_CLIENT.publish(
             state_topic,
             payload=None,
             qos=CONFIG['mqtt_qos'],
             retain=CONFIG['mqtt_retain']
     )
+
+    #Clears home assistant info
+    if(CONFIG.get('hass_discovery') is False):
+        LOGGER.debug("clear_topics - not clearing hass_discovery topics")
+        return
 
     entity_types = ['state', 'signal_strength', 'battery']
     for entity_type in entity_types:
@@ -303,7 +317,7 @@ def clear_topics(sensor_mac):
 
 def on_connect(MQTT_CLIENT, userdata, flags, rc):
     global CONFIG
-    if rc == 0:
+    if rc == mqtt.MQTT_ERR_SUCCESS:
         MQTT_CLIENT.subscribe(
                 [(SCAN_TOPIC, CONFIG['mqtt_qos']),
                  (REMOVE_TOPIC, CONFIG['mqtt_qos']),
@@ -312,16 +326,14 @@ def on_connect(MQTT_CLIENT, userdata, flags, rc):
         MQTT_CLIENT.message_callback_add(SCAN_TOPIC, on_message_scan)
         MQTT_CLIENT.message_callback_add(REMOVE_TOPIC, on_message_remove)
         MQTT_CLIENT.message_callback_add(RELOAD_TOPIC, on_message_reload)
-        LOGGER.info(f"Connected to MQTT: return code {str(rc)}")
-    elif rc == 3:
-        LOGGER.warning(f"Connect to MQTT failed: server unavailable {str(rc)}")
+        LOGGER.info(f"Connected to MQTT: { mqtt.error_string(rc)}")
     else:
-        LOGGER.warning(f"Connect to MQTT failed: return code {str(rc)}")
+        LOGGER.warning(f"Connect to MQTT failed: {mqtt.error_string(rc)}")
         exit(1)
 
 
 def on_disconnect(MQTT_CLIENT, userdata, rc):
-    LOGGER.info(f"Disconnected from MQTT: return code {str(rc)}")
+    LOGGER.info(f"Disconnected from MQTT: return code {mqtt.error_string(rc)}")
     MQTT_CLIENT.message_callback_remove(SCAN_TOPIC)
     MQTT_CLIENT.message_callback_remove(REMOVE_TOPIC)
     MQTT_CLIENT.message_callback_remove(RELOAD_TOPIC)
@@ -344,7 +356,7 @@ def on_message_scan(MQTT_CLIENT, userdata, msg):
             sensor_mac, sensor_type, sensor_version = result
             sensor_type = ("motion" if (sensor_type == 2) else "opening")
             if (valid_sensor_mac(sensor_mac)):
-                if (SENSORS.get(sensor_mac)) is None:
+                if (SENSORS is None or SENSORS.get(sensor_mac)) is None:
                     add_sensor_to_config(
                             sensor_mac,
                             sensor_type,
@@ -360,6 +372,7 @@ def on_message_scan(MQTT_CLIENT, userdata, msg):
 
 
 # Process message to remove sensor
+# TODO: This does not remove from SENSORS or sensors.yaml
 def on_message_remove(MQTT_CLIENT, userdata, msg):
     LOGGER.info(f"In on_message_remove: {msg.payload.decode()}")
     sensor_mac = msg.payload.decode()
@@ -382,7 +395,7 @@ def on_message_reload(MQTT_CLIENT, userdata, msg):
 
 # Process event
 def on_event(WYZESENSE_DONGLE, event):
-    global SENSORS
+    global SENSORS, CONFIG
     if (valid_sensor_mac(event.MAC)):
         if (event.Type == "state"):
             LOGGER.info(f"State event data: {event}")
@@ -419,13 +432,17 @@ def on_event(WYZESENSE_DONGLE, event):
 
             LOGGER.debug(event_payload)
 
-            state_topic = f"{CONFIG['self_topic_root']}/{event.MAC}"
-            MQTT_CLIENT.publish(
+            #publish with alias name instead of MAC, if it exists.
+            state_topic =(f"{CONFIG['self_topic_root']}/{SENSORS[event.MAC].get('alias').replace(' ', '_')}" if (SENSORS[event.MAC].get('alias') is not None)
+                                                                            else f"{CONFIG['self_topic_root']}/{event.MAC}")
+            mqtt_message_info = MQTT_CLIENT.publish(
                     state_topic,
                     payload=json.dumps(event_payload),
                     qos=CONFIG['mqtt_qos'],
                     retain=CONFIG['mqtt_retain']
             )
+            if (mqtt_message_info.rc != mqtt.MQTT_ERR_SUCCESS):
+                LOGGER.warning(f"on_event Publish error: {mqtt.error_string(mqtt_message_info.rc)}")
         else:
             LOGGER.debug(f"Non-state event data: {event}")
 

@@ -245,13 +245,17 @@ class Dongle(object):
 
     def _OnSensorAlarm(self, pkt):
         if len(pkt.Payload) < 18:
-            log.info("Unknown alarm packet: %s", bytes_to_hex(pkt.Payload))
+            log.info("wyzesense.py - _OnSensorAlarm - Unknown alarm packet: %s", bytes_to_hex(pkt.Payload))
             return
 
         timestamp, event_type, sensor_mac = struct.unpack_from(">QB8s", pkt.Payload)
         timestamp = datetime.datetime.fromtimestamp(timestamp/1000.0)
         sensor_mac = sensor_mac.decode('ascii')
         alarm_data = pkt.Payload[17:]
+        
+        log.debug("wyzesense.py - _OnSensorAlarm - Raw Alarm Packet (%02X): %s", event_type, bytes_to_hex(pkt.Payload))
+        # Event type A1 appears to be the same as A2 except A2 has some sort of data integrity check (seemingly, haven't determine dexactly what it does)
+        # Event type AB is not handled in the the most recent wyze firmware .156
         if event_type == 0xA2:
             if alarm_data[0] == 0x01:
                 sensor_type = "switch"
@@ -260,8 +264,8 @@ class Dongle(object):
                 sensor_type = "motion"
                 sensor_state = "active" if alarm_data[5] == 1 else "inactive"
             else:
-                sensor_type = "uknown"
-                sensor_state = "unknown"
+                sensor_type = "unknown sensor_type"
+                sensor_state = "unknown sensor_state"
             e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
         else:
             e = SensorEvent(sensor_mac, timestamp, "raw_%02X" % event_type, alarm_data)
