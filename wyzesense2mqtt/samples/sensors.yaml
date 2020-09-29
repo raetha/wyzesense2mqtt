@@ -2,6 +2,7 @@
   class: door
   name: Entry Door
   invert_state: false
+  alias: entry_door
 'BBBBBBBB':
   class: window
   name: Office Window
