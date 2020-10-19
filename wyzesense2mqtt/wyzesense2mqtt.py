@@ -408,11 +408,13 @@ def on_event(WYZESENSE_DONGLE, event):
                 event_payload['name'] = SENSORS[event.MAC]['name']
 
             if (SENSORS[event.MAC].get('invert_state')):
-                event_payload['state'] = (0 if (sensor_state == "open")
-                                          or (sensor_state == "active") else 1)
+                event_payload['state'] = (0 if (sensor_state == "open") or
+                                               (sensor_state == "active")
+                                          else 1)
             else:
-                event_payload['state'] = (1 if (sensor_state == "open")
-                                          or (sensor_state == "active") else 0)
+                event_payload['state'] = (1 if (sensor_state == "open") or
+                                               (sensor_state == "active")
+                                          else 0)
 
             LOGGER.debug(event_payload)
 
