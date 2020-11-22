@@ -229,7 +229,9 @@ class SensorEvent(object):
     
     def __str__(self):
         s = "[%s][%s]" % (self.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), self.MAC)
-        if self.Type == 'state':
+        if self.Type == 'alarm':
+            s += "StateEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
+        elif self.Type == 'status':
             s += "StateEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
         else:
             s += "RawEvent: type=%s, data=%s" % (self.Type, bytes_to_hex(self.Data))
