@@ -378,7 +378,7 @@ def on_message_reload(MQTT_CLIENT, userdata, msg):
 def on_event(WYZESENSE_DONGLE, event):
     global SENSORS
     if (valid_sensor_mac(event.MAC)):
-        if (event.Type == "state"):
+        if (event.Type == "alarm") or (event.Type == "status"):
             LOGGER.info(f"State event data: {event}")
             (sensor_type, sensor_state, sensor_battery, sensor_signal) = event.Data
 
@@ -389,6 +389,7 @@ def on_event(WYZESENSE_DONGLE, event):
 
             # Build event payload
             event_payload = {
+                'event' : event.Type,
                 'available': True,
                 'mac': event.MAC,
                 'device_class': ("motion" if (sensor_type == "motion")

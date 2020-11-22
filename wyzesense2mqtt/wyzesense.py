@@ -252,7 +252,7 @@ class Dongle(object):
         timestamp = datetime.datetime.fromtimestamp(timestamp/1000.0)
         sensor_mac = sensor_mac.decode('ascii')
         alarm_data = pkt.Payload[17:]
-        if event_type == 0xA2:
+        if event_type == 0xA2 or event_type == 0xA1:
             if alarm_data[0] == 0x01:
                 sensor_type = "switch"
                 sensor_state = "open" if alarm_data[5] == 1 else "close"
@@ -262,7 +262,7 @@ class Dongle(object):
             else:
                 sensor_type = "uknown"
                 sensor_state = "unknown"
-            e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
+            e = SensorEvent(sensor_mac, timestamp, ("alarm" if event_type == 0xA2 else "status"), (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
         else:
             e = SensorEvent(sensor_mac, timestamp, "raw_%02X" % event_type, alarm_data)
 
