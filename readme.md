@@ -114,13 +114,14 @@ vim config/sensors.yaml
 ```bash
 sudo pip3 install -r requirements.txt
 ```
-8. Start the service.
+8. Configure the service
 ```bash
 vim wyzesense2mqtt.service # Only modify if not using default application path
 sudo cp wyzesense2mqtt.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl start wyzesense2mqtt
 sudo systemctl status wyzesense2mqtt
+sudo systemctl enable wyzesense2mqtt # Enable start on reboot
 ```
 9. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, but the sensor version will be unknown.
 
