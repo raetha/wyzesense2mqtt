@@ -85,11 +85,13 @@ The gateway can also be run as a systemd service for those not wanting to use Do
 cd /tmp
 git clone https://github.com/raetha/wyzesense2mqtt.git
 ```
-3. Create local application folder (Select a location that works for you, example uses /wyzesense2mqtt)
+3. Create local application folders (Select a location that works for you, example uses /wyzesense2mqtt)
 ```bash
 mv /tmp/wyzesense2mqtt/wyzesense2mqtt /wyzesense2mqtt
 rm -rf /tmp/wyzesense2mqtt
 cd /wyzesense2mqtt
+mkdir config
+mkdir logs
 ```
 4. Prepare config.yaml file. You must set MQTT host parameters! Username and password can be blank if unused. (see sample below)
 ```bash
