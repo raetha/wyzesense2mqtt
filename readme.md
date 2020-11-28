@@ -84,6 +84,8 @@ The gateway can also be run as a systemd service for those not wanting to use Do
 ```bash
 cd /tmp
 git clone https://github.com/raetha/wyzesense2mqtt.git
+# Use the below command instead if you want to help test the devel branch
+# git clone -branch devel https://github.com/raetha/wyzesense2mqtt.git
 ```
 3. Create local application folders (Select a location that works for you, example uses /wyzesense2mqtt)
 ```bash
