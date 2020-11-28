@@ -234,8 +234,10 @@ class SensorEvent(object):
 
     def __str__(self):
         s = "[%s][%s]" % (self.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), self.MAC)
-        if self.Type == 'state':
-            s += "StateEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
+        if self.Type == 'alarm':
+            s += "AlarmEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
+        elif self.Type == 'status':
+            s += "StatusEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
         else:
             s += "RawEvent: type=%s, data=%s" % (self.Type, bytes_to_hex(self.Data))
         return s
@@ -258,7 +260,7 @@ class Dongle(object):
         timestamp = datetime.datetime.fromtimestamp(timestamp / 1000.0)
         sensor_mac = sensor_mac.decode('ascii')
         alarm_data = pkt.Payload[17:]
-        if event_type == 0xA2:
+        if event_type == 0xA2 or event_type == 0xA1:
             if alarm_data[0] == 0x01:
                 sensor_type = "switch"
                 sensor_state = "open" if alarm_data[5] == 1 else "close"
@@ -271,7 +273,7 @@ class Dongle(object):
             else:
                 sensor_type = "unknown"
                 sensor_state = "unknown"
-            e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
+            e = SensorEvent(sensor_mac, timestamp, ("alarm" if event_type == 0xA2 else "status"), (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
         elif event_type == 0xE8:
             if alarm_data[0] == 0x03:
                 # alarm_data[7] might be humidity in some form, but as an integer
