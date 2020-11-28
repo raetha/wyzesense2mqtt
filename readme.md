@@ -78,7 +78,7 @@ docker-compose up -d
 
 ### Linux Systemd
 
-The gateway can also be run as a systemd service for those not wanting to use Docker. Requires Python 3.6 or newer.
+The gateway can also be run as a systemd service for those not wanting to use Docker. Requires Python 3.6 or newer. You may need to do all commands as root, depending on filesystem permissions.
 1. Plug Wyze Sense Bridge into USB port on Linux host.
 2. Pull down a copy of the repository
 ```bash
@@ -112,7 +112,7 @@ vim config/sensors.yaml
 ```
 7. Install dependencies
 ```bash
-pip3 install -r requirements.txt
+sudo pip3 install -r requirements.txt
 ```
 8. Start the service.
 ```bash
