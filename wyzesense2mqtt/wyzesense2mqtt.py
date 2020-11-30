@@ -203,7 +203,7 @@ def init_sensors():
 
 # Validate sensor MAC
 def valid_sensor_mac(sensor_mac):
-    LOGGER.debug(f"sensor_mac: {sensor_mac}")
+    #LOGGER.debug(f"Validating MAC: {sensor_mac}")
     invalid_mac_list = [
         "00000000",
         "\0\0\0\0\0\0\0\0",
@@ -224,6 +224,7 @@ def valid_sensor_mac(sensor_mac):
 # Add sensor to config
 def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
     global SENSORS
+    LOGGER.info(f"Adding sensor to config: {sensor_mac}")
     SENSORS[sensor_mac] = dict()
     SENSORS[sensor_mac]['name'] = f"Wyze Sense {sensor_mac}"
     SENSORS[sensor_mac]['class'] = (
@@ -234,20 +235,18 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
     if (sensor_version is not None):
         SENSORS[sensor_mac]['sw_version'] = sensor_version
 
-    LOGGER.info("Writing Sensors Config File")
     write_yaml_file(CONFIG_PATH + SENSORS_CONFIG_FILE, SENSORS)
 
 
 # Delete sensor from config
 def delete_sensor_from_config(sensor_mac):
     global SENSORS
+    LOGGER.info(f"Deleting sensor from config: {sensor_mac}")
     try:
         del SENSORS[sensor_mac]
+        write_yaml_file(CONFIG_PATH + SENSORS_CONFIG_FILE, SENSORS)
     except KeyError:
         LOGGER.debug(f"{sensor_mac} not found in SENSORS")
-
-    LOGGER.info("Writing Sensors Config File")
-    write_yaml_file(CONFIG_PATH + SENSORS_CONFIG_FILE, SENSORS)
 
 
 # Publish MQTT topic
