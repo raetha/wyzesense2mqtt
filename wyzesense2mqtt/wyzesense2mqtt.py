@@ -10,6 +10,10 @@ import shutil
 import subprocess
 import yaml
 
+# Used for alternate MQTT connection method
+# import signal
+# import time
+
 import paho.mqtt.client as mqtt
 import wyzesense
 from retrying import retry
@@ -98,16 +102,12 @@ def init_config():
 # Initialize MQTT client connection
 def init_mqtt_client():
     global MQTT_CLIENT, CONFIG, LOGGER
+    # Used for alternate MQTT connection method
+    # mqtt.Client.connected_flag = False
 
     # Configure MQTT Client
-    MQTT_CLIENT = mqtt.Client(
-        client_id=CONFIG['mqtt_client_id'],
-        clean_session=CONFIG['mqtt_clean_session']
-    )
-    MQTT_CLIENT.username_pw_set(
-        username=CONFIG['mqtt_username'],
-        password=CONFIG['mqtt_password']
-    )
+    MQTT_CLIENT = mqtt.Client(client_id=CONFIG['mqtt_client_id'], clean_session=CONFIG['mqtt_clean_session'])
+    MQTT_CLIENT.username_pw_set(username=CONFIG['mqtt_username'], password=CONFIG['mqtt_password'])
     MQTT_CLIENT.reconnect_delay_set(min_delay=1, max_delay=120)
     MQTT_CLIENT.on_connect = on_connect
     MQTT_CLIENT.on_disconnect = on_disconnect
@@ -116,11 +116,12 @@ def init_mqtt_client():
 
     # Connect to MQTT
     LOGGER.info(f"Connecting to MQTT host {CONFIG['mqtt_host']}")
-    MQTT_CLIENT.connect(
-        CONFIG['mqtt_host'],
-        port=CONFIG['mqtt_port'],
-        keepalive=CONFIG['mqtt_keepalive']
-    )
+    MQTT_CLIENT.connect_async(CONFIG['mqtt_host'], port=CONFIG['mqtt_port'], keepalive=CONFIG['mqtt_keepalive'])
+
+    # Used for alternate MQTT connection method
+    # MQTT_CLIENT.loop_start()
+    # while (not MQTT_CLIENT.connected_flag):
+    #     time.sleep(1)
 
 
 # Retry forever on IO Error
@@ -146,9 +147,10 @@ def init_wyzesense_dongle():
     LOGGER.info(f"Connecting to dongle {CONFIG['usb_dongle']}")
     try:
         WYZESENSE_DONGLE = wyzesense.Open(CONFIG['usb_dongle'], on_event)
-        LOGGER.debug(f"  MAC: {WYZESENSE_DONGLE.MAC},"
-                     f"  VER: {WYZESENSE_DONGLE.Version},"
-                     f"  ENR: {WYZESENSE_DONGLE.ENR}")
+        LOGGER.debug(f"Dongle {CONFIG['usb_dongle']}: ["
+                     f" MAC: {WYZESENSE_DONGLE.MAC},"
+                     f" VER: {WYZESENSE_DONGLE.Version},"
+                     f" ENR: {WYZESENSE_DONGLE.ENR}]")
     except IOError as error:
         LOGGER.warning(f"No device found on path {CONFIG['usb_dongle']}: {str(error)}")
 
@@ -248,6 +250,19 @@ def delete_sensor_from_config(sensor_mac):
     write_yaml_file(CONFIG_PATH + SENSORS_CONFIG_FILE, SENSORS)
 
 
+# Publish MQTT topic
+def mqtt_publish(mqtt_topic, mqtt_payload):
+    global MQTT_CLIENT, CONFIG
+    mqtt_message_info = MQTT_CLIENT.publish(
+        mqtt_topic,
+        payload=json.dumps(mqtt_payload),
+        qos=CONFIG['mqtt_qos'],
+        retain=CONFIG['mqtt_retain']
+    )
+    if (mqtt_message_info.rc != mqtt.MQTT_ERR_SUCCESS):
+        LOGGER.warning(f"MQTT publish error: {mqtt.error_string(mqtt_message_info.rc)}")
+
+
 # Send discovery topics
 def send_discovery_topics(sensor_mac):
     global SENSORS, CONFIG
@@ -300,12 +315,7 @@ def send_discovery_topics(sensor_mac):
         sensor_type = ("binary_sensor" if (entity == "state") else "sensor")
 
         entity_topic = f"{CONFIG['hass_topic_root']}/{sensor_type}/wyzesense_{sensor_mac}/{entity}/config"
-        MQTT_CLIENT.publish(
-            entity_topic,
-            payload=json.dumps(entity_payload),
-            qos=CONFIG['mqtt_qos'],
-            retain=CONFIG['mqtt_retain']
-        )
+        mqtt_publish(entity_topic, entity_payload)
         LOGGER.debug(f"  {entity_topic}")
         LOGGER.debug(f"  {json.dumps(entity_payload)}")
 
@@ -315,12 +325,7 @@ def clear_topics(sensor_mac):
     global CONFIG
     LOGGER.info("Clearing sensor topics")
     state_topic = f"{CONFIG['self_topic_root']}/{sensor_mac}"
-    MQTT_CLIENT.publish(
-        state_topic,
-        payload=None,
-        qos=CONFIG['mqtt_qos'],
-        retain=CONFIG['mqtt_retain']
-    )
+    mqtt_publish(state_topic, None)
 
     # clear discovery topics if configured
     if(CONFIG['hass_discovery']):
@@ -331,12 +336,7 @@ def clear_topics(sensor_mac):
                 else "sensor"
             )
             entity_topic = f"{CONFIG['hass_topic_root']}/{sensor_type}/wyzesense_{sensor_mac}/{entity_type}/config"
-            MQTT_CLIENT.publish(
-                entity_topic,
-                payload=None,
-                qos=CONFIG['mqtt_qos'],
-                retain=CONFIG['mqtt_retain']
-            )
+            mqtt_publish(entity_topic, None)
 
 
 def on_connect(MQTT_CLIENT, userdata, flags, rc):
@@ -350,17 +350,20 @@ def on_connect(MQTT_CLIENT, userdata, flags, rc):
         MQTT_CLIENT.message_callback_add(SCAN_TOPIC, on_message_scan)
         MQTT_CLIENT.message_callback_add(REMOVE_TOPIC, on_message_remove)
         MQTT_CLIENT.message_callback_add(RELOAD_TOPIC, on_message_reload)
+        # Used for alternate MQTT connection method
+        # MQTT_CLIENT.connected_flag = True
         LOGGER.info(f"Connected to MQTT: {mqtt.error_string(rc)}")
     else:
-        LOGGER.warning(f"Connect to MQTT failed: {mqtt.error_string(rc)}")
-        exit(1)
+        LOGGER.warning(f"Connection to MQTT failed: {mqtt.error_string(rc)}")
 
 
 def on_disconnect(MQTT_CLIENT, userdata, rc):
-    LOGGER.info(f"Disconnected from MQTT: {mqtt.error_string(rc)}")
     MQTT_CLIENT.message_callback_remove(SCAN_TOPIC)
     MQTT_CLIENT.message_callback_remove(REMOVE_TOPIC)
     MQTT_CLIENT.message_callback_remove(RELOAD_TOPIC)
+    # Used for alternate MQTT connection method
+    # MQTT_CLIENT.connected_flag = False
+    LOGGER.info(f"Disconnected from MQTT: {mqtt.error_string(rc)}")
 
 
 # Process messages
@@ -445,7 +448,7 @@ def on_event(WYZESENSE_DONGLE, event):
 
             # Build event payload
             event_payload = {
-                'event' : event.Type,
+                'event': event.Type,
                 'available': True,
                 'mac': event.MAC,
                 'device_class': DEVICE_CLASSES.get(sensor_type),
@@ -463,21 +466,12 @@ def on_event(WYZESENSE_DONGLE, event):
             #     State OFF ^ NOT Inverted = False
             #     State ON ^ Inverted = False
             #     State OFF ^ Inverted = True
-            event_payload['state'] = int(
-                (sensor_state in STATES_ON)
-                ^ (SENSORS[event.MAC].get('invert_state')))
+            event_payload['state'] = int((sensor_state in STATES_ON) ^ (SENSORS[event.MAC].get('invert_state')))
 
             LOGGER.debug(event_payload)
 
             state_topic = f"{CONFIG['self_topic_root']}/{event.MAC}"
-            mqtt_message_info = MQTT_CLIENT.publish(
-                state_topic,
-                payload=json.dumps(event_payload),
-                qos=CONFIG['mqtt_qos'],
-                retain=CONFIG['mqtt_retain']
-            )
-            if (mqtt_message_info.rc != mqtt.MQTT_ERR_SUCCESS):
-                LOGGER.warning(f"on_event publish error: {mqtt.error_string(mqtt_message_info.rc)}")
+            mqtt_publish(state_topic, event_payload)
         else:
             LOGGER.debug(f"Non-state event data: {event}")
 
@@ -486,25 +480,39 @@ def on_event(WYZESENSE_DONGLE, event):
         LOGGER.warning(f"Event data: {event}")
 
 
-# Initialize logging
-init_logging()
+if __name__ == "__main__":
+    # Initialize logging
+    init_logging()
 
-# Initialize configuration
-init_config()
+    # Initialize configuration
+    init_config()
 
-# Set MQTT Topics
-SCAN_TOPIC = f"{CONFIG['self_topic_root']}/scan"
-REMOVE_TOPIC = f"{CONFIG['self_topic_root']}/remove"
-RELOAD_TOPIC = f"{CONFIG['self_topic_root']}/reload"
+    # Set MQTT Topics
+    SCAN_TOPIC = f"{CONFIG['self_topic_root']}/scan"
+    REMOVE_TOPIC = f"{CONFIG['self_topic_root']}/remove"
+    RELOAD_TOPIC = f"{CONFIG['self_topic_root']}/reload"
 
-# Initialize MQTT client connection
-init_mqtt_client()
+    # Initialize MQTT client connection
+    init_mqtt_client()
 
-# Initialize USB dongle
-init_wyzesense_dongle()
+    # Initialize USB dongle
+    init_wyzesense_dongle()
 
-# Initialize sensor configuration
-init_sensors()
+    # Initialize sensor configuration
+    init_sensors()
 
-# MQTT client loop forever
-MQTT_CLIENT.loop_forever(retry_first_connection=True)
+    # Loop forever until keyboard interrupt or SIGINT
+    try:
+        while True:
+            MQTT_CLIENT.loop_forever(retry_first_connection=False)
+
+            # Used for alternate MQTT connection method
+            # signal.pause()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # Used with alternate MQTT connection method
+        # MQTT_CLIENT.loop_stop()
+
+        MQTT_CLIENT.disconnect()
+        WYZESENSE_DONGLE.Stop()
