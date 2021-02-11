@@ -95,9 +95,9 @@ def main(args):
 
     def Fix(unused_args):
         invalid_mac_list = [
-                "00000000",
-                "\0\0\0\0\0\0\0\0",
-                "\x00\x00\x00\x00\x00\x00\x00\x00"
+            "00000000",
+            "\0\0\0\0\0\0\0\0",
+            "\x00\x00\x00\x00\x00\x00\x00\x00"
         ]
         print("Un-pairing bad sensors")
         logging.debug("Un-pairing bad sensors")
