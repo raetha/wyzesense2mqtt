@@ -270,9 +270,15 @@ class Dongle(object):
             elif alarm_data[0] == 0x03:
                 sensor_type = "leak"
                 sensor_state = "wet" if alarm_data[5] == 1 else "dry"
+            elif alarm_data[0] == 0xE:
+                sensor_type = "switchv2"
+                sensor_state = "open" if alarm_data[5] == 1 else "close"
+            elif alarm_data[0] == 0xF:
+                sensor_type = "motionv2"
+                sensor_state = "active" if alarm_data[5] == 1 else "inactive"
             else:
-                sensor_type = "unknown"
-                sensor_state = "unknown"
+                sensor_type = "unknown (" + alarm_data[0] + ")"
+                sensor_state = "unknown (" + alarm_data[5] + ")"
             e = SensorEvent(sensor_mac, timestamp, ("alarm" if event_type == 0xA2 else "status"), (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
         elif event_type == 0xE8:
             if alarm_data[0] == 0x03:
