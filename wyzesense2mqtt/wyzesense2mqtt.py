@@ -26,6 +26,15 @@ MAIN_CONFIG_FILE = "config.yaml"
 LOGGING_CONFIG_FILE = "logging.yaml"
 SENSORS_CONFIG_FILE = "sensors.yaml"
 
+# Simplify mapping of device classes.
+# { sensor_id: {'type': 'sensor_type', 'class', 'device_class'} }
+DEVICE_CLASSES = {
+    0x01: {'type': 'switch', 'class': 'opening'},
+    0x02: {'type': 'motion', 'class': 'motion'},
+    0x03: {'type': 'leak', 'class': 'moisture'},
+    0x0E: {'type': 'switchv2', 'class': 'opening'},
+    0x0F: {'type': 'motionv2', 'class': 'motion'}
+}
 
 # Read data from YAML file
 def read_yaml_file(filename):
@@ -227,10 +236,7 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
     LOGGER.info(f"Adding sensor to config: {sensor_mac}")
     SENSORS[sensor_mac] = dict()
     SENSORS[sensor_mac]['name'] = f"Wyze Sense {sensor_mac}"
-    SENSORS[sensor_mac]['class'] = (
-        "motion" if (sensor_type == "motion")
-        else "opening"
-    )
+    SENSORS[sensor_mac]['class'] = DEVICE_CLASSES.get(sensor_type, {'type': 'unknown', 'class': 'opening'}).get('class')
     SENSORS[sensor_mac]['invert_state'] = False
     if (sensor_version is not None):
         SENSORS[sensor_mac]['sw_version'] = sensor_version
@@ -380,7 +386,6 @@ def on_message_scan(MQTT_CLIENT, userdata, msg):
         LOGGER.debug(f"Scan result: {result}")
         if (result):
             sensor_mac, sensor_type, sensor_version = result
-            sensor_type = ("motion" if (sensor_type == 2) else "opening")
             if (valid_sensor_mac(sensor_mac)):
                 if (SENSORS.get(sensor_mac)) is None:
                     add_sensor_to_config(
@@ -424,15 +429,6 @@ def on_message_reload(MQTT_CLIENT, userdata, msg):
 def on_event(WYZESENSE_DONGLE, event):
     global SENSORS
 
-    # Simplify mapping of device classes.
-    DEVICE_CLASSES = {
-        'leak': 'moisture',
-        'motion': 'motion',
-        'motionv2': 'motion',
-        'switch': 'opening',
-        'switchv2': 'opening'
-    }
-
     # List of states that correlate to ON.
     STATES_ON = ['active', 'open', 'wet']
 
@@ -447,12 +443,13 @@ def on_event(WYZESENSE_DONGLE, event):
                 if(CONFIG['hass_discovery']):
                     send_discovery_topics(event.MAC)
 
+            device = [DEVICE_CLASSES[i] for i in DEVICE_CLASSES if DEVICE_CLASSES[i].get('type') == sensor_type][0]
             # Build event payload
             event_payload = {
                 'event': event.Type,
                 'available': True,
                 'mac': event.MAC,
-                'device_class': DEVICE_CLASSES.get(sensor_type),
+                'device_class': device.get('class'),
                 'last_seen': event.Timestamp.timestamp(),
                 'last_seen_iso': event.Timestamp.isoformat(),
                 'signal_strength': sensor_signal * -1,
