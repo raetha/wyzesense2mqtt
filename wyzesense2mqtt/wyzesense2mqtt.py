@@ -428,7 +428,9 @@ def on_event(WYZESENSE_DONGLE, event):
     DEVICE_CLASSES = {
         'leak': 'moisture',
         'motion': 'motion',
+        'motionv2': 'motion',
         'switch': 'opening',
+        'switchv2': 'opening'
     }
 
     # List of states that correlate to ON.
