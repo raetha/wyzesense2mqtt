@@ -262,8 +262,8 @@ class Dongle(object):
         alarm_data = pkt.Payload[17:]
 
         # {sensor_id: "sensor type", "states": ["off state", "on state"]}
-        contact_ids = {0x01: "switch", 0xE: "switchv2", "states": ["close", "open"]}
-        motion_ids = {0x02: "motion", 0xF: "motionv2", "states": ["inactive", "active"]}
+        contact_ids = {0x01: "switch", 0x0E: "switchv2", "states": ["close", "open"]}
+        motion_ids = {0x02: "motion", 0x0F: "motionv2", "states": ["inactive", "active"]}
         leak_ids = {0x03: "leak", "states": ["dry", "wet"]}
 
         if event_type == 0xA2 or event_type == 0xA1:
