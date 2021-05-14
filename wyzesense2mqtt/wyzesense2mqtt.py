@@ -148,7 +148,7 @@ def init_wyzesense_dongle():
             if (("e024" in line) and ("1a86" in line)):
                 for device_name in line.split(" "):
                     if ("hidraw" in device_name):
-                        CONFIG['usb_dongle'] = "/dev/%s" % device_name
+                        CONFIG['usb_dongle'] = f"/dev/{device_name}"
                         break
 
     LOGGER.info(f"Connecting to dongle {CONFIG['usb_dongle']}")
