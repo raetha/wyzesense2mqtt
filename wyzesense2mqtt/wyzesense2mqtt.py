@@ -166,7 +166,7 @@ def init_wyzesense_dongle():
 def init_sensors():
     # Initialize sensor dictionary
     global SENSORS
-    SENSORS = dict()
+    SENSORS = {}
 
     # Load config file
     LOGGER.debug("Reading sensors configuration...")
@@ -232,10 +232,11 @@ def valid_sensor_mac(sensor_mac):
 def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
     global SENSORS
     LOGGER.info(f"Adding sensor to config: {sensor_mac}")
-    SENSORS[sensor_mac] = dict()
-    SENSORS[sensor_mac]['name'] = f"Wyze Sense {sensor_mac}"
-    SENSORS[sensor_mac]['class'] = DEVICE_CLASSES.get(sensor_type)
-    SENSORS[sensor_mac]['invert_state'] = False
+    SENSORS[sensor_mac] = {
+        'name': f"Wyze Sense {sensor_mac}",
+        'class': DEVICE_CLASSES.get(sensor_type),
+        'invert_state': False
+    }
     if (sensor_version is not None):
         SENSORS[sensor_mac]['sw_version'] = sensor_version
 
