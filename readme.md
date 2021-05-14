@@ -179,7 +179,7 @@ root:
 ```
 
 ### sensors.yaml
-This file will store basic information about each sensor paired to the Wyse Sense Bridge. The entries can be modified to set the class type and sensor name as it will show in Home Assistant. Since this file can be automatically generated, Python may automatically quote the MACs or not depending on if they are fully numeric.
+This file will store basic information about each sensor paired to the Wyse Sense Bridge. The entries can be modified to set the class type and sensor name as it will show in Home Assistant. Class types can be automatically filled for `opening`, `motion`, and `moisture`, depending on the type of sensor. More class types that Home Assistant recgonizes can be found in the [`binary_sensor` documentation](https://www.home-assistant.io/integrations/binary_sensor/) Since this file can be automatically generated, Python may automatically quote the MACs or not depending on if they are fully numeric.
 ```yaml
 'AAAAAAAA':
   class: door
