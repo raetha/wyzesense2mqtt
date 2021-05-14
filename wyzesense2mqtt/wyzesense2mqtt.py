@@ -20,8 +20,8 @@ from retrying import retry
 
 
 # Configuration File Locations
-CONFIG_PATH = "config/"
-SAMPLES_PATH = "samples/"
+CONFIG_PATH = "config"
+SAMPLES_PATH = "samples"
 MAIN_CONFIG_FILE = "config.yaml"
 LOGGING_CONFIG_FILE = "logging.yaml"
 SENSORS_CONFIG_FILE = "sensors.yaml"
@@ -62,13 +62,13 @@ def write_yaml_file(filename, data):
 # Initialize logging
 def init_logging():
     global LOGGER
-    if (not os.path.isfile(CONFIG_PATH + LOGGING_CONFIG_FILE)):
+    if (not os.path.isfile(os.path.join(CONFIG_PATH, LOGGING_CONFIG_FILE))):
         print("Copying default logging config file...")
         try:
-            shutil.copy2(SAMPLES_PATH + LOGGING_CONFIG_FILE, CONFIG_PATH)
+            shutil.copy2(os.path.join(SAMPLES_PATH, LOGGING_CONFIG_FILE), CONFIG_PATH)
         except IOError as error:
             print(f"Unable to copy default logging config file. {str(error)}")
-    logging_config = read_yaml_file(CONFIG_PATH + LOGGING_CONFIG_FILE)
+    logging_config = read_yaml_file(os.path.join(CONFIG_PATH, LOGGING_CONFIG_FILE))
 
     log_path = os.path.dirname(logging_config['handlers']['file']['filename'])
     try:
@@ -87,12 +87,12 @@ def init_config():
     LOGGER.debug("Initializing configuration...")
 
     # load base config - allows for auto addition of new settings
-    if (os.path.isfile(SAMPLES_PATH + MAIN_CONFIG_FILE)):
-        CONFIG = read_yaml_file(SAMPLES_PATH + MAIN_CONFIG_FILE)
+    if (os.path.isfile(os.path.join(SAMPLES_PATH, MAIN_CONFIG_FILE))):
+        CONFIG = read_yaml_file(os.path.join(SAMPLES_PATH, MAIN_CONFIG_FILE))
 
     # load user config over base
-    if (os.path.isfile(CONFIG_PATH + MAIN_CONFIG_FILE)):
-        user_config = read_yaml_file(CONFIG_PATH + MAIN_CONFIG_FILE)
+    if (os.path.isfile(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE))):
+        user_config = read_yaml_file(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE))
         CONFIG.update(user_config)
 
     # fail on no config
@@ -103,7 +103,7 @@ def init_config():
     # write updated config file if needed
     if (CONFIG != user_config):
         LOGGER.info("Writing updated config file")
-        write_yaml_file(CONFIG_PATH + MAIN_CONFIG_FILE, CONFIG)
+        write_yaml_file(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE), CONFIG)
 
 
 # Initialize MQTT client connection
@@ -170,8 +170,8 @@ def init_sensors():
 
     # Load config file
     LOGGER.debug("Reading sensors configuration...")
-    if (os.path.isfile(CONFIG_PATH + SENSORS_CONFIG_FILE)):
-        SENSORS = read_yaml_file(CONFIG_PATH + SENSORS_CONFIG_FILE)
+    if (os.path.isfile(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE))):
+        SENSORS = read_yaml_file(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE))
         sensors_config_file_found = True
     else:
         LOGGER.info("No sensors config file found.")
@@ -199,7 +199,7 @@ def init_sensors():
     # Save sensors file if didn't exist
     if (not sensors_config_file_found):
         LOGGER.info("Writing Sensors Config File")
-        write_yaml_file(CONFIG_PATH + SENSORS_CONFIG_FILE, SENSORS)
+        write_yaml_file(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE), SENSORS)
 
     # Send discovery topics
     if(CONFIG['hass_discovery']):
@@ -240,7 +240,7 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
     if (sensor_version is not None):
         SENSORS[sensor_mac]['sw_version'] = sensor_version
 
-    write_yaml_file(CONFIG_PATH + SENSORS_CONFIG_FILE, SENSORS)
+    write_yaml_file(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE), SENSORS)
 
 
 # Delete sensor from config
@@ -249,7 +249,7 @@ def delete_sensor_from_config(sensor_mac):
     LOGGER.info(f"Deleting sensor from config: {sensor_mac}")
     try:
         del SENSORS[sensor_mac]
-        write_yaml_file(CONFIG_PATH + SENSORS_CONFIG_FILE, SENSORS)
+        write_yaml_file(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE), SENSORS)
     except KeyError:
         LOGGER.debug(f"{sensor_mac} not found in SENSORS")
 
