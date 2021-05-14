@@ -27,13 +27,11 @@ LOGGING_CONFIG_FILE = "logging.yaml"
 SENSORS_CONFIG_FILE = "sensors.yaml"
 
 # Simplify mapping of device classes.
-# { sensor_id: {'type': 'sensor_type', 'class', 'device_class'} }
+# { **dict.fromkeys(['list', 'of', 'possible', 'identifiers'], 'device_class') }
 DEVICE_CLASSES = {
-    0x01: {'type': 'switch', 'class': 'opening'},
-    0x02: {'type': 'motion', 'class': 'motion'},
-    0x03: {'type': 'leak', 'class': 'moisture'},
-    0x0E: {'type': 'switchv2', 'class': 'opening'},
-    0x0F: {'type': 'motionv2', 'class': 'motion'}
+    **dict.fromkeys([0x01, 0x0E, 'switch', 'switchv2'], 'opening'),
+    **dict.fromkeys([0x02, 0x0F, 'motion', 'motionv2'], 'motion'),
+    **dict.fromkeys([0x03, 'leak'], 'moisture')
 }
 
 # Read data from YAML file
@@ -236,7 +234,7 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
     LOGGER.info(f"Adding sensor to config: {sensor_mac}")
     SENSORS[sensor_mac] = dict()
     SENSORS[sensor_mac]['name'] = f"Wyze Sense {sensor_mac}"
-    SENSORS[sensor_mac]['class'] = DEVICE_CLASSES.get(sensor_type, {'type': 'unknown', 'class': 'opening'}).get('class')
+    SENSORS[sensor_mac]['class'] = DEVICE_CLASSES.get(sensor_type)
     SENSORS[sensor_mac]['invert_state'] = False
     if (sensor_version is not None):
         SENSORS[sensor_mac]['sw_version'] = sensor_version
@@ -443,13 +441,12 @@ def on_event(WYZESENSE_DONGLE, event):
                 if(CONFIG['hass_discovery']):
                     send_discovery_topics(event.MAC)
 
-            device = [DEVICE_CLASSES[i] for i in DEVICE_CLASSES if DEVICE_CLASSES[i].get('type') == sensor_type][0]
             # Build event payload
             event_payload = {
                 'event': event.Type,
                 'available': True,
                 'mac': event.MAC,
-                'device_class': device.get('class'),
+                'device_class': DEVICE_CLASSES.get(sensor_type),
                 'last_seen': event.Timestamp.timestamp(),
                 'last_seen_iso': event.Timestamp.isoformat(),
                 'signal_strength': sensor_signal * -1,
