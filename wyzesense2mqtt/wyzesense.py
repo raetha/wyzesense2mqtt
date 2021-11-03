@@ -61,6 +61,7 @@ class Packet(object):
     NOTIFY_SENSOR_SCAN = MAKE_CMD(TYPE_ASYNC, 0x20)
     NOITFY_SYNC_TIME = MAKE_CMD(TYPE_ASYNC, 0x32)
     NOTIFY_EVENT_LOG = MAKE_CMD(TYPE_ASYNC, 0x35)
+    NOTIFY_HMS_EVENT = MAKE_CMD(TYPE_ASYNC, 0x55)
 
     def __init__(self, cmd, payload=bytes()):
         self._cmd = cmd
@@ -238,6 +239,16 @@ class SensorEvent(object):
             s += "AlarmEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
         elif self.Type == 'status':
             s += "StatusEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
+        elif self.Type == 'water':
+            s += "WaterEvent: water=%d ext_water=%d has_ext=%d battery=%d signal=%d" % self.Data
+        elif self.Type == 'climate':
+            s += "ClimateEvent: temperature=%d humidity=%d battery=%d signal=%d" % self.Data
+        elif self.Type == 'keypadMode':
+            s += "KeypadModeEvent: mode=%d, battery=%d signal=%d" % self.Data
+        elif self.Type == 'keypadMotion':
+            s += "KeypadModeEvent: motion=%d, battery=%d signal=%d" % self.Data
+        elif self.Type == 'keypadPin':
+            s+= "KeyPadPinEvent: pin=%s battery=%d signal=%d" % self.Data
         else:
             s += "RawEvent: type=%s, data=%s" % (self.Type, bytes_to_hex(self.Data))
         return s
@@ -288,7 +299,13 @@ class Dongle(object):
                 # is reporting way to high to actually be humidity.
                 sensor_type = "leak:temperature"
                 sensor_state = "%d.%d" % (alarm_data[5], alarm_data[6])
-            e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
+                e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
+            else:
+                temperature = alarm_data[0x05]
+                humidity = alarm_data[0x07]
+                battery = alarm_data[0x02]
+                signal = alarm_data[0x0A]
+                e = SensorEvent(sensor_mac, timestamp, "climate", (temperature, humidity, battery, signal))
         else:
             e = SensorEvent(sensor_mac, timestamp, "raw_%02X" % event_type, alarm_data)
 
@@ -305,6 +322,46 @@ class Dongle(object):
         msg = pkt.Payload[9:]
         log.info("LOG: time=%s, data=%s", tm.isoformat(), bytes_to_hex(msg))
 
+    def _OnHMSEvent(self, pkt):
+        payloadSubType = pkt.Payload[0x0E]
+        if payloadSubType == 0x12:
+            #Water sensor event
+            typeByte, mac = struct.unpack_from(">B8s", pkt.Payload); 
+            mac = mac.decode('ascii')  
+            water = pkt.Payload[0x0F]
+            ext_water = pkt.Payload[0x10]
+            has_ext = pkt.Payload[0x11]
+            signal = pkt.Payload[0x14]
+            battery = pkt.Payload[0x0C]
+            e = SensorEvent(mac, datetime.datetime.utcnow(), "water", (water, ext_water, has_ext, battery, signal))
+            self.__on_event(self, e)
+        elif payloadSubType == 0x0A or payloadSubType == 0x02:
+            typeByte, mac = struct.unpack_from(">B8s", pkt.Payload); 
+            mac = mac.decode('ascii')  
+            battery = pkt.Payload[0x0C]
+            signal = pkt.Payload[pkt.Payload[0x0A] + 0x0B]
+            if pkt.Payload[0x0E] == 0x02:
+                mode = pkt.Payload[0x0F] + 1
+                e = SensorEvent(mac, datetime.datetime.utcnow(), "keypadMode", (mode, battery, signal))
+                self.__on_event(self, e)
+            else:
+                motion = pkt.Payload[0x0F]
+                e = SensorEvent(mac, datetime.datetime.utcnow(), "keypadMotion", (motion, battery, signal))
+                self.__on_event(self, e)
+        elif payloadSubType == 0x08:
+            typeByte, mac = struct.unpack_from(">B8s", pkt.Payload); 
+            mac = mac.decode('ascii')  
+            battery = pkt.Payload[0x0C]
+            signal = pkt.Payload[pkt.Payload[0xA] + 0xB]
+
+            pinBytes = pkt.Payload[0xF:(0xF + pkt.Payload[0xA] - 6)]
+            pinIntList = [str(int) for int in list(pinBytes)]
+            pinStr = "".join(pinIntList)
+            
+            e = SensorEvent(mac, datetime.datetime.utcnow(), "keypadPin", (pinStr, battery, signal))
+            self.__on_event(self, e)
+                
+
     def __init__(self, device, event_handler):
         self.__lock = threading.Lock()
         self.__fd = os.open(device, os.O_RDWR | os.O_NONBLOCK)
@@ -317,6 +374,7 @@ class Dongle(object):
             Packet.NOITFY_SYNC_TIME: self._OnSyncTime,
             Packet.NOTIFY_SENSOR_ALARM: self._OnSensorAlarm,
             Packet.NOTIFY_EVENT_LOG: self._OnEventLog,
+            Packet.NOTIFY_HMS_EVENT: self._OnHMSEvent,
         }
 
         self._Start()
