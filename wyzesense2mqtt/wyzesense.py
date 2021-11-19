@@ -260,19 +260,27 @@ class Dongle(object):
         timestamp = datetime.datetime.fromtimestamp(timestamp / 1000.0)
         sensor_mac = sensor_mac.decode('ascii')
         alarm_data = pkt.Payload[17:]
+
+        # {sensor_id: "sensor type", "states": ["off state", "on state"]}
+        contact_ids = {0x01: "switch", 0x0E: "switchv2", "states": ["close", "open"]}
+        motion_ids = {0x02: "motion", 0x0F: "motionv2", "states": ["inactive", "active"]}
+        leak_ids = {0x03: "leak", "states": ["dry", "wet"]}
+
         if event_type == 0xA2 or event_type == 0xA1:
-            if alarm_data[0] == 0x01:
-                sensor_type = "switch"
-                sensor_state = "open" if alarm_data[5] == 1 else "close"
-            elif alarm_data[0] == 0x02:
-                sensor_type = "motion"
-                sensor_state = "active" if alarm_data[5] == 1 else "inactive"
-            elif alarm_data[0] == 0x03:
-                sensor_type = "leak"
-                sensor_state = "wet" if alarm_data[5] == 1 else "dry"
+            sensor = {}
+            if alarm_data[0] in contact_ids:
+                sensor = contact_ids
+            elif alarm_data[0] in motion_ids:
+                sensor = motion_ids
+            elif alarm_data[0] in leak_ids:
+                sensor = leak_ids
+            
+            if sensor:
+                sensor_type = sensor[alarm_data[0]]
+                sensor_state = sensor["states"][alarm_data[5]]
             else:
-                sensor_type = "unknown"
-                sensor_state = "unknown"
+                sensor_type = "unknown (" + alarm_data[0] + ")"
+                sensor_state = "unknown (" + alarm_data[5] + ")"
             e = SensorEvent(sensor_mac, timestamp, ("alarm" if event_type == 0xA2 else "status"), (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
         elif event_type == 0xE8:
             if alarm_data[0] == 0x03:
