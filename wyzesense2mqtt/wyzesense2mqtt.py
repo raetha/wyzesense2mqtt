@@ -431,17 +431,17 @@ def on_event(WYZESENSE_DONGLE, event):
     # List of states that correlate to ON.
     STATES_ON = ['active', 'open', 'wet']
 
-    if (valid_sensor_mac(event.MAC)):
+    if valid_sensor_mac(event.MAC):
         if (event.Type == "alarm") or (event.Type == "status"):
-            LOGGER.info(f"State event data: {event}")
             (sensor_type, sensor_state, sensor_battery, sensor_signal) = event.Data
 
             # Add sensor if it doesn't already exist
-            if (event.MAC not in SENSORS):
+            if event.MAC not in SENSORS:
                 add_sensor_to_config(event.MAC, sensor_type, None)
-                if(CONFIG['hass_discovery']):
+                if CONFIG['hass_discovery']:
                     send_discovery_topics(event.MAC)
 
+            LOGGER.info(f"State event data from {SENSORS[event.MAC]['name']}: {event}")
             # Build event payload
             event_payload = {
                 'event': event.Type,
