@@ -5,6 +5,7 @@ import json
 import logging
 import logging.config
 import logging.handlers
+import paho.mqtt.subscribe as subscribe
 import os
 import shutil
 import subprocess
@@ -30,7 +31,8 @@ SENSORS_STATE_FILE = "state.yaml"
 DEVICE_CLASSES = {
     **dict.fromkeys([0x01, 0x0E, 'switch', 'switchv2'], 'opening'),
     **dict.fromkeys([0x02, 0x0F, 'motion', 'motionv2'], 'motion'),
-    **dict.fromkeys([0x03, 'leak'], 'moisture')
+    **dict.fromkeys([0x03, 'leak'], 'moisture'),
+    **dict.fromkeys([0x05, 'keypad'], 'alarm_control_panel'),
 }
 
 
@@ -352,8 +354,15 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
 
     SENSORS[sensor_mac]['class'] = "opening" if sensor_type is None else DEVICE_CLASSES.get(sensor_type)
 
-    if (sensor_version is not None):
-        SENSORS[sensor_mac]['sw_version'] = sensor_version
+    if sensor_version is not None:
+        'class': DEVICE_CLASSES.get(sensor_type),
+        'sw_version': sensor_version,
+    }
+
+    if DEVICE_CLASSES.get(sensor_type) == "alarm_control_panel":
+        SENSORS[sensor_mac].update(
+            {'pin': '0000', 'arm_required': True, 'disarm_required': True}
+        )
 
     # Intialize last seen time to now and start online
     SENSORS_STATE[sensor_mac] = {
@@ -395,6 +404,24 @@ def mqtt_publish(mqtt_topic, mqtt_payload, is_json=True, wait=True):
     LOGGER.warning(f"MQTT publish error: {mqtt.error_string(mqtt_message_info.rc)}")
 
 
+def mqtt_simple_subscribe(mqtt_topic):
+    global MQTT_CLIENT, CONFIG
+    msg = subscribe.simple(
+        mqtt_topic,
+        qos=CONFIG['mqtt_qos'],
+        retained=True,
+        hostname=CONFIG['mqtt_host'],
+        port=CONFIG['mqtt_port'],
+        client_id=CONFIG['mqtt_client_id'],
+        auth={'username': CONFIG['mqtt_username'], 'password': CONFIG['mqtt_password']}
+        if CONFIG['mqtt_username']
+        else None,
+        keepalive=CONFIG['mqtt_keepalive'],
+    )
+
+    return json.loads(msg.payload)
+
+
 # Send discovery topics
 def send_discovery_topics(sensor_mac, wait=True):
     global SENSORS, CONFIG, SENSORS_STATE
@@ -408,6 +435,16 @@ def send_discovery_topics(sensor_mac, wait=True):
     else:
         sensor_version = ""
 
+    model = "Sense {}"
+    if sensor_class == "motion":
+        model = model.format("Motion Sensor")
+    elif sensor_class == "opening":
+        model = model.format("Contact Sensor")
+    elif sensor_class == "keypad":
+        model = model.format("Keypad")
+    else:
+        model = model.format("Device")
+
     mac_topic = f"{CONFIG['self_topic_root']}/{sensor_mac}"
 
     entity_payloads = {
@@ -420,9 +457,7 @@ def send_discovery_topics(sensor_mac, wait=True):
             'device' : {
                'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
                'manufacturer': "Wyze",
-               'model': (
-                  "Sense Motion Sensor" if (sensor_class == "motion") else "Sense Contact Sensor"
-               ),
+               'model': f"Sense {model}",
                'name': sensor_name,
                'sw_version': sensor_version,
                'via_device': "wyzesense2mqtt"
@@ -435,7 +470,7 @@ def send_discovery_topics(sensor_mac, wait=True):
             'entity_category': "diagnostic",
             'device' : {
                'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
-               'name': sensor_name
+               'name': f"{sensor_name} Signal Strength",
             }
         },
         'battery': {
@@ -445,7 +480,7 @@ def send_discovery_topics(sensor_mac, wait=True):
             'entity_category': "diagnostic",
             'device' : {
                'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
-               'name': sensor_name
+               'name': f"{sensor_name} Battery",
             }
         }
     }
@@ -455,6 +490,46 @@ def send_discovery_topics(sensor_mac, wait=True):
         { 'topic': f"{CONFIG['self_topic_root']}/status" }
     ]
 
+    if sensor_class == "alarm_control_panel":
+        entity_payloads.update(
+            {
+                'mode': {
+                    'name': sensor_name,
+                    'pl_arm_away': "armed_away",
+                    'pl_arm_home': "armed_home",
+                    'pl_disarm': "disarmed",
+                    'code': SENSORS[sensor_mac]['pin'],
+                    'code_arm_required': SENSORS[sensor_mac]['arm_required'],
+                    'code_disarm_required': SENSORS[sensor_mac]['disarm_required'],
+                    'stat_t': f"{CONFIG['self_topic_root']}/{sensor_mac}/mode",
+                    'val_tpl': f"{{{{ value_json.state }}}}",
+                    'cmd_t': f"{CONFIG['self_topic_root']}/{sensor_mac}/set",
+                    'cmd_tpl': '{ "mode": "{{ action }}", "pin": "{{ code }}" }',
+                },
+                'motion': {
+                    'name': f"{sensor_name} Motion",
+                    'dev_cla': 'motion',
+                    'pl_on': "1",
+                    'pl_off': "0",
+                    'val_tpl': f"{{{{ value_json.state }}}}",
+                    'stat_t': f"{CONFIG['self_topic_root']}/{sensor_mac}/motion",
+                },
+            }
+        )
+
+        sensor_type = ""
+        if sensor_class != "alarm_control_panel":
+            sensor_type = "binary_sensor" if (entity == "state") else "sensor"
+        else:
+            if entity == "mode":
+                sensor_type = "alarm_control_panel"
+                entity = "state"
+            elif entity == "motion":
+                sensor_type = "binary_sensor"
+                entity = "state"
+            else:
+                sensor_type = "sensor"
+
     for entity, entity_payload in entity_payloads.items():
         entity_payload['value_template'] = f"{{{{ value_json.{entity} }}}}"
         entity_payload['unique_id'] = f"wyzesense_{sensor_mac}_{entity}"
@@ -463,7 +538,20 @@ def send_discovery_topics(sensor_mac, wait=True):
         entity_payload['availability_mode'] = "all"
         entity_payload['platform'] = "mqtt"
 
-        entity_topic = f"{CONFIG['hass_topic_root']}/{'binary_sensor' if (entity == 'state') else 'sensor'}/wyzesense_{sensor_mac}/{entity}/config"
+        sensor_type = ""
+        if sensor_class != "alarm_control_panel":
+            sensor_type = "binary_sensor" if (entity == "state") else "sensor"
+        else:
+            if entity == "mode":
+                sensor_type = "alarm_control_panel"
+                entity = "state"
+            elif entity == "motion":
+                sensor_type = "binary_sensor"
+                entity = "state"
+            else:
+                sensor_type = "sensor"
+
+        entity_topic = f"{CONFIG['hass_topic_root']}/{sensor_type}/wyzesense_{sensor_mac}/{entity}/config"
         mqtt_publish(entity_topic, entity_payload, wait=wait)
 
         LOGGER.info(f"  {entity_topic}")
@@ -471,37 +559,50 @@ def send_discovery_topics(sensor_mac, wait=True):
     mqtt_publish(f"{CONFIG['self_topic_root']}/{sensor_mac}/status", "online" if SENSORS_STATE[sensor_mac]['online'] else "offline", is_json=False, wait=wait)
 
 # Clear any retained topics in MQTT
-def clear_topics(sensor_mac, wait=True):
+def clear_topics(sensor_mac):
     global CONFIG
     LOGGER.info("Clearing sensor topics")
-    mqtt_publish(f"{CONFIG['self_topic_root']}/{sensor_mac}/status", None, wait=wait)
-    mqtt_publish(f"{CONFIG['self_topic_root']}/{sensor_mac}", None, wait=wait)
+    state_topic = f"{CONFIG['self_topic_root']}/{sensor_mac}"
+    mqtt_publish(state_topic, None, wait=wait)
+    mqtt_publish(f"{state_topic}/status}", None, wait=wait)
+
+    if SENSORS[sensor_mac]['class'] == 'alarm_control_panel':
+        for i in ['mode', 'motion', 'pin', 'set']:
+            mqtt_publish(f"{state_topic}/{i}", None, wait=wait)
 
     # clear discovery topics if configured
-    if(CONFIG['hass_discovery']):
-        entity_types = ['state', 'signal_strength', 'battery']
+    if CONFIG['hass_discovery']:
+        entity_types = {
+            'sensor': ['battery', 'signal_strength'],
+            'binary_sensor': ['state'],
+            'alarm_control_panel': ['state'],
+        }
+
         for entity_type in entity_types:
-            sensor_type = (
-                "binary_sensor" if (entity_type == "state")
-                else "sensor"
-            )
-            mqtt_publish(f"{CONFIG['hass_topic_root']}/{sensor_type}/wyzesense_{sensor_mac}/{entity_type}/config", None, wait=wait)
-            mqtt_publish(f"{CONFIG['hass_topic_root']}/{sensor_type}/wyzesense_{sensor_mac}/{entity_type}", None, wait=wait)
-            mqtt_publish(f"{CONFIG['hass_topic_root']}/{sensor_type}/wyzesense_{sensor_mac}", None, wait=wait)
+            for entity in entity_types[entity_type]:
+                entity_topic = f"{CONFIG['hass_topic_root']}/{entity_type}/wyzesense_{sensor_mac}"
+                mqtt_publish(f"{entity_topic}/{entity_type}/config", None, wait=wait)
+                mqtt_publish(f"{entity_topic}/{entity_type}", None, wait=wait)
+                mqtt_publish(entity_topic, None, wait=wait)
 
 
 def on_connect(MQTT_CLIENT, userdata, flags, rc):
     global CONFIG
     if rc == mqtt.MQTT_ERR_SUCCESS:
         MQTT_CLIENT.subscribe(
-            [(SCAN_TOPIC, CONFIG['mqtt_qos']),
-             (REMOVE_TOPIC, CONFIG['mqtt_qos']),
-             (RELOAD_TOPIC, CONFIG['mqtt_qos'])]
+            [
+                (SCAN_TOPIC, CONFIG['mqtt_qos']),
+                (REMOVE_TOPIC, CONFIG['mqtt_qos']),
+                (RELOAD_TOPIC, CONFIG['mqtt_qos']),
+                (SET_TOPIC, CONFIG['mqtt_qos']),
+            ]
         )
         MQTT_CLIENT.message_callback_add(SCAN_TOPIC, on_message_scan)
         MQTT_CLIENT.message_callback_add(REMOVE_TOPIC, on_message_remove)
         MQTT_CLIENT.message_callback_add(RELOAD_TOPIC, on_message_reload)
+        MQTT_CLIENT.message_callback_add(SET_TOPIC, on_message_set)
         MQTT_CLIENT.connected_flag = True
+
         LOGGER.info(f"Connected to MQTT: {mqtt.error_string(rc)}")
     else:
         LOGGER.warning(f"Connection to MQTT failed: {mqtt.error_string(rc)}")
@@ -511,7 +612,9 @@ def on_disconnect(MQTT_CLIENT, userdata, rc):
     MQTT_CLIENT.message_callback_remove(SCAN_TOPIC)
     MQTT_CLIENT.message_callback_remove(REMOVE_TOPIC)
     MQTT_CLIENT.message_callback_remove(RELOAD_TOPIC)
+    MQTT_CLIENT.message_callback_remove(SET_TOPIC)
     MQTT_CLIENT.connected_flag = False
+
     LOGGER.info(f"Disconnected from MQTT: {mqtt.error_string(rc)}")
 
 
@@ -579,6 +682,47 @@ def on_message_reload(MQTT_CLIENT, userdata, msg):
     init_sensors(wait=False)
 
 
+# Process message to set keypad state
+def on_message_set(MQTT_CLIENT, userdata, msg):
+    LOGGER.info(f"In on_message_set: {msg.payload.decode()}")
+    parts = msg.topic.split('/')
+    payload = json.loads(msg.payload)
+    if payload and payload['mode'] is not None:
+        set_keypad_mode(parts[1], payload)
+
+
+def set_keypad_mode(keypad_mac, payload):
+    mode = payload['mode']
+    pin = payload['pin']
+
+    if not validate_pin_entry(keypad_mac, mode, pin):
+        return
+
+    mode_payload = {'state': mode}
+
+    mode_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/mode"
+    set_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/set"
+
+    mqtt_publish(mode_topic, mode_payload)
+    mqtt_publish(set_topic, {'mode': None, 'pin': False})
+
+
+def validate_pin_entry(mac, mode, pin=None):
+    pin_topic = f"{CONFIG['self_topic_root']}/{mac}/pin"
+    config = SENSORS[mac]
+
+    if pin is None:
+        pin = mqtt_simple_subscribe(pin_topic)['state']
+
+    if pin != config['pin']:
+        if (mode in ["armed_away", "armed_home"] and config['arm_required']) or (
+            mode == "disarmed" and config['disarm_required']
+        ):
+            return False
+
+    return True
+
+
 # Process event
 def on_event(WYZESENSE_DONGLE, event):
     global SENSORS, SENSORS_STATE
@@ -588,70 +732,148 @@ def on_event(WYZESENSE_DONGLE, event):
 
     if event == "ERROR":
         mqtt_publish(f"{CONFIG['self_topic_root']}/status", "offline", is_json=False)
+        return
 
-    if (valid_sensor_mac(event.MAC)):
-        if (event.MAC not in SENSORS):
+    if valid_sensor_mac(event.MAC):
+        # Ensure sensor exists (auto-add on first sight)
+        if event.MAC not in SENSORS:
+            # If we haven't parsed event.Data yet, we don't know event_type; pass None for now.
             add_sensor_to_config(event.MAC, None, None)
-            if(CONFIG['hass_discovery']):
+            if CONFIG.get('hass_discovery'):
                 send_discovery_topics(event.MAC)
             LOGGER.warning(f"Linked sensor with mac {event.MAC} automatically added to sensors configuration")
-            LOGGER.warning(f"Please update sensor configuration file {os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE)} restart the service/reload the sensors")
+            LOGGER.warning(
+                f"Please update sensor configuration file {os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE)} "
+                "and restart the service/reload the sensors"
+            )
 
-        # Store last seen time for availability
+        # Availability tracking
+        # Store last seen time for availability in SENSORS_STATE
+        if event.MAC not in SENSORS_STATE:
+            SENSORS_STATE[event.MAC] = {}
         SENSORS_STATE[event.MAC]['last_seen'] = event.Timestamp.timestamp()
 
+        # Publish LWT-style status topic
         mqtt_publish(f"{CONFIG['self_topic_root']}/{event.MAC}/status", "online", is_json=False)
 
-        # Set back online if it was offline
-        if not SENSORS_STATE[event.MAC]['online']:
+        # Flip internal online flag if it was offline
+        if not SENSORS_STATE[event.MAC].get('online', True):
             SENSORS_STATE[event.MAC]['online'] = True
             LOGGER.info(f"{event.MAC} is back online!")
-
-        if (event.Type == "alarm") or (event.Type == "status"):
-            LOGGER.debug(f"State event data: {event}")
-            (sensor_type, sensor_state, sensor_battery, sensor_signal) = event.Data
-
-            # Set state depending on state string and `invert_state` setting.
-            #     State ON ^ NOT Inverted = True
-            #     State OFF ^ NOT Inverted = False
-            #     State ON ^ Inverted = False
-            #     State OFF ^ Inverted = True
-            sensor_state = int((sensor_state in STATES_ON) ^ (SENSORS[event.MAC].get('invert_state')))
-
-            # V2 sensors use a single 1.5v battery and reports half the battery level of other sensors with 3v batteries
-            if sensor_type == "switchv2":
-                sensor_battery = sensor_battery * 2
-
-            # Adjust battery to max it at 100%
-            sensor_battery = 100 if sensor_battery > 100 else sensor_battery
-
-            # Negate signal strength to match dbm vs percent
-            sensor_signal = sensor_signal * -1
-
-            sensor_signal = min(max(2 * (sensor_signal + 115), 1), 100)
-
-            # Build event payload
-            event_payload = {
-                'mac': event.MAC,
-                'signal_strength': sensor_signal,
-                'battery': sensor_battery,
-                'state': sensor_state,
-                'last_seen': event.Timestamp.isoformat(),
-            }
-
-            if (CONFIG['publish_sensor_name']):
-                event_payload['name'] = SENSORS[event.MAC]['name']
-
-            mqtt_publish(f"{CONFIG['self_topic_root']}/{event.MAC}", event_payload)
-
-            LOGGER.info(f"{CONFIG['self_topic_root']}/{event.MAC}")
-            LOGGER.info(event_payload)
         else:
+            # Ensure the field is present
+            SENSORS_STATE[event.MAC]['online'] = True
+
+        # Base payload present for all valid events
+        base_topic = f"{CONFIG['self_topic_root']}/{event.MAC}"
+        event_payload = {
+            'event': event.Type,
+            'available': True,
+            'mac': event.MAC,
+            'last_seen': event.Timestamp.timestamp(),
+            'last_seen_iso': event.Timestamp.isoformat(),
+        }
+        if CONFIG.get('publish_sensor_name') and event.MAC in SENSORS and 'name' in SENSORS[event.MAC]:
+            event_payload['name'] = SENSORS[event.MAC]['name']
+
+        # Handle state-like events (alarm/status/keypad provide Data tuple)
+        if event.Type in ["alarm", "status", "keypad"]:
+            LOGGER.info(f"State event data: {event}")
+            try:
+                # Feature branch semantics: (event_type, sensor_state, sensor_battery, sensor_signal)
+                (event_type, sensor_state, sensor_battery, sensor_signal) = event.Data
+            except Exception as ex:
+                LOGGER.exception(f"Unexpected event.Data format for {event}: {ex}")
+                return
+
+            # Make sure we saved the specific event_type for this sensor if we only had None before
+            if event.MAC in SENSORS and (SENSORS[event.MAC].get('type') is None):
+                try:
+                    add_sensor_to_config(event.MAC, event_type, None)
+                    if CONFIG.get('hass_discovery'):
+                        send_discovery_topics(event.MAC)
+                except Exception:
+                    # Don't hard-fail if config write fails; continue publishing.
+                    LOGGER.warning(f"Could not persist sensor type for {event.MAC}")
+
+            # Common signal/battery fields
+            # Convert to dBm and a rough % (matching your original mapping)
+            signal_dbm = (sensor_signal or 0) * -1
+            signal_pct = min(max(2 * (signal_dbm + 115), 1), 100)
+            event_payload.update({
+                'signal_dbm': signal_dbm,
+                'signal_strength': signal_pct,
+                'battery': sensor_battery,
+            })
+
+            # Special handling for V2 switch battery reporting (HALF value) from original branch
+            if event_type == "switchv2":
+                try:
+                    event_payload['battery'] = min((sensor_battery or 0) * 2, 100)
+                except Exception:
+                    pass
+            else:
+                # Cap battery at 100% for all others (original behavior)
+                try:
+                    event_payload['battery'] = min(sensor_battery or 0, 100)
+                except Exception:
+                    pass
+
+            # ALARM / STATUS: publish state and device class
+            if event.Type in ["alarm", "status"]:
+                # Device class (if available)
+                if 'DEVICE_CLASSES' in globals():
+                    event_payload['device_class'] = DEVICE_CLASSES.get(event_type)
+
+                # Compute boolean state, honoring invert_state (original behavior)
+                invert = bool(SENSORS[event.MAC].get('invert_state')) if event.MAC in SENSORS else False
+                try:
+                    event_payload['state'] = int((sensor_state in STATES_ON) ^ invert)
+                except Exception:
+                    # If sensor_state is not in expected form, fallback to raw
+                    event_payload['state'] = sensor_state
+
+                mqtt_publish(base_topic, event_payload)
+                LOGGER.debug(event_payload)
+
+            # KEYPAD: publish state and action-specific topics
+            elif event.Type == "keypad":
+                # For keypad, `sensor_state` is a string like mode/motion/pin events
+                state_payload = {"state": sensor_state}
+
+                event_topic = f"{base_topic}/{event_type}"
+                pin_topic = f"{base_topic}/pin"
+                set_topic = f"{base_topic}/set"
+
+                # Publish base event payload (availability/metadata)
+                mqtt_publish(base_topic, event_payload)
+
+                # For mode changes, validate the PIN entry if required
+                if event_type == "mode" and 'validate_pin_entry' in globals():
+                    if not validate_pin_entry(event.MAC, sensor_state):
+                        return
+
+                if event_type in ["mode", "motion"]:
+                    mqtt_publish(event_topic, state_payload)
+                    mqtt_publish(pin_topic, {'state': False})
+                    # Clear set request if we finished a mode set or motion ended
+                    if event_type == "mode" or sensor_state == "inactive":
+                        mqtt_publish(set_topic, {'mode': None, 'pin': False})
+                elif event_type in ['pinStart', 'pinConfirm']:
+                    mqtt_publish(pin_topic, state_payload)
+
+                # Echo final state in the event payload for logging/consumers
+                event_payload.update(state_payload)
+                LOGGER.debug(event_payload)
+
+        else:
+            # Events without Data (or other types) — log verbosely
             LOGGER.info(f"{event}")
 
     else:
         LOGGER.warning("!Invalid MAC detected!")
         LOGGER.warning(f"Event data: {event}")
+
 
 def Stop():
     # Stop the dongle first, letting this thread finish anything it might be busy doing, like handling an event
@@ -684,6 +906,7 @@ if __name__ == "__main__":
     SCAN_TOPIC = f"{CONFIG['self_topic_root']}/scan"
     REMOVE_TOPIC = f"{CONFIG['self_topic_root']}/remove"
     RELOAD_TOPIC = f"{CONFIG['self_topic_root']}/reload"
+    SET_TOPIC = f"{CONFIG['self_topic_root']}/+/set"
 
     # Initialize MQTT client connection
     init_mqtt_client()
