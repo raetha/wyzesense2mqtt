@@ -32,6 +32,7 @@ Please submit pull requests against the devel branch.
     - [Removing a Sensor](#removing-a-sensor)
     - [Reload Sensors](#reload-sensors)
     - [Command Line Tool](#command-line-tool)
+  - [Sense Keypad](#sense-keypad)
   - [Home Assistant](#home-assistant)
   - [Compatible Hardware](#compatible-hardware)
 
@@ -244,3 +245,20 @@ Home Assistant simply needs to be configured with the MQTT broker that the gatew
     * Climate Sensor (WSCS1) - Coming Soon Hopefully
     * Keypad (WSKP1) - Coming Soon Hopefully
     * Leak Sensor (WSLS1) - Coming Soon Hopefully
+
+### Sense Keypad
+After flashing firmware from the [Sense Hub](https://wyze.com/home-security-system-sensors.html) to the original Sensor Bridge, this project can now support the [Sense Keypad](https://wyze.com/wyze-sense-keypad.html) as well! This entails either [dumping firmware from your own Hub](https://github.com/HclX/WyzeHacks/issues/111#issuecomment-824558304) or using firmware that has already been dumped, and then flashing it. Using the [WyzeSenseUpgrade](https://github.com/AK5nowman/WyzeSense) project is recommended, but is considered "use at your own risk". When a keypad is paired with WyzeSense2MQTT, it will send auto-discovery topics which allow control and statuses from within Home Assistant. The entry in `sensors.yaml` for the keypad looks like the following:
+```yaml
+'FFFFFFFF':
+  class: alarm_control_panel
+  pin: '0000'
+  arm_required: true
+  disarm_required: true
+  invert_state: false
+  name: Front Door Keypad
+```
+
+- `pin` must be a string (surrounded by single or double quotes) of digits, but can be any length. Setting this to `"REMOTE_CODE"` will allow Home Assistant (when configured for discovery) to accept any PIN.
+- `arm_required` can be either `true` or `false`, and determines whether a pin is required to have been entered to arm the keypad
+- `disarm_required` can be either `true` or `false`, and determines whether a pin is required to have been entered to disarm the keypad
+- `invert_state` can be either `true` or `false`, and affects the motion sensor of the keypad, similarly to other supported sensors
