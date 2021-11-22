@@ -1,15 +1,18 @@
+import binascii
+
 from builtins import bytes
 from builtins import str
 
+import datetime
+import logging
 import os
-import time
 import struct
 import threading
-import datetime
-import binascii
+import time
 
-import logging
 log = logging.getLogger(__name__)
+TYPE_SYNC = 0x43
+TYPE_ASYNC = 0x53
 
 
 def bytes_to_hex(s):
@@ -21,10 +24,6 @@ def bytes_to_hex(s):
 
 def checksum_from_bytes(s):
     return sum(bytes(s)) & 0xFFFF
-
-
-TYPE_SYNC = 0x43
-TYPE_ASYNC = 0x53
 
 
 def MAKE_CMD(type, cmd):
@@ -75,7 +74,10 @@ class Packet(object):
         if self._cmd == self.ASYNC_ACK:
             return "Packet: Cmd=%04X, Payload=ACK(%04X)" % (self._cmd, self._payload)
         else:
-            return "Packet: Cmd=%04X, Payload=%s" % (self._cmd, bytes_to_hex(self._payload))
+            return "Packet: Cmd=%04X, Payload=%s" % (
+                self._cmd,
+                bytes_to_hex(self._payload),
+            )
 
     @property
     def Length(self):
@@ -140,7 +142,9 @@ class Packet(object):
         cs_local = checksum_from_bytes(s[:-2])
         if cs_remote != cs_local:
             log.error("Invalid packet: %s", bytes_to_hex(s))
-            log.error("Mismatched checksum, remote=%04X, local=%04X", cs_remote, cs_local)
+            log.error(
+                "Mismatched checksum, remote=%04X, local=%04X", cs_remote, cs_local
+            )
             return None
 
         return cls(cmd, payload)
@@ -441,7 +445,7 @@ class Dongle(object):
 
         # log.debug("Raw HID packet: %s", bytes_to_hex(s))
         assert len(s) >= length + 1
-        return s[1: 1 + length]
+        return s[1 : 1 + length]
 
     def _SetHandler(self, cmd, handler):
         with self.__lock:
@@ -488,8 +492,8 @@ class Dongle(object):
                 s = s[2:]
                 continue
 
-            log.debug("Received: %s", bytes_to_hex(s[:pkt.Length]))
-            s = s[pkt.Length:]
+            log.debug("Received: %s", bytes_to_hex(s[: pkt.Length]))
+            s = s[pkt.Length :]
             self._HandlePacket(pkt)
 
     def _DoCommand(self, pkt, handler, timeout=_CMD_TIMEOUT):
@@ -595,7 +599,11 @@ class Dongle(object):
                 if ctx.index == ctx.count:
                     e.set()
 
-            self._DoCommand(Packet.GetSensorList(count), cmd_handler, timeout=self._CMD_TIMEOUT * count)
+            self._DoCommand(
+                Packet.GetSensorList(count),
+                cmd_handler,
+                timeout=self._CMD_TIMEOUT * count,
+            )
         else:
             log.debug("No sensors bond yet...")
         return ctx.sensors
@@ -642,7 +650,11 @@ class Dongle(object):
 
         def scan_handler(pkt):
             assert len(pkt.Payload) == 11
-            ctx.result = (pkt.Payload[1:9].decode('ascii'), pkt.Payload[9], pkt.Payload[10])
+            ctx.result = (
+                pkt.Payload[1:9].decode('ascii'),
+                pkt.Payload[9],
+                pkt.Payload[10],
+            )
             ctx.evt.set()
 
         old_handler = self._SetHandler(Packet.NOTIFY_SENSOR_SCAN, scan_handler)
@@ -651,9 +663,11 @@ class Dongle(object):
 
             if ctx.evt.wait(timeout):
                 s_mac, s_type, s_ver = ctx.result
-                log.debug("Sensor found: mac=[%s], type=%d, version=%d", s_mac, s_type, s_ver)
+                log.debug(
+                    f"Sensor found: mac=[{s_mac}], type={s_type}, version={s_ver}"
+                )
                 r1 = self._GetSensorR1(s_mac, b'Ok5HPNQ4lf77u754')
-                log.debug("Sensor R1: %r", bytes_to_hex(r1))
+                log.debug(f"Sensor R1: {bytes_to_hex(r1)}")
             else:
                 log.debug("Sensor discovery timeout...")
 
@@ -667,13 +681,15 @@ class Dongle(object):
 
     def Delete(self, mac):
         resp = self._DoSimpleCommand(Packet.DelSensor(str(mac)))
-        log.debug("CmdDelSensor returns %s", bytes_to_hex(resp.Payload))
+        log.debug(f"CmdDelSensor returns {bytes_to_hex(resp.Payload)}")
         assert len(resp.Payload) == 9
         ack_mac = resp.Payload[:8].decode('ascii')
         ack_code = resp.Payload[8]
         assert ack_code == 0xFF, "CmdDelSensor: Unexpected ACK code: 0x%02X" % ack_code
-        assert ack_mac == mac, "CmdDelSensor: MAC mismatch, requested:%s, returned:%s" % (mac, ack_mac)
-        log.debug("CmdDelSensor: %s deleted", mac)
+        assert (
+            ack_mac == mac
+        ), f"CmdDelSensor: MAC mismatch, requested:{mac}, returned:{ack_mac}"
+        log.debug(f"CmdDelSensor: {mac} deleted")
 
 
 def Open(device, event_handler):

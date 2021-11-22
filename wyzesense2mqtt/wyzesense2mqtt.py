@@ -5,16 +5,19 @@ import json
 import logging
 import logging.config
 import logging.handlers
+
+import paho.mqtt.client as mqtt
 import paho.mqtt.subscribe as subscribe
+
 import os
+
+from retrying import retry
+
 import shutil
 import subprocess
 import yaml
 
-
-import paho.mqtt.client as mqtt
 import wyzesense
-from retrying import retry
 
 
 # Configuration File Locations
@@ -40,7 +43,7 @@ def read_yaml_file(filename):
             data = yaml.safe_load(yaml_file)
             return data
     except IOError as error:
-        if (LOGGER is None):
+        if LOGGER is None:
             print(f"File error: {str(error)}")
         else:
             LOGGER.error(f"File error: {str(error)}")
@@ -52,7 +55,7 @@ def write_yaml_file(filename, data):
         with open(filename, 'w') as yaml_file:
             yaml_file.write(yaml.safe_dump(data))
     except IOError as error:
-        if (LOGGER is None):
+        if LOGGER is None:
             print(f"File error: {str(error)}")
         else:
             LOGGER.error(f"File error: {str(error)}")
@@ -61,7 +64,7 @@ def write_yaml_file(filename, data):
 # Initialize logging
 def init_logging():
     global LOGGER
-    if (not os.path.isfile(os.path.join(CONFIG_PATH, LOGGING_CONFIG_FILE))):
+    if not os.path.isfile(os.path.join(CONFIG_PATH, LOGGING_CONFIG_FILE)):
         print("Copying default logging config file...")
         try:
             shutil.copy2(os.path.join(SAMPLES_PATH, LOGGING_CONFIG_FILE), CONFIG_PATH)
@@ -71,7 +74,7 @@ def init_logging():
 
     log_path = os.path.dirname(logging_config['handlers']['file']['filename'])
     try:
-        if (not os.path.exists(log_path)):
+        if not os.path.exists(log_path):
             os.makedirs(log_path)
     except IOError:
         print("Unable to create log folder")
@@ -86,21 +89,21 @@ def init_config():
     LOGGER.debug("Initializing configuration...")
 
     # load base config - allows for auto addition of new settings
-    if (os.path.isfile(os.path.join(SAMPLES_PATH, MAIN_CONFIG_FILE))):
+    if os.path.isfile(os.path.join(SAMPLES_PATH, MAIN_CONFIG_FILE)):
         CONFIG = read_yaml_file(os.path.join(SAMPLES_PATH, MAIN_CONFIG_FILE))
 
     # load user config over base
-    if (os.path.isfile(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE))):
+    if os.path.isfile(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE)):
         user_config = read_yaml_file(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE))
         CONFIG.update(user_config)
 
     # fail on no config
-    if (CONFIG is None):
+    if CONFIG is None:
         LOGGER.error(f"Failed to load configuration, please configure.")
         exit(1)
 
     # write updated config file if needed
-    if (CONFIG != user_config):
+    if CONFIG != user_config:
         LOGGER.info("Writing updated config file")
         write_yaml_file(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE), CONFIG)
 
@@ -110,8 +113,12 @@ def init_mqtt_client():
     global MQTT_CLIENT, CONFIG, LOGGER
 
     # Configure MQTT Client
-    MQTT_CLIENT = mqtt.Client(client_id=CONFIG['mqtt_client_id'], clean_session=CONFIG['mqtt_clean_session'])
-    MQTT_CLIENT.username_pw_set(username=CONFIG['mqtt_username'], password=CONFIG['mqtt_password'])
+    MQTT_CLIENT = mqtt.Client(
+        client_id=CONFIG['mqtt_client_id'], clean_session=CONFIG['mqtt_clean_session']
+    )
+    MQTT_CLIENT.username_pw_set(
+        username=CONFIG['mqtt_username'], password=CONFIG['mqtt_password']
+    )
     MQTT_CLIENT.reconnect_delay_set(min_delay=1, max_delay=120)
     MQTT_CLIENT.on_connect = on_connect
     MQTT_CLIENT.on_disconnect = on_disconnect
@@ -133,27 +140,35 @@ def retry_if_io_error(exception):
 
 
 # Initialize USB dongle
-@retry(wait_exponential_multiplier=1000, wait_exponential_max=30000, retry_on_exception=retry_if_io_error)
+@retry(
+    wait_exponential_multiplier=1000,
+    wait_exponential_max=30000,
+    retry_on_exception=retry_if_io_error,
+)
 def init_wyzesense_dongle():
     global WYZESENSE_DONGLE, CONFIG
-    if (CONFIG['usb_dongle'].lower() == "auto"):
-        device_list = subprocess.check_output(
-            ["ls", "-la", "/sys/class/hidraw"]
-        ).decode("utf-8").lower()
+    if CONFIG['usb_dongle'].lower() == "auto":
+        device_list = (
+            subprocess.check_output(["ls", "-la", "/sys/class/hidraw"])
+            .decode("utf-8")
+            .lower()
+        )
         for line in device_list.split("\n"):
-            if (("e024" in line) and ("1a86" in line)):
+            if ("e024" in line) and ("1a86" in line):
                 for device_name in line.split(" "):
-                    if ("hidraw" in device_name):
+                    if "hidraw" in device_name:
                         CONFIG['usb_dongle'] = f"/dev/{device_name}"
                         break
 
     LOGGER.info(f"Connecting to dongle {CONFIG['usb_dongle']}")
     try:
         WYZESENSE_DONGLE = wyzesense.Open(CONFIG['usb_dongle'], on_event)
-        LOGGER.debug(f"Dongle {CONFIG['usb_dongle']}: ["
-                     f" MAC: {WYZESENSE_DONGLE.MAC},"
-                     f" VER: {WYZESENSE_DONGLE.Version},"
-                     f" ENR: {WYZESENSE_DONGLE.ENR}]")
+        LOGGER.debug(
+            f"Dongle {CONFIG['usb_dongle']}: ["
+            f" MAC: {WYZESENSE_DONGLE.MAC},"
+            f" VER: {WYZESENSE_DONGLE.Version},"
+            f" ENR: {WYZESENSE_DONGLE.ENR}]"
+        )
     except IOError as error:
         LOGGER.warning(f"No device found on path {CONFIG['usb_dongle']}: {str(error)}")
 
@@ -166,7 +181,7 @@ def init_sensors():
 
     # Load config file
     LOGGER.debug("Reading sensors configuration...")
-    if (os.path.isfile(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE))):
+    if os.path.isfile(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE)):
         SENSORS = read_yaml_file(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE))
         sensors_config_file_found = True
     else:
@@ -183,10 +198,10 @@ def init_sensors():
     try:
         result = WYZESENSE_DONGLE.List()
         LOGGER.debug(f"Linked sensors: {result}")
-        if (result):
+        if result:
             for sensor_mac in result:
-                if (valid_sensor_mac(sensor_mac)):
-                    if (SENSORS.get(sensor_mac) is None):
+                if valid_sensor_mac(sensor_mac):
+                    if SENSORS.get(sensor_mac) is None:
                         add_sensor_to_config(sensor_mac, None, None)
         else:
             LOGGER.warning(f"Sensor list failed with result: {result}")
@@ -194,7 +209,7 @@ def init_sensors():
         pass
 
     # Save sensors file if didn't exist
-    if (not sensors_config_file_found):
+    if not sensors_config_file_found:
         LOGGER.info("Writing Sensors Config File")
         write_yaml_file(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE), SENSORS)
 
@@ -208,13 +223,13 @@ def init_sensors():
 
 # Validate sensor MAC
 def valid_sensor_mac(sensor_mac):
-    #LOGGER.debug(f"Validating MAC: {sensor_mac}")
+    # LOGGER.debug(f"Validating MAC: {sensor_mac}")
     invalid_mac_list = [
         "00000000",
         "\0\0\0\0\0\0\0\0",
-        "\x00\x00\x00\x00\x00\x00\x00\x00"
+        "\x00\x00\x00\x00\x00\x00\x00\x00",
     ]
-    if ((len(str(sensor_mac)) == 8) and (sensor_mac not in invalid_mac_list)):
+    if (len(str(sensor_mac)) == 8) and (sensor_mac not in invalid_mac_list):
         return True
     else:
         LOGGER.warning(f"Unpairing bad MAC: {sensor_mac}")
@@ -265,9 +280,9 @@ def mqtt_publish(mqtt_topic, mqtt_payload):
         mqtt_topic,
         payload=json.dumps(mqtt_payload),
         qos=CONFIG['mqtt_qos'],
-        retain=CONFIG['mqtt_retain']
+        retain=CONFIG['mqtt_retain'],
     )
-    if (mqtt_message_info.rc != mqtt.MQTT_ERR_SUCCESS):
+    if mqtt_message_info.rc != mqtt.MQTT_ERR_SUCCESS:
         LOGGER.warning(f"MQTT publish error: {mqtt.error_string(mqtt_message_info.rc)}")
 
 
@@ -297,7 +312,7 @@ def send_discovery_topics(sensor_mac):
 
     sensor_name = SENSORS[sensor_mac]['name']
     sensor_class = SENSORS[sensor_mac]['class']
-    if (SENSORS[sensor_mac].get('sw_version') is not None):
+    if SENSORS[sensor_mac].get('sw_version') is not None:
         sensor_version = SENSORS[sensor_mac]['sw_version']
     else:
         sensor_version = ""
@@ -467,16 +482,12 @@ def on_message_scan(MQTT_CLIENT, userdata, msg):
     try:
         result = WYZESENSE_DONGLE.Scan()
         LOGGER.debug(f"Scan result: {result}")
-        if (result):
+        if result:
             sensor_mac, sensor_type, sensor_version = result
-            if (valid_sensor_mac(sensor_mac)):
+            if valid_sensor_mac(sensor_mac):
                 if (SENSORS.get(sensor_mac)) is None:
-                    add_sensor_to_config(
-                        sensor_mac,
-                        sensor_type,
-                        sensor_version
-                    )
-                    if(CONFIG['hass_discovery']):
+                    add_sensor_to_config(sensor_mac, sensor_type, sensor_version)
+                    if CONFIG['hass_discovery']:
                         send_discovery_topics(sensor_mac)
             else:
                 LOGGER.debug(f"Invalid sensor found: {sensor_mac}")
@@ -491,7 +502,7 @@ def on_message_remove(MQTT_CLIENT, userdata, msg):
     LOGGER.info(f"In on_message_remove: {msg.payload.decode()}")
     sensor_mac = msg.payload.decode()
 
-    if (valid_sensor_mac(sensor_mac)):
+    if valid_sensor_mac(sensor_mac):
         try:
             WYZESENSE_DONGLE.Delete(sensor_mac)
             clear_topics(sensor_mac)
