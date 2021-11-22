@@ -241,9 +241,10 @@ def init_sensors(wait=True):
         sensors_config_file_found = False
 
     # Add invert_state value if missing
-    for sensor_mac in SENSORS:
-        if (SENSORS[sensor_mac].get('invert_state') is None):
-            SENSORS[sensor_mac]['invert_state'] = False
+    if SENSORS:
+        for sensor_mac in SENSORS:
+            if SENSORS[sensor_mac].get('invert_state') is None:
+                SENSORS[sensor_mac]['invert_state'] = False
 
     # Load previous known states
     if (os.path.isfile(os.path.join(CONFIG_PATH, SENSORS_STATE_FILE))):
