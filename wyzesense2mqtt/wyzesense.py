@@ -57,10 +57,11 @@ class Packet(object):
     CMD_GET_SENSOR_LIST = MAKE_CMD(TYPE_ASYNC, 0x30)
 
     # Notifications initiated from dongle side
-    NOTIFY_SENSOR_ALARM = MAKE_CMD(TYPE_ASYNC, 0x19)
+    NOTIFY_SENSOR_EVENT = MAKE_CMD(TYPE_ASYNC, 0x19)
     NOTIFY_SENSOR_SCAN = MAKE_CMD(TYPE_ASYNC, 0x20)
     NOITFY_SYNC_TIME = MAKE_CMD(TYPE_ASYNC, 0x32)
     NOTIFY_EVENT_LOG = MAKE_CMD(TYPE_ASYNC, 0x35)
+    NOTIFY_HMS_EVENT = MAKE_CMD(TYPE_ASYNC, 0x55)
 
     def __init__(self, cmd, payload=bytes()):
         self._cmd = cmd
@@ -226,71 +227,115 @@ class Packet(object):
 
 
 class SensorEvent(object):
-    def __init__(self, mac, timestamp, event_type, event_data):
+    def __init__(self, mac, timestamp, event_type, event_data, pkt=None):
         self.MAC = mac
         self.Timestamp = timestamp
         self.Type = event_type
         self.Data = event_data
+        self.Payload = pkt
 
     def __str__(self):
-        s = "[%s][%s]" % (self.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), self.MAC)
-        if self.Type == 'alarm':
-            s += "AlarmEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
-        elif self.Type == 'status':
-            s += "StatusEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
+        formatted_time = self.Timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        s = f"[{formatted_time}][{self.MAC}]\n"
+        if self.Payload is not None:
+            s += "Payload: "
+            for idx, i in enumerate(self.Payload):
+                s += f"{idx}: {i}, "
+            s += "\n"
+        if self.Type in ['alarm', 'status', 'keypad']:
+            s += f"{self.Type.title()}Event: event_type={self.Data[0]}, state={self.Data[1]}, battery={self.Data[2]}, signal={self.Data[3]}"
         else:
-            s += "RawEvent: type=%s, data=%s" % (self.Type, bytes_to_hex(self.Data))
+            s += f"RawEvent: type={self.Type}, data={bytes_to_hex(self.Data)}"
         return s
 
 
 class Dongle(object):
     _CMD_TIMEOUT = 2
 
+    def __init__(self, device, event_handler):
+        self.__lock = threading.Lock()
+        self.__fd = os.open(device, os.O_RDWR | os.O_NONBLOCK)
+        self.__exit_event = threading.Event()
+        self.__thread = threading.Thread(target=self._Worker)
+        self.__on_event = event_handler
+
+        self.__handlers = {
+            Packet.NOTIFY_SENSOR_EVENT: self._OnSensorEvent,
+            Packet.NOITFY_SYNC_TIME: self._OnSyncTime,
+            Packet.NOTIFY_EVENT_LOG: self._OnEventLog,
+            Packet.NOTIFY_HMS_EVENT: self._OnHMSEvent,
+        }
+
+        self._Start()
+
     class CmdContext(object):
         def __init__(self, **kwargs):
             for key in kwargs:
                 setattr(self, key, kwargs[key])
 
-    def _OnSensorAlarm(self, pkt):
+    def _OnSensorEvent(self, pkt):
         if len(pkt.Payload) < 18:
-            log.info("Unknown alarm packet: %s", bytes_to_hex(pkt.Payload))
+            log.info(f"Unknown event packet: {bytes_to_hex(pkt.Payload)}")
             return
 
         timestamp, event_type, sensor_mac = struct.unpack_from(">QB8s", pkt.Payload)
         timestamp = datetime.datetime.fromtimestamp(timestamp / 1000.0)
         sensor_mac = sensor_mac.decode('ascii')
-        alarm_data = pkt.Payload[17:]
+        event_data = pkt.Payload[17:]
+
+        event_types = {0xA1: "status", 0xA2: "alarm", 0xE8: "leak"}
 
         # {sensor_id: "sensor type", "states": ["off state", "on state"]}
         contact_ids = {0x01: "switch", 0x0E: "switchv2", "states": ["close", "open"]}
-        motion_ids = {0x02: "motion", 0x0F: "motionv2", "states": ["inactive", "active"]}
+        motion_ids = {
+            0x02: "motion",
+            0x0F: "motionv2",
+            "states": ["inactive", "active"],
+        }
         leak_ids = {0x03: "leak", "states": ["dry", "wet"]}
+        keypad_ids = {0x05: "keypad", "states": ["pair"]}
 
-        if event_type == 0xA2 or event_type == 0xA1:
+        if event_type in [0xA1, 0xA2]:
             sensor = {}
-            if alarm_data[0] in contact_ids:
-                sensor = contact_ids
-            elif alarm_data[0] in motion_ids:
-                sensor = motion_ids
-            elif alarm_data[0] in leak_ids:
-                sensor = leak_ids
-            
-            if sensor:
-                sensor_type = sensor[alarm_data[0]]
-                sensor_state = sensor["states"][alarm_data[5]]
-            else:
-                sensor_type = "unknown (" + alarm_data[0] + ")"
-                sensor_state = "unknown (" + alarm_data[5] + ")"
-            e = SensorEvent(sensor_mac, timestamp, ("alarm" if event_type == 0xA2 else "status"), (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
+            for i in [contact_ids, motion_ids, leak_ids, keypad_ids]:
+                if event_data[0] in i:
+                    sensor = i
+
+            sensor_type = (
+                sensor[event_data[0]]
+                if sensor
+                else "unknown ({})".format(event_data[0])
+            )
+            sensor_state = (
+                sensor["states"][event_data[5]]
+                if sensor
+                else "unknown ({})".format(event_data[5])
+            )
+
+            battery = int(
+                event_data[2] / 155 * 100 if event_type in keypad_ids else event_data[2]
+            )
+
+            e = SensorEvent(
+                sensor_mac,
+                timestamp,
+                event_types[event_type],
+                (sensor_type, sensor_state, battery, event_data[-1]),
+            )
         elif event_type == 0xE8:
-            if alarm_data[0] == 0x03:
+            if event_data[0] == 0x03:
                 # alarm_data[7] might be humidity in some form, but as an integer
                 # is reporting way to high to actually be humidity.
                 sensor_type = "leak:temperature"
-                sensor_state = "%d.%d" % (alarm_data[5], alarm_data[6])
-            e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
+                sensor_state = "%d.%d" % (event_data[5], event_data[6])
+                e = SensorEvent(
+                    sensor_mac,
+                    timestamp,
+                    "state",
+                    (sensor_type, sensor_state, event_data[2], event_data[8]),
+                )
         else:
-            e = SensorEvent(sensor_mac, timestamp, "raw_%02X" % event_type, alarm_data)
+            e = SensorEvent(sensor_mac, timestamp, "raw_%02X" % event_type, event_data)
 
         self.__on_event(self, e)
 
@@ -303,23 +348,80 @@ class Dongle(object):
         # assert msg_len + 8 == len(pkt.Payload)
         tm = datetime.datetime.fromtimestamp(ts / 1000.0)
         msg = pkt.Payload[9:]
-        log.info("LOG: time=%s, data=%s", tm.isoformat(), bytes_to_hex(msg))
+        log.info(f"LOG: time={tm.isoformat()}, data={bytes_to_hex(msg)}")
 
-    def __init__(self, device, event_handler):
-        self.__lock = threading.Lock()
-        self.__fd = os.open(device, os.O_RDWR | os.O_NONBLOCK)
-        self.__sensors = {}
-        self.__exit_event = threading.Event()
-        self.__thread = threading.Thread(target=self._Worker)
-        self.__on_event = event_handler
+    def _OnHMSEvent(self, pkt):
+        _, sensor_mac = struct.unpack_from(">B8s", pkt.Payload)
+        sensor_mac = sensor_mac.decode('ascii')
+        timestamp = datetime.datetime.utcnow()
 
-        self.__handlers = {
-            Packet.NOITFY_SYNC_TIME: self._OnSyncTime,
-            Packet.NOTIFY_SENSOR_ALARM: self._OnSensorAlarm,
-            Packet.NOTIFY_EVENT_LOG: self._OnEventLog,
+        event_data = pkt.Payload[10:]
+        event_type = event_data[4]
+        battery = int(event_data[2] / 155 * 100)
+
+        mode_ids = {
+            0x02: "mode",
+            "states": ["unknown", "disarmed", "armed_home", "armed_away", "triggered"],
+        }
+        motion_ids = {
+            0x0A: "motion",
+            "states": ["inactive", "active"],
         }
 
-        self._Start()
+        pin_ids = {0x06: "pinStart", 0x08: "pinConfirm"}
+
+        sensor = {}
+        if event_type in [0x02, 0x0A]:
+            for i in [mode_ids, motion_ids]:
+                if event_type in i:
+                    sensor = i
+
+            sensor_type = (
+                sensor[event_type] if sensor else "unknown ({})".format(event_type)
+            )
+            sensor_state = (
+                sensor["states"][event_data[5]]
+                if sensor
+                else "unknown ({})".format(event_data[5])
+            )
+
+            e = SensorEvent(
+                sensor_mac,
+                timestamp,
+                "keypad",
+                (sensor_type, sensor_state, battery, event_data[-1]),
+            )
+        elif event_type in [0x06, 0x08]:
+            for i in [pin_ids]:
+                if event_type in i:
+                    sensor = i
+
+            if sensor:
+                pin = (
+                    False
+                    if event_type == 0x06
+                    else "".join(
+                        [str(d) for d in event_data[5 : (5 + event_data[0] - 6)]]
+                    )
+                )
+
+                sensor_type = sensor[event_type]
+                sensor_state = pin
+            else:
+                sensor_type = "unknown ({})".format(event_type)
+                sensor_state = "unknown ({})".format(event_type)
+
+            e = SensorEvent(
+                sensor_mac,
+                timestamp,
+                "keypad",
+                (sensor_type, sensor_state, battery, event_data[-1]),
+                pkt.Payload,
+            )
+        else:
+            e = SensorEvent(sensor_mac, timestamp, "raw_%02X" % event_type, event_data)
+
+        self.__on_event(self, e)
 
     def _ReadRawHID(self):
         try:
