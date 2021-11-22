@@ -1,12 +1,14 @@
+import binascii
+
 from builtins import bytes
 from builtins import str
 
+import datetime
+import logging
 import os
-import time
 import struct
 import threading
-import datetime
-import binascii
+import time
 
 import logging
 
@@ -80,7 +82,10 @@ class Packet(object):
         if self._cmd == self.ASYNC_ACK:
             return "Packet: Cmd=%04X, Payload=ACK(%04X)" % (self._cmd, self._payload)
         else:
-            return "Packet: Cmd=%04X, Payload=%s" % (self._cmd, bytes_to_hex(self._payload))
+            return "Packet: Cmd=%04X, Payload=%s" % (
+                self._cmd,
+                bytes_to_hex(self._payload),
+            )
 
     @property
     def Length(self):
@@ -433,7 +438,7 @@ class Dongle(object):
 
         # LOGGER.debug("Raw HID packet: %s", bytes_to_hex(s))
         assert len(s) >= length + 1
-        return s[1: 1 + length]
+        return s[1 : 1 + length]
 
     def _SetHandler(self, cmd, handler):
         with self.__lock:
@@ -652,7 +657,11 @@ class Dongle(object):
 
         def scan_handler(pkt):
             assert len(pkt.Payload) == 11
-            ctx.result = (pkt.Payload[1:9].decode('ascii'), pkt.Payload[9], pkt.Payload[10])
+            ctx.result = (
+                pkt.Payload[1:9].decode('ascii'),
+                pkt.Payload[9],
+                pkt.Payload[10],
+            )
             ctx.evt.set()
 
         old_handler = self._SetHandler(Packet.NOTIFY_SENSOR_SCAN, scan_handler)

@@ -5,8 +5,14 @@ import json
 import logging
 import logging.config
 import logging.handlers
+
+import paho.mqtt.client as mqtt
 import paho.mqtt.subscribe as subscribe
+
 import os
+
+from retrying import retry
+
 import shutil
 import subprocess
 import yaml
@@ -14,7 +20,6 @@ import time
 
 import paho.mqtt.client as mqtt
 import wyzesense
-from retrying import retry
 
 
 # Configuration File Locations
@@ -69,7 +74,7 @@ def read_yaml_file(filename):
             data = yaml.safe_load(yaml_file)
             return data
     except IOError as error:
-        if (LOGGER is None):
+        if LOGGER is None:
             print(f"File error: {str(error)}")
         else:
             LOGGER.error(f"File error: {str(error)}")
@@ -81,7 +86,7 @@ def write_yaml_file(filename, data):
         with open(filename, 'w') as yaml_file:
             yaml_file.write(yaml.safe_dump(data))
     except IOError as error:
-        if (LOGGER is None):
+        if LOGGER is None:
             print(f"File error: {str(error)}")
         else:
             LOGGER.error(f"File error: {str(error)}")
@@ -90,7 +95,7 @@ def write_yaml_file(filename, data):
 # Initialize logging
 def init_logging():
     global LOGGER
-    if (not os.path.isfile(os.path.join(CONFIG_PATH, LOGGING_CONFIG_FILE))):
+    if not os.path.isfile(os.path.join(CONFIG_PATH, LOGGING_CONFIG_FILE)):
         print("Copying default logging config file...")
         try:
             shutil.copy2(os.path.join(SAMPLES_PATH, LOGGING_CONFIG_FILE), CONFIG_PATH)
@@ -100,7 +105,7 @@ def init_logging():
 
     log_path = os.path.dirname(logging_config['handlers']['file']['filename'])
     try:
-        if (not os.path.exists(log_path)):
+        if not os.path.exists(log_path):
             os.makedirs(log_path)
     except IOError:
         print("Unable to create log folder")
@@ -112,6 +117,7 @@ def init_logging():
 # Initialize configuration
 def init_config():
     global CONFIG
+
     LOGGER.info("Initializing configuration...")
 
     # Initialize CONFIG dictionary with default values
@@ -154,7 +160,7 @@ def init_config():
             CONFIG.update({key: value})
 
     # fail on no config
-    if (CONFIG is None):
+    if CONFIG is None:
         LOGGER.error(f"Failed to load configuration, please configure.")
         exit(1)
 
@@ -177,6 +183,7 @@ def init_mqtt_client():
     else:
         # paho-mqtt 2.x
         MQTT_CLIENT = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1,client_id=CONFIG['mqtt_client_id'], clean_session=CONFIG['mqtt_clean_session'])
+
     MQTT_CLIENT.username_pw_set(username=CONFIG['mqtt_username'], password=CONFIG['mqtt_password'])
     MQTT_CLIENT.reconnect_delay_set(min_delay=1, max_delay=120)
     MQTT_CLIENT.on_connect = on_connect
@@ -202,15 +209,19 @@ def retry_if_io_error(exception):
 
 
 # Initialize USB dongle
-@retry(wait_exponential_multiplier=1000, wait_exponential_max=30000, retry_on_exception=retry_if_io_error)
+@retry(
+    wait_exponential_multiplier=1000,
+    wait_exponential_max=30000,
+    retry_on_exception=retry_if_io_error,
+)
 def init_wyzesense_dongle():
     global WYZESENSE_DONGLE, CONFIG, LOGGER
     if (CONFIG['usb_dongle'].lower() == "auto"):
         device_list = subprocess.check_output(["ls", "-la", "/sys/class/hidraw"]).decode("utf-8").lower()
         for line in device_list.split("\n"):
-            if (("e024" in line) and ("1a86" in line)):
+            if ("e024" in line) and ("1a86" in line):
                 for device_name in line.split(" "):
-                    if ("hidraw" in device_name):
+                    if "hidraw" in device_name:
                         CONFIG['usb_dongle'] = f"/dev/{device_name}"
                         break
 
@@ -267,8 +278,8 @@ def init_sensors(wait=True):
             checked_linked = True
 
             for sensor_mac in result:
-                if (valid_sensor_mac(sensor_mac)):
-                    if (SENSORS.get(sensor_mac) is None):
+                if valid_sensor_mac(sensor_mac):
+                    if SENSORS.get(sensor_mac) is None:
                         add_sensor_to_config(sensor_mac, None, None)
                         LOGGER.warning(f"Linked sensor with mac {sensor_mac} automatically added to sensors configuration")
                         LOGGER.warning(f"Please update sensor configuration file {os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE)} restart the service/reload the sensors")
@@ -313,7 +324,7 @@ def init_sensors(wait=True):
 
 
     # Save sensors file if didn't exist
-    if (not sensors_config_file_found):
+    if not sensors_config_file_found:
         LOGGER.info("Writing Sensors Config File")
         write_yaml_file(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE), SENSORS)
 
@@ -329,10 +340,10 @@ def valid_sensor_mac(sensor_mac):
     invalid_mac_list = [
         "00000000",
         "\0\0\0\0\0\0\0\0",
-        "\x00\x00\x00\x00\x00\x00\x00\x00"
+        "\x00\x00\x00\x00\x00\x00\x00\x00",
     ]
 
-    if ((len(str(sensor_mac)) == 8) and (sensor_mac not in invalid_mac_list)):
+    if (len(str(sensor_mac)) == 8) and (sensor_mac not in invalid_mac_list):
         return True
     else:
         LOGGER.warning(f"Unpairing bad MAC: {sensor_mac}")
@@ -395,8 +406,9 @@ def mqtt_publish(mqtt_topic, mqtt_payload, is_json=True, wait=True):
         mqtt_topic,
         payload=payload,
         qos=CONFIG['mqtt_qos'],
-        retain=CONFIG['mqtt_retain']
+        retain=CONFIG['mqtt_retain'],
     )
+
     if (mqtt_message_info.rc == mqtt.MQTT_ERR_SUCCESS):
         if (wait):
             mqtt_message_info.wait_for_publish(2)
@@ -431,7 +443,7 @@ def send_discovery_topics(sensor_mac, wait=True):
 
     sensor_name = SENSORS[sensor_mac]['name']
     sensor_class = SENSORS[sensor_mac]['class']
-    if (SENSORS[sensor_mac].get('sw_version') is not None):
+    if SENSORS[sensor_mac].get('sw_version') is not None:
         sensor_version = SENSORS[sensor_mac]['sw_version']
     else:
         sensor_version = ""
@@ -660,6 +672,7 @@ def on_message_remove(MQTT_CLIENT, userdata, msg):
     if (valid_sensor_mac(sensor_mac)):
         # Deleting from the dongle may timeout, but we still need to do
         # the rest so catch it early
+
         try:
             WYZESENSE_DONGLE.Delete(sensor_mac)
         except TimeoutError:
