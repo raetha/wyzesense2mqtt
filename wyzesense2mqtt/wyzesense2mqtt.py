@@ -174,9 +174,10 @@ def init_sensors():
         sensors_config_file_found = False
 
     # Add invert_state value if missing
-    for sensor_mac in SENSORS:
-        if (SENSORS[sensor_mac].get('invert_state') is None):
-            SENSORS[sensor_mac]['invert_state'] = False
+    if SENSORS:
+        for sensor_mac in SENSORS:
+            if SENSORS[sensor_mac].get('invert_state') is None:
+                SENSORS[sensor_mac]['invert_state'] = False
 
     # Check config against linked sensors
     try:
@@ -198,10 +199,11 @@ def init_sensors():
         write_yaml_file(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE), SENSORS)
 
     # Send discovery topics
-    if(CONFIG['hass_discovery']):
-        for sensor_mac in SENSORS:
-            if (valid_sensor_mac(sensor_mac)):
-                send_discovery_topics(sensor_mac)
+    if CONFIG['hass_discovery']:
+        if SENSORS:
+            for sensor_mac in SENSORS:
+                if valid_sensor_mac(sensor_mac):
+                    send_discovery_topics(sensor_mac)
 
 
 # Validate sensor MAC
