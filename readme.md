@@ -252,13 +252,15 @@ After flashing firmware from the [Sense Hub](https://wyze.com/home-security-syst
 'FFFFFFFF':
   class: alarm_control_panel
   pin: '0000'
+  expose_pin: false
   arm_required: true
   disarm_required: true
   invert_state: false
   name: Front Door Keypad
 ```
 
-- `pin` must be a string (surrounded by single or double quotes) of digits, but can be any length. Setting this to `"REMOTE_CODE"` will allow Home Assistant (when configured for discovery) to accept any PIN.
-- `arm_required` can be either `true` or `false`, and determines whether a pin is required to have been entered to arm the keypad
-- `disarm_required` can be either `true` or `false`, and determines whether a pin is required to have been entered to disarm the keypad
-- `invert_state` can be either `true` or `false`, and affects the motion sensor of the keypad, similarly to other supported sensors
+- `pin` must be a string (surrounded by single or double quotes) of digits, but can be any length. Can also be a list of PIN strings, which will be validated against.
+- `expose_pin` can be either `true` or `false`. If `true`, a `sensor` entity will be exposed to MQTT discovery which contains the most recent PIN entered. The same PIN will also be saved in the MQTT broker.
+- `arm_required` can be either `true` or `false`, and determines whether a pin is required to have been entered to arm the keypad.
+- `disarm_required` can be either `true` or `false`, and determines whether a pin is required to have been entered to disarm the keypad.
+- `invert_state` can be either `true` or `false`, and affects the motion sensor of the keypad, similarly to other supported sensors.
