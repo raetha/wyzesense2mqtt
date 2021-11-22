@@ -373,7 +373,12 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
 
     if DEVICE_CLASSES.get(sensor_type) == "alarm_control_panel":
         SENSORS[sensor_mac].update(
-            {'pin': '0000', 'arm_required': True, 'disarm_required': True}
+            {
+                'pin': '0000',
+                'arm_required': True,
+                'disarm_required': True,
+                'expose_pin': False,
+            }
         )
 
     # Intialize last seen time to now and start online
@@ -531,6 +536,17 @@ def send_discovery_topics(sensor_mac, wait=True):
                 },
             }
         )
+        if SENSORS[sensor_mac]['expose_pin']:
+            entity_payloads.update(
+                {
+                    'pin': {
+                        'name': f"{sensor_name} Pin",
+                        'val_tpl': f"{{{{ value_json.state }}}}",
+                        'stat_t': f"{CONFIG['self_topic_root']}/{sensor_mac}/pin",
+                        'icon': 'mdi:lock',
+                    }
+                }
+            )
 
         sensor_type = ""
         if sensor_class != "alarm_control_panel":
@@ -717,10 +733,14 @@ def set_keypad_mode(keypad_mac, payload):
     mode_payload = {'state': mode}
 
     mode_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/mode"
+    pin_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/pin"
     set_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/set"
 
     mqtt_publish(mode_topic, mode_payload)
     mqtt_publish(set_topic, {'mode': None, 'pin': False})
+    if SENSORS[keypad_mac]['expose_pin']:
+        pin_payload = {'state': pin}
+        mqtt_publish(pin_topic, pin_payload)
 
 
 def validate_pin_entry(mac, mode, pin=None):
