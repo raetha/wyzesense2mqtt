@@ -253,7 +253,12 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
 
     if DEVICE_CLASSES.get(sensor_type) == "alarm_control_panel":
         SENSORS[sensor_mac].update(
-            {'pin': '0000', 'arm_required': True, 'disarm_required': True}
+            {
+                'pin': '0000',
+                'arm_required': True,
+                'disarm_required': True,
+                'expose_pin': False,
+            }
         )
 
     if sensor_version is not None:
@@ -388,6 +393,17 @@ def send_discovery_topics(sensor_mac):
                 },
             }
         )
+        if SENSORS[sensor_mac]['expose_pin']:
+            entity_payloads.update(
+                {
+                    'pin': {
+                        'name': f"{sensor_name} Pin",
+                        'val_tpl': f"{{{{ value_json.state }}}}",
+                        'stat_t': f"{CONFIG['self_topic_root']}/{sensor_mac}/pin",
+                        'icon': 'mdi:lock',
+                    }
+                }
+            )
 
     for entity, entity_payload in entity_payloads.items():
         entity_payload['val_tpl'] = entity_payload.get(
@@ -540,10 +556,14 @@ def set_keypad_mode(keypad_mac, payload):
     mode_payload = {'state': mode}
 
     mode_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/mode"
+    pin_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/pin"
     set_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/set"
 
     mqtt_publish(mode_topic, mode_payload)
     mqtt_publish(set_topic, {'mode': None, 'pin': False})
+    if SENSORS[keypad_mac]['expose_pin']:
+        pin_payload = {'state': pin}
+        mqtt_publish(pin_topic, pin_payload)
 
 
 def validate_pin_entry(mac, mode, pin=None):
@@ -631,7 +651,8 @@ def on_event(WYZESENSE_DONGLE, event):
 
             if event_type in ["mode", "motion"]:
                 mqtt_publish(event_topic, state_payload)
-                mqtt_publish(pin_topic, {'state': False})
+                if not SENSORS[event.MAC]['expose_pin']:
+                    mqtt_publish(pin_topic, {'state': False})
                 if event_type == "mode" or sensor_state == "inactive":
                     mqtt_publish(set_topic, {'mode': None, 'pin': False})
             elif event_type in ['pinStart', 'pinConfirm']:
