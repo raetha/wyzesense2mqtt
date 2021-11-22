@@ -368,7 +368,9 @@ def send_discovery_topics(sensor_mac):
                     'pl_arm_away': "armed_away",
                     'pl_arm_home': "armed_home",
                     'pl_disarm': "disarmed",
-                    'code': SENSORS[sensor_mac]['pin'],
+                    'code': "REMOTE_CODE"
+                    if type(SENSORS[sensor_mac]['pin']) == list
+                    else SENSORS[sensor_mac]['pin'],
                     'code_arm_required': SENSORS[sensor_mac]['arm_required'],
                     'code_disarm_required': SENSORS[sensor_mac]['disarm_required'],
                     'stat_t': f"{CONFIG['self_topic_root']}/{sensor_mac}/mode",
@@ -547,17 +549,23 @@ def set_keypad_mode(keypad_mac, payload):
 def validate_pin_entry(mac, mode, pin=None):
     pin_topic = f"{CONFIG['self_topic_root']}/{mac}/pin"
     config = SENSORS[mac]
+    accepted_pins = config['pin'] if type(config['pin']) == list else [config['pin']]
 
     if pin is None:
         pin = mqtt_simple_subscribe(pin_topic)['state']
 
-    if pin != config['pin']:
+    if pin not in accepted_pins:
         if (mode in ["armed_away", "armed_home"] and config['arm_required']) or (
             mode == "disarmed" and config['disarm_required']
         ):
+            LOGGER.debug("PIN rejected, aborting.")
             return False
-
-    return True
+        else:
+            LOGGER.debug(f"PIN not required for {mode}, continuing...")
+            return True
+    else:
+        LOGGER.debug("PIN accepted, continuing...")
+        return True
 
 
 # Process event
