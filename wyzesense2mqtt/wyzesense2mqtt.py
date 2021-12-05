@@ -7,6 +7,7 @@ import logging.config
 import logging.handlers
 
 import paho.mqtt.client as mqtt
+import paho.mqtt.publish as publish
 import paho.mqtt.subscribe as subscribe
 
 import os
@@ -15,6 +16,7 @@ from retrying import retry
 
 import shutil
 import subprocess
+import time
 import yaml
 import time
 
@@ -378,6 +380,10 @@ def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
                 'arm_required': True,
                 'disarm_required': True,
                 'expose_pin': False,
+                'delay_time': 60,
+                'arming_time': 60,
+                'trigger_time': 120,
+                'disarm_after_trigger': False,
             }
         )
 
@@ -423,7 +429,7 @@ def mqtt_publish(mqtt_topic, mqtt_payload, is_json=True, wait=True):
 
 
 def mqtt_simple_subscribe(mqtt_topic):
-    global MQTT_CLIENT, CONFIG
+    global CONFIG
     msg = subscribe.simple(
         mqtt_topic,
         qos=CONFIG['mqtt_qos'],
@@ -437,7 +443,25 @@ def mqtt_simple_subscribe(mqtt_topic):
         keepalive=CONFIG['mqtt_keepalive'],
     )
 
+    LOGGER.debug(f"Received {msg.payload} from {mqtt_topic}")
     return json.loads(msg.payload)
+
+
+def mqtt_single_publish(mqtt_topic, payload):
+    global CONFIG
+    publish.single(
+        mqtt_topic,
+        payload=json.dumps(payload),
+        qos=CONFIG['mqtt_qos'],
+        retain=CONFIG['mqtt_retain'],
+        hostname=CONFIG['mqtt_host'],
+        port=CONFIG['mqtt_port'],
+        client_id=CONFIG['mqtt_client_id'],
+        auth={'username': CONFIG['mqtt_username'], 'password': CONFIG['mqtt_password']}
+        if CONFIG['mqtt_username']
+        else None,
+        keepalive=CONFIG['mqtt_keepalive'],
+    )
 
 
 # Send discovery topics
@@ -730,15 +754,17 @@ def set_keypad_mode(keypad_mac, payload):
     if not validate_pin_entry(keypad_mac, mode, pin):
         return
 
-    mode_payload = {'state': mode}
-
     mode_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/mode"
-    pin_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/pin"
-    set_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/set"
+    current_mode = mqtt_simple_subscribe(mode_topic)['state']
+    delay_keypad_mode(keypad_mac, mode, current_mode)
 
+    mode_payload = {'state': mode}
     mqtt_publish(mode_topic, mode_payload)
+
+    set_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/set"
     mqtt_publish(set_topic, {'mode': None, 'pin': False})
     if SENSORS[keypad_mac]['expose_pin']:
+        pin_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/pin"
         pin_payload = {'state': pin}
         mqtt_publish(pin_topic, pin_payload)
 
@@ -765,6 +791,44 @@ def validate_pin_entry(mac, mode, pin=None):
         return True
 
 
+def delay_keypad_mode(keypad_mac, to_mode, from_mode):
+    mode_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/mode"
+    sleep_time = 0
+    event_payload = {}
+    state = SENSORS[keypad_mac].get(to_mode) or SENSORS[keypad_mac]
+
+    if to_mode in ["armed_away", "armed_home"]:
+        event_payload['state'] = 'arming'
+        sleep_time = state.get(
+            'arming_time', SENSORS[keypad_mac].get('arming_time', 60)
+        )
+    elif to_mode in ["disarmed"]:
+        event_payload['state'] = 'disarming'
+    elif to_mode in ["triggered"]:
+        event_payload['state'] = 'pending'
+        state = SENSORS[keypad_mac].get(from_mode) or SENSORS[keypad_mac]
+        sleep_time = state.get('delay_time', SENSORS[keypad_mac].get('delay_time', 60))
+
+    LOGGER.debug(f"Changing to {event_payload['state']}...")
+    mqtt_single_publish(mode_topic, event_payload)
+    if sleep_time > 0:
+        LOGGER.debug(f"Delaying change to {to_mode} for {sleep_time} seconds...")
+        if to_mode == "triggered":
+            slept = 0
+            while slept < sleep_time:
+                if mqtt_simple_subscribe(mode_topic)['state'] in [
+                    "disarmed",
+                    "armed_home",
+                ]:
+                    LOGGER.debug(f"Disarmed during trigger delay, canceling alarm.")
+                    return False
+                time.sleep(1)
+                slept += 1
+        else:
+            time.sleep(sleep_time)
+    return True
+
+
 # Process event
 def on_event(WYZESENSE_DONGLE, event):
     global SENSORS, SENSORS_STATE
@@ -776,145 +840,183 @@ def on_event(WYZESENSE_DONGLE, event):
         mqtt_publish(f"{CONFIG['self_topic_root']}/status", "offline", is_json=False)
         return
 
-    if valid_sensor_mac(event.MAC):
-        # Ensure sensor exists (auto-add on first sight)
-        if event.MAC not in SENSORS:
-            # If we haven't parsed event.Data yet, we don't know event_type; pass None for now.
-            add_sensor_to_config(event.MAC, None, None)
-            if CONFIG.get('hass_discovery'):
-                send_discovery_topics(event.MAC)
-            LOGGER.warning(f"Linked sensor with mac {event.MAC} automatically added to sensors configuration")
-            LOGGER.warning(
-                f"Please update sensor configuration file {os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE)} "
-                "and restart the service/reload the sensors"
-            )
-
-        # Availability tracking
-        # Store last seen time for availability in SENSORS_STATE
-        if event.MAC not in SENSORS_STATE:
-            SENSORS_STATE[event.MAC] = {}
-        SENSORS_STATE[event.MAC]['last_seen'] = event.Timestamp.timestamp()
-
-        # Publish LWT-style status topic
-        mqtt_publish(f"{CONFIG['self_topic_root']}/{event.MAC}/status", "online", is_json=False)
-
-        # Flip internal online flag if it was offline
-        if not SENSORS_STATE[event.MAC].get('online', True):
-            SENSORS_STATE[event.MAC]['online'] = True
-            LOGGER.info(f"{event.MAC} is back online!")
-        else:
-            # Ensure the field is present
-            SENSORS_STATE[event.MAC]['online'] = True
-
-        # Base payload present for all valid events
-        base_topic = f"{CONFIG['self_topic_root']}/{event.MAC}"
-        event_payload = {
-            'event': event.Type,
-            'available': True,
-            'mac': event.MAC,
-            'last_seen': event.Timestamp.timestamp(),
-            'last_seen_iso': event.Timestamp.isoformat(),
-        }
-        if CONFIG.get('publish_sensor_name') and event.MAC in SENSORS and 'name' in SENSORS[event.MAC]:
-            event_payload['name'] = SENSORS[event.MAC]['name']
-
-        # Handle state-like events (alarm/status/keypad provide Data tuple)
-        if event.Type in ["alarm", "status", "keypad"]:
-            LOGGER.info(f"State event data: {event}")
-            try:
-                # Feature branch semantics: (event_type, sensor_state, sensor_battery, sensor_signal)
-                (event_type, sensor_state, sensor_battery, sensor_signal) = event.Data
-            except Exception as ex:
-                LOGGER.exception(f"Unexpected event.Data format for {event}: {ex}")
-                return
-
-            # Make sure we saved the specific event_type for this sensor if we only had None before
-            if event.MAC in SENSORS and (SENSORS[event.MAC].get('type') is None):
-                try:
-                    add_sensor_to_config(event.MAC, event_type, None)
-                    if CONFIG.get('hass_discovery'):
-                        send_discovery_topics(event.MAC)
-                except Exception:
-                    # Don't hard-fail if config write fails; continue publishing.
-                    LOGGER.warning(f"Could not persist sensor type for {event.MAC}")
-
-            # Common signal/battery fields
-            # Convert to dBm and a rough % (matching your original mapping)
-            signal_dbm = (sensor_signal or 0) * -1
-            signal_pct = min(max(2 * (signal_dbm + 115), 1), 100)
-            event_payload.update({
-                'signal_dbm': signal_dbm,
-                'signal_strength': signal_pct,
-                'battery': sensor_battery,
-            })
-
-            # Special handling for V2 switch battery reporting (HALF value) from original branch
-            if event_type == "switchv2":
-                try:
-                    event_payload['battery'] = min((sensor_battery or 0) * 2, 100)
-                except Exception:
-                    pass
-            else:
-                # Cap battery at 100% for all others (original behavior)
-                try:
-                    event_payload['battery'] = min(sensor_battery or 0, 100)
-                except Exception:
-                    pass
-
-            # ALARM / STATUS: publish state and device class
-            if event.Type in ["alarm", "status"]:
-                # Device class (if available)
-                if 'DEVICE_CLASSES' in globals():
-                    event_payload['device_class'] = DEVICE_CLASSES.get(event_type)
-
-                # Compute boolean state, honoring invert_state (original behavior)
-                invert = bool(SENSORS[event.MAC].get('invert_state')) if event.MAC in SENSORS else False
-                try:
-                    event_payload['state'] = int((sensor_state in STATES_ON) ^ invert)
-                except Exception:
-                    # If sensor_state is not in expected form, fallback to raw
-                    event_payload['state'] = sensor_state
-
-                mqtt_publish(base_topic, event_payload)
-                LOGGER.debug(event_payload)
-
-            # KEYPAD: publish state and action-specific topics
-            elif event.Type == "keypad":
-                # For keypad, `sensor_state` is a string like mode/motion/pin events
-                state_payload = {"state": sensor_state}
-
-                event_topic = f"{base_topic}/{event_type}"
-                pin_topic = f"{base_topic}/pin"
-                set_topic = f"{base_topic}/set"
-
-                # Publish base event payload (availability/metadata)
-                mqtt_publish(base_topic, event_payload)
-
-                # For mode changes, validate the PIN entry if required
-                if event_type == "mode" and 'validate_pin_entry' in globals():
-                    if not validate_pin_entry(event.MAC, sensor_state):
-                        return
-
-                if event_type in ["mode", "motion"]:
-                    mqtt_publish(event_topic, state_payload)
-                    mqtt_publish(pin_topic, {'state': False})
-                    # Clear set request if we finished a mode set or motion ended
-                    if event_type == "mode" or sensor_state == "inactive":
-                        mqtt_publish(set_topic, {'mode': None, 'pin': False})
-                elif event_type in ['pinStart', 'pinConfirm']:
-                    mqtt_publish(pin_topic, state_payload)
-
-                # Echo final state in the event payload for logging/consumers
-                event_payload.update(state_payload)
-                LOGGER.debug(event_payload)
-
-        else:
-            # Events without Data (or other types) — log verbosely
-            LOGGER.info(f"{event}")
-
-    else:
+    if not valid_sensor_mac(event.MAC):
         LOGGER.warning("!Invalid MAC detected!")
         LOGGER.warning(f"Event data: {event}")
+        return
+
+    # Ensure sensor exists (auto-add on first sight)
+    if event.MAC not in SENSORS:
+        # If we haven't parsed event.Data yet, we don't know event_type; pass None for now.
+        add_sensor_to_config(event.MAC, None, None)
+        if CONFIG.get('hass_discovery'):
+            send_discovery_topics(event.MAC)
+        LOGGER.warning(f"Linked sensor with mac {event.MAC} automatically added to sensors configuration")
+        LOGGER.warning(
+            f"Please update sensor configuration file {os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE)} "
+            "and restart the service/reload the sensors"
+        )
+
+    # Availability tracking
+    if event.MAC not in SENSORS_STATE:
+        SENSORS_STATE[event.MAC] = {}
+    SENSORS_STATE[event.MAC]['last_seen'] = event.Timestamp.timestamp()
+
+    # Publish LWT-style status topic
+    mqtt_publish(f"{CONFIG['self_topic_root']}/{event.MAC}/status", "online", is_json=False)
+
+    # Flip internal online flag if it was offline
+    if not SENSORS_STATE[event.MAC].get('online', True):
+        SENSORS_STATE[event.MAC]['online'] = True
+        LOGGER.info(f"{event.MAC} is back online!")
+    else:
+        SENSORS_STATE[event.MAC]['online'] = True
+
+    # Base payload present for all valid events
+    base_topic = f"{CONFIG['self_topic_root']}/{event.MAC}"
+    event_payload = {
+        'event': event.Type,
+        'available': True,
+        'mac': event.MAC,
+        'last_seen': event.Timestamp.timestamp(),
+        'last_seen_iso': event.Timestamp.isoformat(),
+    }
+    if CONFIG.get('publish_sensor_name') and event.MAC in SENSORS and 'name' in SENSORS[event.MAC]:
+        event_payload['name'] = SENSORS[event.MAC]['name']
+
+    # Handle state-like events (alarm/status/keypad provide Data tuple)
+    if event.Type in ["alarm", "status", "keypad"]:
+        LOGGER.info(f"State event data: {event}")
+        try:
+            # (event_type, sensor_state, sensor_battery, sensor_signal)
+            (event_type, sensor_state, sensor_battery, sensor_signal) = event.Data
+        except Exception as ex:
+            LOGGER.exception(f"Unexpected event.Data format for {event}: {ex}")
+            return
+
+        # Persist learned sensor type if missing
+        if event.MAC in SENSORS and (SENSORS[event.MAC].get('type') is None):
+            try:
+                add_sensor_to_config(event.MAC, event_type, None)
+                if CONFIG.get('hass_discovery'):
+                    send_discovery_topics(event.MAC)
+            except Exception:
+                LOGGER.warning(f"Could not persist sensor type for {event.MAC}")
+
+        # Common signal/battery fields
+        signal_dbm = (sensor_signal or 0) * -1
+        signal_pct = min(max(2 * (signal_dbm + 115), 1), 100)
+        event_payload.update({
+            'signal_dbm': signal_dbm,
+            'signal_strength': signal_pct,
+            'battery': sensor_battery,
+        })
+
+        # V2 switch battery doubling; cap others at 100%
+        if event_type == "switchv2":
+            try:
+                event_payload['battery'] = min((sensor_battery or 0) * 2, 100)
+            except Exception:
+                pass
+        else:
+            try:
+                event_payload['battery'] = min(sensor_battery or 0, 100)
+            except Exception:
+                pass
+
+        # ALARM / STATUS flow
+        if event.Type in ["alarm", "status"]:
+            if 'DEVICE_CLASSES' in globals():
+                event_payload['device_class'] = DEVICE_CLASSES.get(event_type)
+
+            invert = bool(SENSORS[event.MAC].get('invert_state')) if event.MAC in SENSORS else False
+            try:
+                event_payload['state'] = int((sensor_state in STATES_ON) ^ invert)
+            except Exception:
+                event_payload['state'] = sensor_state
+
+            mqtt_publish(base_topic, event_payload)
+            LOGGER.debug(event_payload)
+
+        # KEYPAD flow
+        elif event.Type == "keypad":
+            # Topics & base publish
+            state_payload = {"state": sensor_state}
+            event_topic = f"{base_topic}/{event_type}"
+            pin_topic = f"{base_topic}/pin"
+            set_topic = f"{base_topic}/set"
+
+            # Publish base metadata
+            mqtt_publish(base_topic, event_payload)
+
+            # Optional PIN validation for mode changes
+            if event_type == "mode" and 'validate_pin_entry' in globals():
+                if not validate_pin_entry(event.MAC, sensor_state):
+                    return
+
+            if event_type in ["mode", "motion"]:
+                # Respect expose_pin flag (default True if missing)
+                if not SENSORS[event.MAC].get('expose_pin', True):
+                    mqtt_publish(pin_topic, {'state': False})
+
+                # Clear set request for finished mode or motion inactive
+                if event_type == "mode" or sensor_state == "inactive":
+                    mqtt_publish(set_topic, {'mode': None, 'pin': False})
+
+                # If changing mode, optionally delay swap if helper present
+                if event_type == "mode":
+                    current_mode = None
+                    try:
+                        sub = mqtt_simple_subscribe(event_topic)
+                        if isinstance(sub, dict):
+                            current_mode = sub.get('state')
+                    except Exception:
+                        current_mode = None
+
+                    # If delay helper exists and says "not yet", bail
+                    if 'delay_keypad_mode' in globals() and current_mode is not None:
+                        try:
+                            if not delay_keypad_mode(event.MAC, sensor_state, current_mode):
+                                return
+                        except Exception:
+                            # If helper errors, proceed without delay
+                            pass
+
+                # Publish event state now
+                mqtt_publish(event_topic, state_payload)
+
+                # If system actually triggered, hold then reset/disarm according to config
+                if event_type == "mode" and sensor_state == "triggered":
+                    # Prefer per-mode subconfig; fallback to sensor root; default 120s
+                    state_cfg = SENSORS[event.MAC].get(current_mode) if 'current_mode' in locals() else None
+                    sensor_cfg = SENSORS[event.MAC]
+                    sleep_time = (state_cfg or {}).get(
+                        'trigger_time',
+                        sensor_cfg.get('trigger_time', 120),
+                    )
+                    try:
+                        if sleep_time and sleep_time > 0:
+                            LOGGER.debug(f"Triggering alarm for {sleep_time} seconds!")
+                            time.sleep(sleep_time)
+                    except Exception:
+                        pass
+
+                    disarm_after = sensor_cfg.get('disarm_after_trigger', False)
+                    mqtt_publish(
+                        event_topic,
+                        {'state': 'disarmed' if disarm_after and current_mode is not None else (current_mode or 'disarmed')}
+                    )
+
+            elif event_type in ['pinStart', 'pinConfirm']:
+                mqtt_publish(pin_topic, state_payload)
+
+            # Echo final state to payload for logs/consumers
+            event_payload.update(state_payload)
+            LOGGER.debug(event_payload)
+
+    else:
+        # Events without Data (or other types) — log verbosely
+        LOGGER.info(f"{event}")
 
 
 def Stop():
