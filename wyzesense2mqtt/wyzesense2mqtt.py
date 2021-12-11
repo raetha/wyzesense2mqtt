@@ -540,6 +540,7 @@ def send_discovery_topics(sensor_mac, wait=True):
                     'pl_arm_away': "armed_away",
                     'pl_arm_home': "armed_home",
                     'pl_disarm': "disarmed",
+                    'payload_trigger': "triggered",
                     'code': "REMOTE_CODE"
                     if type(SENSORS[sensor_mac]['pin']) == list
                     else SENSORS[sensor_mac]['pin'],
