@@ -15,7 +15,7 @@ import yaml
 # import time
 
 import paho.mqtt.client as mqtt
-import wyzesense
+#import wyzesense
 from retrying import retry
 
 
@@ -468,6 +468,103 @@ def on_event(WYZESENSE_DONGLE, event):
 
             state_topic = f"{CONFIG['self_topic_root']}/{event.MAC}"
             mqtt_publish(state_topic, event_payload)
+        elif(event.Type == "water"):
+            (water, ext_water, has_ext, battery, signal) = event.Data
+            # Build event payload
+            event_payload = {
+                'event': event.Type,
+                'available': True,
+                'mac': event.MAC,
+                'device_class': 'leak',
+                'last_seen': event.Timestamp.timestamp(),
+                'last_seen_iso': event.Timestamp.isoformat(),
+                'signal_strength': signal * -1,
+                'battery': battery,
+                'state' : {
+                    'water' : water,
+                    'ext_water' : ext_water,
+                    'has_ext' : has_ext
+                }
+            }
+            LOGGER.debug(event_payload)
+
+            state_topic = f"{CONFIG['self_topic_root']}/{event.MAC}"
+            mqtt_publish(state_topic, event_payload)
+        elif(event.Type == "keypadMotion"):
+            (motion, battery, signal) = event.Data
+            # Build event payload
+            event_payload = {
+                'event': event.Type,
+                'available': True,
+                'mac': event.MAC,
+                'device_class': 'motion',
+                'last_seen': event.Timestamp.timestamp(),
+                'last_seen_iso': event.Timestamp.isoformat(),
+                'signal_strength': signal * -1,
+                'battery': battery,
+                'state' : motion
+            }
+            LOGGER.debug(event_payload)
+
+            state_topic = f"{CONFIG['self_topic_root']}/{event.MAC}"
+            mqtt_publish(state_topic, event_payload)
+        elif(event.Type == "keypadMode"):
+            (mode, battery, signal) = event.Data
+            # Build event payload
+            event_payload = {
+                'event': event.Type,
+                'available': True,
+                'mac': event.MAC,
+                'device_class': 'keypadMode',
+                'last_seen': event.Timestamp.timestamp(),
+                'last_seen_iso': event.Timestamp.isoformat(),
+                'signal_strength': signal * -1,
+                'battery': battery,
+                'state' : mode
+            }
+            LOGGER.debug(event_payload)
+
+            state_topic = f"{CONFIG['self_topic_root']}/{event.MAC}/mode"
+            mqtt_publish(state_topic, event_payload)
+        elif(event.Type == "keypadPin"):
+            (pinBytes, battery, signal) = event.Data
+            # Build event payload
+            event_payload = {
+                'event': event.Type,
+                'available': True,
+                'mac': event.MAC,
+                'device_class': 'keypadPin',
+                'last_seen': event.Timestamp.timestamp(),
+                'last_seen_iso': event.Timestamp.isoformat(),
+                'signal_strength': signal * -1,
+                'battery': battery,
+                'state' : pinBytes
+            }
+            LOGGER.debug(event_payload)
+
+            state_topic = f"{CONFIG['self_topic_root']}/{event.MAC}/pin"
+            mqtt_publish(state_topic, event_payload)
+        elif(event.Type == "climate"):
+            (temperature, humidity, battery, signal) = event.Data
+            # Build event payload
+            event_payload = {
+                'event': event.Type,
+                'available': True,
+                'mac': event.MAC,
+                'device_class': 'climate',
+                'last_seen': event.Timestamp.timestamp(),
+                'last_seen_iso': event.Timestamp.isoformat(),
+                'signal_strength': signal * -1,
+                'battery': battery,
+                'state' : {
+                    'temperature' : temperature,
+                    'humidity' : humidity
+                }
+            }
+            LOGGER.debug(event_payload)
+
+            state_topic = f"{CONFIG['self_topic_root']}/{event.MAC}"
+            mqtt_publish(state_topic, event_payload)
         else:
             LOGGER.debug(f"Non-state event data: {event}")
 
@@ -479,6 +576,8 @@ def on_event(WYZESENSE_DONGLE, event):
 if __name__ == "__main__":
     # Initialize logging
     init_logging()
+
+    import wyzesense
 
     # Initialize configuration
     init_config()
