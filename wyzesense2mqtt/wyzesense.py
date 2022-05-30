@@ -58,7 +58,7 @@ class Packet(object):
     # Notifications initiated from dongle side
     NOTIFY_SENSOR_EVENT = MAKE_CMD(TYPE_ASYNC, 0x19)
     NOTIFY_SENSOR_SCAN = MAKE_CMD(TYPE_ASYNC, 0x20)
-    NOITFY_SYNC_TIME = MAKE_CMD(TYPE_ASYNC, 0x32)
+    NOTIFY_SYNC_TIME = MAKE_CMD(TYPE_ASYNC, 0x32)
     NOTIFY_EVENT_LOG = MAKE_CMD(TYPE_ASYNC, 0x35)
     NOTIFY_HMS_EVENT = MAKE_CMD(TYPE_ASYNC, 0x55)
 
@@ -222,7 +222,7 @@ class Packet(object):
 
     @classmethod
     def SyncTimeAck(cls):
-        return cls(cls.NOITFY_SYNC_TIME + 1, struct.pack(">Q", int(time.time() * 1000)))
+        return cls(cls.NOTIFY_SYNC_TIME + 1, struct.pack(">Q", int(time.time() * 1000)))
 
     @classmethod
     def AsyncAck(cls, cmd):
