@@ -9,7 +9,6 @@ import datetime
 import binascii
 
 import logging
-log = logging.getLogger(__name__)
 
 
 def bytes_to_hex(s):
@@ -25,6 +24,11 @@ def checksum_from_bytes(s):
 
 TYPE_SYNC = 0x43
 TYPE_ASYNC = 0x53
+
+# {sensor_id: "sensor type", "states": ["off state", "on state"]}
+CONTACT_IDS = {0x01: "switch", 0x0E: "switchv2", "states": ["close", "open"]}
+MOTION_IDS = {0x02: "motion", 0x0F: "motionv2", "states": ["inactive", "active"]}
+LEAK_IDS = {0x03: "leak", "states": ["dry", "wet"]}
 
 
 def MAKE_CMD(type, cmd):
@@ -104,7 +108,7 @@ class Packet(object):
 
         checksum = checksum_from_bytes(pkt)
         pkt += struct.pack(">H", checksum)
-        log.debug("Sending: %s", bytes_to_hex(pkt))
+        LOGGER.debug("Sending: %s", bytes_to_hex(pkt))
         ss = os.write(fd, pkt)
         assert ss == len(pkt)
 
@@ -113,14 +117,15 @@ class Packet(object):
         assert isinstance(s, bytes)
 
         if len(s) < 5:
-            log.error("Invalid packet: %s", bytes_to_hex(s))
-            log.error("Invalid packet length: %d", len(s))
-            return None
+            LOGGER.error("Invalid packet: %s", bytes_to_hex(s))
+            LOGGER.error("Invalid packet length: %d", len(s))
+            # This error can be corrected by waiting for additional data, throw an exception we can catch to handle differently
+            raise EOFError
 
         magic, cmd_type, b2, cmd_id = struct.unpack_from(">HBBB", s)
         if magic != 0x55AA and magic != 0xAA55:
-            log.error("Invalid packet: %s", bytes_to_hex(s))
-            log.error("Invalid packet magic: %4X", magic)
+            LOGGER.error("Invalid packet: %s", bytes_to_hex(s))
+            LOGGER.error("Invalid packet magic: %4X", magic)
             return None
 
         cmd = MAKE_CMD(cmd_type, cmd_id)
@@ -132,14 +137,16 @@ class Packet(object):
             s = s[: b2 + 4]
             payload = s[5:-2]
         else:
-            log.error("Invalid packet: %s", bytes_to_hex(s))
-            return None
+            LOGGER.error("Invalid packet: %s", bytes_to_hex(s))
+            LOGGER.error("Short packet: expected %d, got %d", (b2 + 4), len(s))
+            # This error can be corrected by waiting for additional data, throw an exception we can catch to handle differently
+            raise EOFError
 
         cs_remote = (s[-2] << 8) | s[-1]
         cs_local = checksum_from_bytes(s[:-2])
         if cs_remote != cs_local:
-            log.error("Invalid packet: %s", bytes_to_hex(s))
-            log.error("Mismatched checksum, remote=%04X, local=%04X", cs_remote, cs_local)
+            LOGGER.error("Invalid packet: %s", bytes_to_hex(s))
+            LOGGER.error("Mismatched checksum, remote=%04X, local=%04X", cs_remote, cs_local)
             return None
 
         return cls(cmd, payload)
@@ -233,14 +240,12 @@ class SensorEvent(object):
         self.Data = event_data
 
     def __str__(self):
-        s = "[%s][%s]" % (self.Timestamp.strftime("%Y-%m-%d %H:%M:%S"), self.MAC)
         if self.Type == 'alarm':
-            s += "AlarmEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
+            return f"AlarmEvent [{self.MAC}]: time={self.Timestamp.strftime('%Y-%m-%d %H:%M:%S')}, sensor_type={self.Data[0]}, state={self.Data[1]}, battery={self.Data[2]}, signal={self.Data[3]}"
         elif self.Type == 'status':
-            s += "StatusEvent: sensor_type=%s, state=%s, battery=%d, signal=%d" % self.Data
+            return f"StatusEvent [{self.MAC}]: time={self.Timestamp.strftime('%Y-%m-%d %H:%M:%S')}, sensor_type={self.Data[0]}, state={self.Data[1]}, battery={self.Data[2]}, signal={self.Data[3]}"
         else:
-            s += "RawEvent: type=%s, data=%s" % (self.Type, bytes_to_hex(self.Data))
-        return s
+            return f"RawEvent [{self.MAC}]: time={self.Timestamp.strftime('%Y-%m-%d %H:%M:%S')}, event_type={self.Type}, data={bytes_to_hex(self.Data)}"
 
 
 class Dongle(object):
@@ -252,45 +257,42 @@ class Dongle(object):
                 setattr(self, key, kwargs[key])
 
     def _OnSensorAlarm(self, pkt):
+        global CONTACT_IDS, MOTION_IDS, LEAK_IDS
+
         if len(pkt.Payload) < 18:
-            log.info("Unknown alarm packet: %s", bytes_to_hex(pkt.Payload))
+            LOGGER.info("Unknown alarm packet: %s", bytes_to_hex(pkt.Payload))
             return
 
-        timestamp, event_type, sensor_mac = struct.unpack_from(">QB8s", pkt.Payload)
+        timestamp, event, mac = struct.unpack_from(">QB8s", pkt.Payload)
+        data = pkt.Payload[17:]
         timestamp = datetime.datetime.fromtimestamp(timestamp / 1000.0)
-        sensor_mac = sensor_mac.decode('ascii')
-        alarm_data = pkt.Payload[17:]
+        mac = mac.decode('ascii')
 
-        # {sensor_id: "sensor type", "states": ["off state", "on state"]}
-        contact_ids = {0x01: "switch", 0x0E: "switchv2", "states": ["close", "open"]}
-        motion_ids = {0x02: "motion", 0x0F: "motionv2", "states": ["inactive", "active"]}
-        leak_ids = {0x03: "leak", "states": ["dry", "wet"]}
-
-        if event_type == 0xA2 or event_type == 0xA1:
+        if event == 0xA2 or event == 0xA1:
+            type, b1, battery, b2, state1, state2, counter, signal = struct.unpack_from(">BBBBBBHB", data)
             sensor = {}
-            if alarm_data[0] in contact_ids:
-                sensor = contact_ids
-            elif alarm_data[0] in motion_ids:
-                sensor = motion_ids
-            elif alarm_data[0] in leak_ids:
-                sensor = leak_ids
-            
+            if type in CONTACT_IDS:
+                sensor = CONTACT_IDS
+            elif type in MOTION_IDS:
+                sensor = MOTION_IDS
+            elif type in LEAK_IDS:
+                sensor = LEAK_IDS
+
             if sensor:
-                sensor_type = sensor[alarm_data[0]]
-                sensor_state = sensor["states"][alarm_data[5]]
+                sensor_type = sensor[type]
+                sensor_state = sensor["states"][state2]
             else:
-                sensor_type = "unknown (" + alarm_data[0] + ")"
-                sensor_state = "unknown (" + alarm_data[5] + ")"
-            e = SensorEvent(sensor_mac, timestamp, ("alarm" if event_type == 0xA2 else "status"), (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
-        elif event_type == 0xE8:
-            if alarm_data[0] == 0x03:
-                # alarm_data[7] might be humidity in some form, but as an integer
-                # is reporting way to high to actually be humidity.
+                sensor_type = "unknown (" + type + ")"
+                sensor_state = "unknown (" + state2 + ")"
+            e = SensorEvent(mac, timestamp, ("alarm" if event == 0xA2 else "status"), (sensor_type, sensor_state, battery, signal))
+        elif event == 0xE8:
+            type, b1, battery, b2, state1, state2, counter, signal = struct.unpack_from(">BBBBBBHB", data)
+            if type == 0x03:
                 sensor_type = "leak:temperature"
-                sensor_state = "%d.%d" % (alarm_data[5], alarm_data[6])
-            e = SensorEvent(sensor_mac, timestamp, "state", (sensor_type, sensor_state, alarm_data[2], alarm_data[8]))
+                sensor_state = "%d.%d" % (state1, state2)
+            e = SensorEvent(mac, timestamp, "state", (sensor_type, sensor_state, battery, signal))
         else:
-            e = SensorEvent(sensor_mac, timestamp, "raw_%02X" % event_type, alarm_data)
+            e = SensorEvent(mac, timestamp, "%02X" % event, data)
 
         self.__on_event(self, e)
 
@@ -298,12 +300,20 @@ class Dongle(object):
         self._SendPacket(Packet.SyncTimeAck())
 
     def _OnEventLog(self, pkt):
+#        global CONTACT_IDS, MOTION_IDS, LEAK_IDS
+
         assert len(pkt.Payload) >= 9
         ts, msg_len = struct.unpack_from(">QB", pkt.Payload)
-        # assert msg_len + 8 == len(pkt.Payload)
         tm = datetime.datetime.fromtimestamp(ts / 1000.0)
         msg = pkt.Payload[9:]
-        log.info("LOG: time=%s, data=%s", tm.isoformat(), bytes_to_hex(msg))
+        LOGGER.info("LOG: time=%s, data=%s", tm.isoformat(), bytes_to_hex(msg))
+        if ts == 0:
+            self.__on_event(self, "ERROR")
+        # Check if we have a message after, length includes the msglen byte
+#        if ((len(msg) + 1) >= msg_len and msg_len >= 13):
+#            event, mac, type, state, counter = struct.unpack(">B8sBBH", msg)
+# TODO: What can we do with this? At the very least, we can update the last seen time for the sensor
+# and it appears that the log message happens before every alarm message, so doesn't really gain much of anything
 
     def __init__(self, device, event_handler):
         self.__lock = threading.Lock()
@@ -328,7 +338,7 @@ class Dongle(object):
             return b""
 
         if not s:
-            log.info("Nothing read")
+            LOGGER.info("Nothing read")
             return b""
 
         s = bytes(s)
@@ -336,8 +346,9 @@ class Dongle(object):
         assert length > 0
         if length > 0x3F:
             length = 0x3F
+            LOGGER.warn("Shortening a packet")
 
-        # log.debug("Raw HID packet: %s", bytes_to_hex(s))
+        # LOGGER.debug("Raw HID packet: %s", bytes_to_hex(s))
         assert len(s) >= length + 1
         return s[1: 1 + length]
 
@@ -349,19 +360,19 @@ class Dongle(object):
         return oldHandler
 
     def _SendPacket(self, pkt):
-        log.debug("===> Sending: %s", str(pkt))
+        LOGGER.debug("===> Sending: %s", str(pkt))
         pkt.Send(self.__fd)
 
     def _DefaultHandler(self, pkt):
         pass
 
     def _HandlePacket(self, pkt):
-        log.debug("<=== Received: %s", str(pkt))
+        LOGGER.debug("<=== Received: %s", str(pkt))
         with self.__lock:
             handler = self.__handlers.get(pkt.Cmd, self._DefaultHandler)
 
         if (pkt.Cmd >> 8) == TYPE_ASYNC and pkt.Cmd != Packet.ASYNC_ACK:
-            # log.info("Sending ACK packet for cmd %04X", pkt.Cmd)
+            LOGGER.debug("Sending ACK packet for cmd %04X", pkt.Cmd)
             self._SendPacket(Packet.AsyncAck(pkt.Cmd))
         handler(pkt)
 
@@ -373,20 +384,33 @@ class Dongle(object):
 
             s += self._ReadRawHID()
             # if s:
-            #     log.info("Incoming buffer: %s", bytes_to_hex(s))
+            #     LOGGER.info("Incoming buffer: %s", bytes_to_hex(s))
+
+            # Look for the start of the next message, indicated by the magic bytes 0x55AA
             start = s.find(b"\x55\xAA")
             if start == -1:
                 time.sleep(0.1)
                 continue
 
+            # Found the start of the next message, ideally this would be at the beginning of the buffer
+            # but we could be tossing some bad data if a previous parse failed
             s = s[start:]
-            log.debug("Trying to parse: %s", bytes_to_hex(s))
-            pkt = Packet.Parse(s)
-            if not pkt:
-                s = s[2:]
+            LOGGER.debug("Trying to parse: %s", bytes_to_hex(s))
+            try:
+                pkt = Packet.Parse(s)
+                if not pkt:
+                    # Packet was invalid and couldn't be processed, remove the magic bytes and continue
+                    # looking for another start of message. This essentially tosses the bad message.
+                    LOGGER.error("Unable to parse message")
+                    s = s[2:]
+                    time.sleep(0.1)
+                    continue
+            except EOFError:
+                # Not enough data to parse a packet, keep the partial packet for now
+                time.sleep(0.1)
                 continue
 
-            log.debug("Received: %s", bytes_to_hex(s[:pkt.Length]))
+            LOGGER.debug("Received: %s", bytes_to_hex(s[:pkt.Length]))
             s = s[pkt.Length:]
             self._HandlePacket(pkt)
 
@@ -411,69 +435,69 @@ class Dongle(object):
         return ctx.result
 
     def _Inquiry(self):
-        log.debug("Start Inquiry...")
+        LOGGER.debug("Start Inquiry...")
         resp = self._DoSimpleCommand(Packet.Inquiry())
 
         assert len(resp.Payload) == 1
         result = resp.Payload[0]
-        log.debug("Inquiry returns %d", result)
+        LOGGER.debug("Inquiry returns %d", result)
 
         assert result == 1, "Inquiry failed, result=%d" % result
 
     def _GetEnr(self, r):
-        log.debug("Start GetEnr...")
+        LOGGER.debug("Start GetEnr...")
         assert len(r) == 4
         assert all(isinstance(x, int) for x in r)
         r_string = bytes(struct.pack("<LLLL", *r))
 
         resp = self._DoSimpleCommand(Packet.GetEnr(r_string))
         assert len(resp.Payload) == 16
-        log.debug("GetEnr returns %s", bytes_to_hex(resp.Payload))
+        LOGGER.debug("GetEnr returns %s", bytes_to_hex(resp.Payload))
         return resp.Payload
 
     def _GetMac(self):
-        log.debug("Start GetMAC...")
+        LOGGER.debug("Start GetMAC...")
         resp = self._DoSimpleCommand(Packet.GetMAC())
         assert len(resp.Payload) == 8
         mac = resp.Payload.decode('ascii')
-        log.debug("GetMAC returns %s", mac)
+        LOGGER.debug("GetMAC returns %s", mac)
         return mac
 
     def _GetKey(self):
-        log.debug("Start GetKey...")
+        LOGGER.debug("Start GetKey...")
         resp = self._DoSimpleCommand(Packet.GetKey())
         assert len(resp.Payload) == 16
-        log.debug("GetKey returns %s", resp.Payload)
+        LOGGER.debug("GetKey returns %s", resp.Payload)
         return resp.Payload
 
     def _GetVersion(self):
-        log.debug("Start GetVersion...")
+        LOGGER.debug("Start GetVersion...")
         resp = self._DoSimpleCommand(Packet.GetVersion())
         version = resp.Payload.decode('ascii')
-        log.debug("GetVersion returns %s", version)
+        LOGGER.debug("GetVersion returns %s", version)
         return version
 
     def _GetSensorR1(self, mac, r1):
-        log.debug("Start GetSensorR1...")
-        resp = self._DoSimpleCommand(Packet.GetSensorR1(mac, r1))
+        LOGGER.info("Start GetSensorR1...")
+        resp = self._DoSimpleCommand(Packet.GetSensorR1(mac, r1), 10)
         return resp.Payload
 
     def _EnableScan(self):
-        log.debug("Start EnableScan...")
+        LOGGER.info("Start EnableScan...")
         resp = self._DoSimpleCommand(Packet.EnableScan())
         assert len(resp.Payload) == 1
         result = resp.Payload[0]
         assert result == 0x01, "EnableScan failed, result=%d"
 
     def _DisableScan(self):
-        log.debug("Start DisableScan...")
+        LOGGER.info("Start DisableScan...")
         resp = self._DoSimpleCommand(Packet.DisableScan())
         assert len(resp.Payload) == 1
         result = resp.Payload[0]
         assert result == 0x01, "DisableScan failed, result=%d"
 
     def _GetSensors(self):
-        log.debug("Start GetSensors...")
+        LOGGER.info("Start GetSensors...")
 
         resp = self._DoSimpleCommand(Packet.GetSensorCount())
         assert len(resp.Payload) == 1
@@ -481,21 +505,21 @@ class Dongle(object):
 
         ctx = self.CmdContext(count=count, index=0, sensors=[])
         if count > 0:
-            log.debug("%d sensors reported, waiting for each one to report...", count)
+            LOGGER.info("%d sensors reported, waiting for each one to report...", count)
 
             def cmd_handler(pkt, e):
                 assert len(pkt.Payload) == 8
                 mac = pkt.Payload.decode('ascii')
-                log.debug("Sensor %d/%d, MAC:%s", ctx.index + 1, ctx.count, mac)
+                LOGGER.info("Sensor %d/%d, MAC:%s", ctx.index + 1, ctx.count, mac)
 
                 ctx.sensors.append(mac)
                 ctx.index += 1
                 if ctx.index == ctx.count:
                     e.set()
 
-            self._DoCommand(Packet.GetSensorList(count), cmd_handler, timeout=self._CMD_TIMEOUT * count)
+            self._DoCommand(Packet.GetSensorList(count), cmd_handler, timeout=10)
         else:
-            log.debug("No sensors bond yet...")
+            LOGGER.info("No sensors bond yet...")
         return ctx.sensors
 
     def _FinishAuth(self):
@@ -510,10 +534,10 @@ class Dongle(object):
 
             self.ENR = self._GetEnr([0x30303030] * 4)
             self.MAC = self._GetMac()
-            log.debug("Dongle MAC is [%s]", self.MAC)
+            LOGGER.info("Dongle MAC is [%s]", self.MAC)
 
             self.Version = self._GetVersion()
-            log.debug("Dongle version: %s", self.Version)
+            LOGGER.info("Dongle version: %s", self.Version)
 
             self._FinishAuth()
         except:
@@ -522,19 +546,16 @@ class Dongle(object):
 
     def List(self):
         sensors = self._GetSensors()
-        for x in sensors:
-            log.debug("Sensor found: %s", x)
-
         return sensors
 
     def Stop(self, timeout=_CMD_TIMEOUT):
         self.__exit_event.set()
+        self.__thread.join(timeout)
         os.close(self.__fd)
         self.__fd = None
-        self.__thread.join(timeout)
 
     def Scan(self, timeout=60):
-        log.debug("Start Scan...")
+        LOGGER.info("Start Scan...")
 
         ctx = self.CmdContext(evt=threading.Event(), result=None)
 
@@ -549,30 +570,35 @@ class Dongle(object):
 
             if ctx.evt.wait(timeout):
                 s_mac, s_type, s_ver = ctx.result
-                log.debug("Sensor found: mac=[%s], type=%d, version=%d", s_mac, s_type, s_ver)
+                LOGGER.info("Sensor found: mac=[%s], type=%d, version=%d", s_mac, s_type, s_ver)
                 r1 = self._GetSensorR1(s_mac, b'Ok5HPNQ4lf77u754')
-                log.debug("Sensor R1: %r", bytes_to_hex(r1))
+                LOGGER.debug("Sensor R1: %r", bytes_to_hex(r1))
             else:
-                log.debug("Sensor discovery timeout...")
+                LOGGER.info("Sensor discovery timeout...")
 
             self._DoSimpleCommand(Packet.DisableScan())
         finally:
             self._SetHandler(Packet.NOTIFY_SENSOR_SCAN, old_handler)
         if ctx.result:
             s_mac, s_type, s_ver = ctx.result
-            self._DoSimpleCommand(Packet.VerifySensor(s_mac))
+            self._DoSimpleCommand(Packet.VerifySensor(s_mac), 10)
         return ctx.result
 
     def Delete(self, mac):
         resp = self._DoSimpleCommand(Packet.DelSensor(str(mac)))
-        log.debug("CmdDelSensor returns %s", bytes_to_hex(resp.Payload))
+        LOGGER.debug("CmdDelSensor returns %s", bytes_to_hex(resp.Payload))
         assert len(resp.Payload) == 9
         ack_mac = resp.Payload[:8].decode('ascii')
         ack_code = resp.Payload[8]
         assert ack_code == 0xFF, "CmdDelSensor: Unexpected ACK code: 0x%02X" % ack_code
         assert ack_mac == mac, "CmdDelSensor: MAC mismatch, requested:%s, returned:%s" % (mac, ack_mac)
-        log.debug("CmdDelSensor: %s deleted", mac)
+        LOGGER.info("CmdDelSensor: %s deleted", mac)
 
 
-def Open(device, event_handler):
+def Open(device, event_handler, logger):
+    global LOGGER
+    if logger is not None:
+       LOGGER = logger
+    else:
+       LOGGER = logging.getLogger(__name__)
     return Dongle(device, event_handler)

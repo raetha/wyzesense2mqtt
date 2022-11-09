@@ -9,7 +9,7 @@ handlers:
   console:
     class: logging.StreamHandler
     formatter: simple
-    level: DEBUG
+    level: INFO
   file:
     backupCount: 7
     class: logging.handlers.TimedRotatingFileHandler
@@ -22,4 +22,4 @@ root:
   handlers:
     - file
     - console
-  level: DEBUG
+  level: INFO
