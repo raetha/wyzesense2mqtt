@@ -33,6 +33,7 @@ Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or o
     - [Removing a Sensor](#removing-a-sensor)
     - [Reload Sensors](#reload-sensors)
     - [Command Line Tool](#command-line-tool)
+  - [Sense Keypad](#sense-keypad)
   - [Home Assistant](#home-assistant)
   - [Tested On](#tested-on)
 
@@ -179,7 +180,7 @@ root:
 ```
 
 ### sensors.yaml
-This file will store basic information about each sensor paired to the Wyse Sense Bridge. The entries can be modified to set the class type and sensor name as it will show in Home Assistant. Class types can be automatically filled for `opening`, `motion`, and `moisture`, depending on the type of sensor. Since this file can be automatically generated, Python may automatically quote the MACs or not depending on if they are fully numeric.
+This file will store basic information about each sensor paired to the Wyse Sensor Bridge. The entries can be modified to set the class type and sensor name as it will show in Home Assistant. Class types can be automatically filled for `opening`, `motion`, and `moisture`, depending on the type of sensor. Since this file can be automatically generated, Python may automatically quote the MACs or not depending on if they are fully numeric.
 ```yaml
 'AAAAAAAA':
   class: door
@@ -202,7 +203,6 @@ This file will store basic information about each sensor paired to the Wyse Sens
   name: Basement Moisture
   invert_state: true
 ```
-
 
 ## Usage
 ### Pairing a Sensor
@@ -232,10 +232,66 @@ Once run it will present a menu of its functions:
 * F - Fix invalid sensors (Removes sensors with invalid MACs, common problem with broken sensors or low batteries)
 
 
+### Sense Keypad
+After flashing firmware from the [Sense Hub](https://wyze.com/home-security-system-sensors.html) to the original Sensor Bridge, this project can now support the [Sense Keypad](https://wyze.com/wyze-sense-keypad.html) as well! This entails either [dumping firmware from your own Hub](https://github.com/HclX/WyzeHacks/issues/111#issuecomment-824558304) or using firmware that has already been dumped, and then flashing it. Using the [WyzeSenseUpgrade](https://github.com/AK5nowman/WyzeSense) project is recommended, but is considered "use at your own risk". When a keypad is paired with WyzeSense2MQTT, it will send auto-discovery topics which allow control and statuses from within Home Assistant. The entry in `sensors.yaml` for the keypad looks like the following:
+```yaml
+'FFFFFFFF':
+  name: Front Door Keypad
+  class: alarm_control_panel
+  pin: '0000'
+  expose_pin: false
+  arm_required: true
+  disarm_required: true
+  invert_state: false
+  delay_time: 60
+  arming_time: 60
+  trigger_time: 120
+  disarm_after_trigger: False
+```
+
+- `pin` must be a string (surrounded by single or double quotes) of digits, but can be any length. Can also be a list of PIN strings, which will be validated against.
+- `expose_pin` can be either `true` or `false`. If `true`, a `sensor` entity will be exposed to MQTT discovery which contains the most recent PIN entered. The same PIN will also be saved in the MQTT broker.
+- `arm_required` can be either `true` or `false`, and determines whether a pin is required to have been entered to arm the keypad.
+- `disarm_required` can be either `true` or `false`, and determines whether a pin is required to have been entered to disarm the keypad.
+- `invert_state` can be either `true` or `false`, and affects the motion sensor of the keypad, similarly to other supported sensors.
+- `delay_time` must be an integer representing the number of seconds for the `pending` state to last before changing to `triggered`.
+- `arming_time` must be an integer representing the number of seconds for the `arming` state to last before changing to an 'armed' state (either `armed_home` or `armed_away`).
+- `trigger_time` must be an integer representing the number of seconds for the `triggered` state to last before finishing.
+- `disarm_after_trigger` can be either `true` or `false`. If `true`, the keypad will change to `disarmed` after the `triggered` state. If `false`, it will return to the previous state.
+
+A detailed explanation of the relationship between `delay_time`, `arming_time`, `trigger_time`, and `disarm_after_trigger` can be found in the [Home Assistant documentation](https://www.home-assistant.io/integrations/manual/#state-machine). Each of the time options can optionally be configured individually for each 'armed' state.
+
+For example, in this configuration:
+- `disarmed` will never trigger the alarm
+- `armed_home` will be set with no delay
+- `armed_away` will give 30 seconds after arming, and 20 seconds to disarm before triggering the alarm
+- When triggered, the alarm will last for 4 seconds
+```yaml
+'ABABABAB':
+  name: Entryway Keypad
+  class: alarm_control_panel
+  pin: '0000'
+  expose_pin: false
+  arm_required: true
+  disarm_required: true
+  invert_state: false
+  delay_time: 20
+  arming_time: 30
+  trigger_time: 4
+  disarmed:
+    trigger_time: 0
+  armed_home:
+    arming_time: 0
+    delay_time: 0
+  disarm_after_trigger: false
+```
+
+
 ## Home Assistant
-Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add devices for each sensor along with entites for the state, battery_level, and signal_strength. By default these entities will have a device_class of "opening" for contact sensors, "motion" for motion sensors, and "moisture" for leak sensors. They will be named for the sensor type and MAC, e.g. Wyze Sense Contact Sensor AABBCCDD. To adjust the device_class to "door" or "window", and set a custom name, update the sensors.yaml configuration file and replace the defaults, then restart WyzeSense2MQTT. For a comprehensive list of device classes the Home Assistant recognizes, see the [`binary_sensor` documentation](https://www.home-assistant.io/integrations/binary_sensor/).
+Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add devices for each sensor along with entites for the state, battery_level, and signal_strength. By default these entities will have a device_class of "opening" for contact sensors, "motion" for motion sensors, and "moisture" for leak sensors. They will be named for the sensor type and MAC, e.g. Wyze Sense Contact Sensor AABBCCDD. To adjust the device_class to "door" or "window", and set a custom name, update the `sensors.yaml` configuration file and replace the defaults, then restart WyzeSense2MQTT. For a comprehensive list of device classes the Home Assistant recognizes, see the [`binary_sensor` documentation](https://www.home-assistant.io/integrations/binary_sensor/).
 
 
 ## Tested On
+* Ubuntu 20.04 (Docker)
 * Debian Buster (Docker)
 * Raspbian Buster (RPi 4)
