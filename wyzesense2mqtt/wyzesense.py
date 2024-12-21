@@ -282,8 +282,8 @@ class Dongle(object):
                 sensor_type = sensor[type]
                 sensor_state = sensor["states"][state2]
             else:
-                sensor_type = "unknown (" + type + ")"
-                sensor_state = "unknown (" + state2 + ")"
+                sensor_type = "unknown (" + str(type) + ")"
+                sensor_state = "unknown (" + str(state2) + ")"
             e = SensorEvent(mac, timestamp, ("alarm" if event == 0xA2 else "status"), (sensor_type, sensor_state, battery, signal))
         elif event == 0xE8:
             type, b1, battery, b2, state1, state2, counter, signal = struct.unpack_from(">BBBBBBHB", data)
