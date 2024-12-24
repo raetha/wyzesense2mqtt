@@ -670,6 +670,8 @@ if __name__ == "__main__":
         loop_counter = 0
         while True:
             time.sleep(5)
+            # Check if there is any exceptions in the dongle thread
+            WYZESENSE_DONGLE.CheckError()
 
             # Skip everything while dongle is offline, service needs to be restarted
             if dongle_offline:
@@ -715,6 +717,8 @@ if __name__ == "__main__":
                         LOGGER.warning(f"{mac} has gone offline!")
                         SENSORS_STATE[mac]['online'] = False
     except KeyboardInterrupt:
-        pass
+        LOGGER.warning("User interrupted")
+    except Exception as e:
+        LOGGER.error("An error occurred", exc_info=True)
     finally:
         Stop()

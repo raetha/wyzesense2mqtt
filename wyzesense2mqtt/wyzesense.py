@@ -322,6 +322,7 @@ class Dongle(object):
         self.__exit_event = threading.Event()
         self.__thread = threading.Thread(target=self._Worker)
         self.__on_event = event_handler
+        self.__last_exception = None
 
         self.__handlers = {
             Packet.NOTIFY_SYNC_TIME: self._OnSyncTime,
@@ -377,42 +378,46 @@ class Dongle(object):
         handler(pkt)
 
     def _Worker(self):
-        s = b""
-        while True:
-            if self.__exit_event.isSet():
-                break
+        try:
+            s = b""
+            while True:
+                if self.__exit_event.isSet():
+                    break
 
-            s += self._ReadRawHID()
-            # if s:
-            #     LOGGER.info("Incoming buffer: %s", bytes_to_hex(s))
+                s += self._ReadRawHID()
+                # if s:
+                #     LOGGER.info("Incoming buffer: %s", bytes_to_hex(s))
 
-            # Look for the start of the next message, indicated by the magic bytes 0x55AA
-            start = s.find(b"\x55\xAA")
-            if start == -1:
-                time.sleep(0.1)
-                continue
-
-            # Found the start of the next message, ideally this would be at the beginning of the buffer
-            # but we could be tossing some bad data if a previous parse failed
-            s = s[start:]
-            LOGGER.debug("Trying to parse: %s", bytes_to_hex(s))
-            try:
-                pkt = Packet.Parse(s)
-                if not pkt:
-                    # Packet was invalid and couldn't be processed, remove the magic bytes and continue
-                    # looking for another start of message. This essentially tosses the bad message.
-                    LOGGER.error("Unable to parse message")
-                    s = s[2:]
+                # Look for the start of the next message, indicated by the magic bytes 0x55AA
+                start = s.find(b"\x55\xAA")
+                if start == -1:
                     time.sleep(0.1)
                     continue
-            except EOFError:
-                # Not enough data to parse a packet, keep the partial packet for now
-                time.sleep(0.1)
-                continue
 
-            LOGGER.debug("Received: %s", bytes_to_hex(s[:pkt.Length]))
-            s = s[pkt.Length:]
-            self._HandlePacket(pkt)
+                # Found the start of the next message, ideally this would be at the beginning of the buffer
+                # but we could be tossing some bad data if a previous parse failed
+                s = s[start:]
+                LOGGER.debug("Trying to parse: %s", bytes_to_hex(s))
+                try:
+                    pkt = Packet.Parse(s)
+                    if not pkt:
+                        # Packet was invalid and couldn't be processed, remove the magic bytes and continue
+                        # looking for another start of message. This essentially tosses the bad message.
+                        LOGGER.error("Unable to parse message")
+                        s = s[2:]
+                        time.sleep(0.1)
+                        continue
+                except EOFError:
+                    # Not enough data to parse a packet, keep the partial packet for now
+                    time.sleep(0.1)
+                    continue
+
+                LOGGER.debug("Received: %s", bytes_to_hex(s[:pkt.Length]))
+                s = s[pkt.Length:]
+                self._HandlePacket(pkt)
+        except Exception as e:
+            LOGGER.error("Error occured in dongle worker thread", exc_info=True)
+            self.__last_exception = e
 
     def _DoCommand(self, pkt, handler, timeout=_CMD_TIMEOUT):
         e = threading.Event()
@@ -547,6 +552,10 @@ class Dongle(object):
     def List(self):
         sensors = self._GetSensors()
         return sensors
+    
+    def CheckError(self):
+        if self.__last_exception:
+            raise self.__last_exception
 
     def Stop(self, timeout=_CMD_TIMEOUT):
         self.__exit_event.set()
