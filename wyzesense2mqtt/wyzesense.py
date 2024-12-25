@@ -282,17 +282,20 @@ class Dongle(object):
                 sensor_type = sensor[type]
                 sensor_state = sensor["states"][state2]
             else:
-                sensor_type = "unknown (" + str(type) + ")"
-                sensor_state = "unknown (" + str(state2) + ")"
+                sensor_type = f"unknown({type:02X})"
+                sensor_state = f"unknown({state2:02X})"
             e = SensorEvent(mac, timestamp, ("alarm" if event == 0xA2 else "status"), (sensor_type, sensor_state, battery, signal))
         elif event == 0xE8:
             type, b1, battery, b2, state1, state2, counter, signal = struct.unpack_from(">BBBBBBHB", data)
             if type == 0x03:
                 sensor_type = "leak:temperature"
                 sensor_state = "%d.%d" % (state1, state2)
-            e = SensorEvent(mac, timestamp, "state", (sensor_type, sensor_state, battery, signal))
+            else:
+                sensor_type = f"unknown({type:02X})"
+                sensor_state = f"unknown({state2:02X})"
+            e = SensorEvent(mac, timestamp, "status", (sensor_type, sensor_state, battery, signal))
         else:
-            e = SensorEvent(mac, timestamp, "%02X" % event, data)
+            e = SensorEvent(mac, timestamp, f"{event:02X}", data)
 
         self.__on_event(self, e)
 
