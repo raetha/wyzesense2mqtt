@@ -344,9 +344,11 @@ def delete_sensor_from_config(sensor_mac):
 # Publish MQTT topic
 def mqtt_publish(mqtt_topic, mqtt_payload, is_json=True, wait=True):
     global MQTT_CLIENT, CONFIG
+    payload = json.dumps(mqtt_payload) if is_json else mqtt_payload
+    LOGGER.debug(f"Publishing, {mqtt_topic=}, {payload=}")
     mqtt_message_info = MQTT_CLIENT.publish(
         mqtt_topic,
-        payload=(json.dumps(mqtt_payload) if is_json else mqtt_payload),
+        payload=payload,
         qos=CONFIG['mqtt_qos'],
         retain=CONFIG['mqtt_retain']
     )
