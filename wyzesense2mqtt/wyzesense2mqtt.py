@@ -371,41 +371,45 @@ def send_discovery_topics(sensor_mac, wait=True):
     else:
         sensor_version = ""
 
-    device_payload = {
-        'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
-        'manufacturer': "Wyze",
-        'model': (
-            "Sense Motion Sensor" if (sensor_class == "motion")
-            else "Sense Contact Sensor"
-        ),
-        'name': sensor_name,
-        'sw_version': sensor_version,
-        'via_device': "wyzesense2mqtt"
-    }
-
     mac_topic = f"{CONFIG['self_topic_root']}/{sensor_mac}"
 
     entity_payloads = {
         'state': {
-            'name': sensor_name,
+            'name': None,
             'device_class': sensor_class,
             'payload_on': "1",
             'payload_off': "0",
-            'json_attributes_topic': mac_topic
+            'json_attributes_topic': mac_topic,
+            'device' : {
+               'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
+               'manufacturer': "Wyze",
+               'model': (
+                  "Sense Motion Sensor" if (sensor_class == "motion") else "Sense Contact Sensor"
+               ),
+               'name': sensor_name,
+               'sw_version': sensor_version,
+               'via_device': "wyzesense2mqtt"
+            }
         },
         'signal_strength': {
-            'name': f"{sensor_name} Signal Strength",
             'device_class': "signal_strength",
             'state_class': "measurement",
-            'unit_of_measurement': "dBm",
-            'entity_category': "diagnostic"
+            'unit_of_measurement': "%",
+            'entity_category': "diagnostic",
+            'device' : {
+               'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
+               'name': sensor_name
+            }
         },
         'battery': {
-            'name': f"{sensor_name} Battery",
             'device_class': "battery",
             'state_class': "measurement",
             'unit_of_measurement': "%",
-            'entity_category': "diagnostic"
+            'entity_category': "diagnostic",
+            'device' : {
+               'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
+               'name': sensor_name
+            }
         }
     }
 
@@ -421,7 +425,6 @@ def send_discovery_topics(sensor_mac, wait=True):
         entity_payload['availability'] = availability_topics
         entity_payload['availability_mode'] = "all"
         entity_payload['platform'] = "mqtt"
-        entity_payload['device'] = device_payload
 
         entity_topic = f"{CONFIG['hass_topic_root']}/{'binary_sensor' if (entity == 'state') else 'sensor'}/wyzesense_{sensor_mac}/{entity}/config"
         mqtt_publish(entity_topic, entity_payload, wait=wait)
@@ -587,6 +590,7 @@ def on_event(WYZESENSE_DONGLE, event):
 
             # Negate signal strength to match dbm vs percent
             sensor_signal = sensor_signal * -1
+
             sensor_signal = min(max(2 * (sensor_signal + 115), 1), 100)
 
             # Build event payload
