@@ -8,6 +8,7 @@ Type=simple
 WorkingDirectory=/wyzesense2mqtt
 ExecStart=/wyzesense2mqtt/service.sh
 Restart=always
+KillSignal=SIGINT
 
 [Install]
 WantedBy=multi-user.target

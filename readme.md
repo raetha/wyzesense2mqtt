@@ -7,8 +7,6 @@
 [![GitHub Release](https://img.shields.io/github/v/release/raetha/wyzesense2mqtt)](https://github.com/raetha/wyzesense2mqtt/releases)
 [![Python Validation](https://github.com/raetha/wyzesense2mqtt/workflows/Python%20Validation/badge.svg)](https://github.com/raetha/wyzesense2mqtt/actions?query=workflow%3A%22Python+Validation%22)
 
-[![dockeri.co](https://dockeri.co/image/raetha/wyzesense2mqtt)](https://hub.docker.com/r/raetha/wyzesense2mqtt)
-
 Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use MQTT discovery mechanisms. The gateway allows direct local access to [Wyze Sense](https://wyze.com/wyze-sense.html) products without the need for a Wyze Cam or cloud services. This project and its dependencies have no relation to Wyze Labs Inc.
 
 ## Special Thanks
@@ -48,7 +46,7 @@ version: "3.7"
 services:
   wyzesense2mqtt:
     container_name: wyzesense2mqtt
-    image: raetha/wyzesense2mqtt:latest
+    image: ghcr.io/raetha/wyzesense2mqtt:latest
     hostname: wyzesense2mqtt
     restart: always
     tty: true
@@ -57,8 +55,8 @@ services:
     devices:
       - "/dev/hidraw0:/dev/hidraw0"
     volumes:
-      - "/docker/wyzesense2mqtt/config:/wyzesense2mqtt/config"
-      - "/docker/wyzesense2mqtt/logs:/wyzesense2mqtt/logs"
+      - "/docker/wyzesense2mqtt/config:/app/config"
+      - "/docker/wyzesense2mqtt/logs:/app/logs"
     environment:
       TZ: "America/New_York"
 ```
@@ -84,14 +82,12 @@ The gateway can also be run as a systemd service for those not wanting to use Do
 ```bash
 cd /tmp
 git clone https://github.com/raetha/wyzesense2mqtt.git
-# Use the below command instead if you want to help test the devel branch
-# git clone -b devel https://github.com/raetha/wyzesense2mqtt.git
 ```
-3. Create local application folders (Select a location that works for you, example uses /wyzesense2mqtt)
+3. Create local application folders (Select a location that works for you, example uses /opt/wyzesense2mqtt)
 ```bash
-mv /tmp/wyzesense2mqtt/wyzesense2mqtt /wyzesense2mqtt
+mv /tmp/wyzesense2mqtt/wyzesense2mqtt /opt/wyzesense2mqtt
 rm -rf /tmp/wyzesense2mqtt
-cd /wyzesense2mqtt
+cd /opt/wyzesense2mqtt
 mkdir config
 mkdir logs
 ```
@@ -123,7 +119,8 @@ sudo systemctl start wyzesense2mqtt
 sudo systemctl status wyzesense2mqtt
 sudo systemctl enable wyzesense2mqtt # Enable start on reboot
 ```
-9. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, but the sensor version will be unknown.
+9. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, but the sensor version will be unknown and the 
+class will default to opening, I.E. a contact sensor.
 
 
 ## Config Files
@@ -179,16 +176,22 @@ root:
 ```
 
 ### sensors.yaml
-This file will store basic information about each sensor paired to the Wyse Sense Bridge. The entries can be modified to set the class type and sensor name as it will show in Home Assistant. Since this file can be automatically generated, Python may automatically quote the MACs or not depending on if they are fully numeric.
+This file will store basic information about each sensor paired to the Wyse Sense Bridge. The entries can be modified to set the class type and sensor name as it will show in Home Assistant. Class types can be automatically filled for `opening`, `motion`, and `moisture`, 
+depending on the type of sensor. Since this file can be automatically generated, Python may automatically quote the MACs or not depending on if they are fully numeric. Sensors that were previously linked and automatically added will default to class `opening` and will not 
+have a "sw_version" set. For the original version 1 devices, the sw_version should be 19. For the newer version 2 devices, the sw_version should be 23. This will be automatically have the correct settings for devices added via a scan. A custom timeout for device 
+availability can also be added per device by setting the "timeout" setting, in seconds. For version 1 devices, the default timeout is 8 hours and for version 2 device, the default timeout is 4 hours.
 ```yaml
 'AAAAAAAA':
   class: door
   name: Entry Door
   invert_state: false
+  sw_version: 19
 'BBBBBBBB':
   class: window
   name: Office Window
   invert_state: false
+  sw_version: 23
+  timeout: 7200
 'CCCCCCCC':
   class: opening
   name: Kitchen Fridge
@@ -233,7 +236,7 @@ Once run it will present a menu of its functions:
 
 
 ## Home Assistant
-Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add devices for each sensor along with entites for the state, battery_level, and signal_strength. By default these entities will have a device_class of "opening" for contact sensors and "motion" for motion sensors. They will be named for the sensor type and MAC, e.g. Wyze Sense Contact Sensor AABBCCDD. To adjust the device_class to door or window, and set a custom name, update the sensors.yaml configuration file and replace the defaults, then restart WyzeSense2MQTT.
+Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add devices for each sensor along with entites for the state, battery_level, and signal_strength. By default these entities will have a device_class of "opening" for contact sensors, "motion" for motion sensors, and "moisture" for leak sensors. They will be named for the sensor type and MAC, e.g. Wyze Sense Contact Sensor AABBCCDD. To adjust the device_class to "door" or "window", and set a custom name, update the sensors.yaml configuration file and replace the defaults, then restart WyzeSense2MQTT. For a comprehensive list of device classes the Home Assistant recognizes, see the [`binary_sensor` documentation](https://www.home-assistant.io/integrations/binary_sensor/).
 
 
 ## Tested On

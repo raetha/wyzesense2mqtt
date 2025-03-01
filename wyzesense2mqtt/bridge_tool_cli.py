@@ -46,9 +46,9 @@ def main(args):
         logging.getLogger().setLevel(loglevel)
 
     device = args['--device']
-    print(f"Openning wyzesense gateway [{device}]")
+    print(f"Opening wyzesense gateway [{device}]")
     try:
-        ws = wyzesense.Open(device, on_event)
+        ws = wyzesense.Open(device, on_event, logging.getLogger())
         if not ws:
             print("Open wyzesense gateway failed")
             return 1
