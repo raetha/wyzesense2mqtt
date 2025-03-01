@@ -7,8 +7,6 @@
 [![GitHub Release](https://img.shields.io/github/v/release/raetha/wyzesense2mqtt)](https://github.com/raetha/wyzesense2mqtt/releases)
 [![Python Validation](https://github.com/raetha/wyzesense2mqtt/workflows/Python%20Validation/badge.svg)](https://github.com/raetha/wyzesense2mqtt/actions?query=workflow%3A%22Python+Validation%22)
 
-[![dockeri.co](https://dockeri.co/image/raetha/wyzesense2mqtt)](https://hub.docker.com/r/raetha/wyzesense2mqtt)
-
 Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use MQTT discovery mechanisms. The gateway allows direct local access to [Wyze Sense](https://wyze.com/wyze-sense.html) products without the need for a Wyze Cam or cloud services. This project and its dependencies have no relation to Wyze Labs Inc.
 
 ## Special Thanks
@@ -48,7 +46,7 @@ version: "3.7"
 services:
   wyzesense2mqtt:
     container_name: wyzesense2mqtt
-    image: raetha/wyzesense2mqtt:latest
+    image: ghcr.io/raetha/wyzesense2mqtt:latest
     hostname: wyzesense2mqtt
     restart: always
     tty: true
@@ -57,8 +55,8 @@ services:
     devices:
       - "/dev/hidraw0:/dev/hidraw0"
     volumes:
-      - "/docker/wyzesense2mqtt/config:/wyzesense2mqtt/config"
-      - "/docker/wyzesense2mqtt/logs:/wyzesense2mqtt/logs"
+      - "/docker/wyzesense2mqtt/config:/app/config"
+      - "/docker/wyzesense2mqtt/logs:/app/logs"
     environment:
       TZ: "America/New_York"
 ```
@@ -84,14 +82,12 @@ The gateway can also be run as a systemd service for those not wanting to use Do
 ```bash
 cd /tmp
 git clone https://github.com/raetha/wyzesense2mqtt.git
-# Use the below command instead if you want to help test the devel branch
-# git clone -b devel https://github.com/raetha/wyzesense2mqtt.git
 ```
-3. Create local application folders (Select a location that works for you, example uses /wyzesense2mqtt)
+3. Create local application folders (Select a location that works for you, example uses /opt/wyzesense2mqtt)
 ```bash
-mv /tmp/wyzesense2mqtt/wyzesense2mqtt /wyzesense2mqtt
+mv /tmp/wyzesense2mqtt/wyzesense2mqtt /opt/wyzesense2mqtt
 rm -rf /tmp/wyzesense2mqtt
-cd /wyzesense2mqtt
+cd /opt/wyzesense2mqtt
 mkdir config
 mkdir logs
 ```

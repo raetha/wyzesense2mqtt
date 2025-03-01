@@ -1,10 +1,8 @@
 # WyzeSense2MQTT files
-config.yaml
-sensors.yaml
+config/
 logs/
 
 # Docker files
-hooks
 Dockerfile
 docker-compose.yml.sample
 .dockerignore
