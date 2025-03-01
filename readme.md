@@ -119,7 +119,8 @@ sudo systemctl start wyzesense2mqtt
 sudo systemctl status wyzesense2mqtt
 sudo systemctl enable wyzesense2mqtt # Enable start on reboot
 ```
-9. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, but the sensor version will be unknown.
+9. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, but the sensor version will be unknown and the 
+class will default to opening, I.E. a contact sensor.
 
 
 ## Config Files
@@ -175,16 +176,22 @@ root:
 ```
 
 ### sensors.yaml
-This file will store basic information about each sensor paired to the Wyse Sense Bridge. The entries can be modified to set the class type and sensor name as it will show in Home Assistant. Class types can be automatically filled for `opening`, `motion`, and `moisture`, depending on the type of sensor. Since this file can be automatically generated, Python may automatically quote the MACs or not depending on if they are fully numeric.
+This file will store basic information about each sensor paired to the Wyse Sense Bridge. The entries can be modified to set the class type and sensor name as it will show in Home Assistant. Class types can be automatically filled for `opening`, `motion`, and `moisture`, 
+depending on the type of sensor. Since this file can be automatically generated, Python may automatically quote the MACs or not depending on if they are fully numeric. Sensors that were previously linked and automatically added will default to class `opening` and will not 
+have a "sw_version" set. For the original version 1 devices, the sw_version should be 19. For the newer version 2 devices, the sw_version should be 23. This will be automatically have the correct settings for devices added via a scan. A custom timeout for device 
+availability can also be added per device by setting the "timeout" setting, in seconds. For version 1 devices, the default timeout is 8 hours and for version 2 device, the default timeout is 4 hours.
 ```yaml
 'AAAAAAAA':
   class: door
   name: Entry Door
   invert_state: false
+  sw_version: 19
 'BBBBBBBB':
   class: window
   name: Office Window
   invert_state: false
+  sw_version: 23
+  timeout: 7200
 'CCCCCCCC':
   class: opening
   name: Kitchen Fridge
