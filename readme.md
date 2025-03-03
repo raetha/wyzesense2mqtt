@@ -40,25 +40,33 @@ Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or o
 This is the most highly tested method of running the gateway. It allows for persistance and easy migration assuming the hardware dongle moves along with the configuration. All steps are performed from Docker host, not container.
 
 1. Plug Wyze Sense Bridge into USB port on Docker host. Confirm that it shows up as /dev/hidraw0, if not, update devices entry in Docker Compose file with correct path.
-2. Create a Docker Compose file similar to the following. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details on the file format and options. If you would like to help test in development feaures, please change the image to "devel" instead of "latest".
+2. Create a Docker Compose file and a .env file similar to the following. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details on the file format and options. Sample files for docker-compose.yml and .env are included in the repository for easy copying.
 ```yaml
-version: "3.7"
+# Sample docker-compose.yml:
 services:
   wyzesense2mqtt:
     container_name: wyzesense2mqtt
-    image: ghcr.io/raetha/wyzesense2mqtt:latest
     hostname: wyzesense2mqtt
-    restart: always
+    image: ghcr.io/raetha/wyzesense2mqtt:${IMAGE_TAG:-latest}
+    network_mode: bridge
+    restart: unless-stopped
     tty: true
     stop_signal: SIGINT
-    network_mode: bridge
-    devices:
-      - "/dev/hidraw0:/dev/hidraw0"
-    volumes:
-      - "/docker/wyzesense2mqtt/config:/app/config"
-      - "/docker/wyzesense2mqtt/logs:/app/logs"
     environment:
-      TZ: "America/New_York"
+      TZ: "${TZ:-UTC}"
+    devices:
+      - "${DEV_WYZESENSE:-/dev/hidraw0}:/dev/hidraw0"
+    volumes:
+      - "${VOL_CONFIG}:/app/config"
+      - "${VOL_LOGS}:/app/logs"
+```
+```
+# Sample .env:
+IMAGE_TAG=latest
+TZ=America/New_York
+DEV_WYZESENSE=/dev/hidraw0
+VOL_CONFIG=/docker/wyzesense2mqtt/config
+VOL_LOGS=/docker/wyzesense2mqtt/logs
 ```
 3. Create your local volume mounts. Use the same folders as selected in the Docker Compose file created above.
 ```bash

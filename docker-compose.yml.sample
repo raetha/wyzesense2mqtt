@@ -1,17 +1,16 @@
-version: "3.7"
 services:
   wyzesense2mqtt:
     container_name: wyzesense2mqtt
-    image: ghcr.io/raetha/wyzesense2mqtt:latest
     hostname: wyzesense2mqtt
-    restart: always
+    image: ghcr.io/raetha/wyzesense2mqtt:${IMAGE_TAG:-latest}
+    network_mode: bridge
+    restart: unless-stopped
     tty: true
     stop_signal: SIGINT
-    network_mode: bridge
-    devices:
-      - "/dev/hidraw0:/dev/hidraw0"
-    volumes:
-      - "/docker/wyzesense2mqtt/config:/app/config"
-      - "/docker/wyzesense2mqtt/logs:/app/logs"
     environment:
-      TZ: "America/New_York"
+      TZ: "${TZ:-UTC}"
+    devices:
+      - "${DEV_WYZESENSE:-/dev/hidraw0}:/dev/hidraw0"
+    volumes:
+      - "${VOL_CONFIG}:/app/config"
+      - "${VOL_LOGS}:/app/logs"
