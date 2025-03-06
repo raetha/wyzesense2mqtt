@@ -117,6 +117,7 @@ def init_config():
         CONFIG = read_yaml_file(os.path.join(SAMPLES_PATH, MAIN_CONFIG_FILE))
 
     # load user config over base
+    user_config = None
     if (os.path.isfile(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE))):
         user_config = read_yaml_file(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE))
         CONFIG.update(user_config)
@@ -127,7 +128,7 @@ def init_config():
         exit(1)
 
     # write updated config file if needed
-    if (CONFIG != user_config):
+    if (user_config is None or CONFIG != user_config):
         LOGGER.info("Writing updated config file")
         write_yaml_file(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE), CONFIG)
 
