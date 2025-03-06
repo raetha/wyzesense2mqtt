@@ -9,6 +9,20 @@ services:
     stop_signal: SIGINT
     environment:
       TZ: "${TZ:-UTC}"
+      MQTT_HOST: "${MQTT_HOST}"
+      MQTT_PORT: "${MQTT_PORT:-1883}"
+      MQTT_USERNAME: "${MQTT_USERNAME}"
+      MQTT_PASSWORD: "${MQTT_PASSWORD}"
+      MQTT_CLIENT_ID: "${MQTT_CLIENT_ID:-wyzesense2mqtt}"
+      MQTT_CLEAN_SESSION: "${MQTT_CLEAN_SESSION:-false}"
+      MQTT_KEEPALIVE: "${MQTT_KEEPALIVE:-60}"
+      MQTT_QOS: "${MQTT_QOS:-0}"
+      MQTT_RETAIN: "${MQTT_RETAIN:-true}"
+      SELF_TOPIC_ROOT: "${SELF_TOPIC_ROOT:-wyzesense2mqtt}"
+      HASS_TOPIC_ROOT: "${HASS_TOPIC_ROOT:-homeassistant}"
+      HASS_DISCOVERY: "${HASS_DISCOVERY:-true}"
+      PUBLISH_SENSOR_NAME: "${PUBLISH_SENSOR_NAME:-true}"
+      USB_DONGLE: "${USB_DONGLE:-auto}"
     devices:
       - "${DEV_WYZESENSE:-/dev/hidraw0}:/dev/hidraw0"
     volumes:
