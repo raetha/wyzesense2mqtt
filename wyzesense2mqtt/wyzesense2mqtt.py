@@ -117,6 +117,7 @@ def init_config():
         CONFIG = read_yaml_file(os.path.join(SAMPLES_PATH, MAIN_CONFIG_FILE))
 
     # load user config over base
+    user_config = None
     if (os.path.isfile(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE))):
         user_config = read_yaml_file(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE))
         CONFIG.update(user_config)
@@ -127,7 +128,7 @@ def init_config():
         exit(1)
 
     # write updated config file if needed
-    if (CONFIG != user_config):
+    if (user_config is None or CONFIG != user_config):
         LOGGER.info("Writing updated config file")
         write_yaml_file(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE), CONFIG)
 
@@ -344,9 +345,11 @@ def delete_sensor_from_config(sensor_mac):
 # Publish MQTT topic
 def mqtt_publish(mqtt_topic, mqtt_payload, is_json=True, wait=True):
     global MQTT_CLIENT, CONFIG
+    payload = json.dumps(mqtt_payload) if is_json else mqtt_payload
+    LOGGER.debug(f"Publishing, {mqtt_topic=}, {payload=}")
     mqtt_message_info = MQTT_CLIENT.publish(
         mqtt_topic,
-        payload=(json.dumps(mqtt_payload) if is_json else mqtt_payload),
+        payload=payload,
         qos=CONFIG['mqtt_qos'],
         retain=CONFIG['mqtt_retain']
     )
@@ -670,6 +673,8 @@ if __name__ == "__main__":
         loop_counter = 0
         while True:
             time.sleep(5)
+            # Check if there is any exceptions in the dongle thread
+            WYZESENSE_DONGLE.CheckError()
 
             # Skip everything while dongle is offline, service needs to be restarted
             if dongle_offline:
@@ -715,6 +720,8 @@ if __name__ == "__main__":
                         LOGGER.warning(f"{mac} has gone offline!")
                         SENSORS_STATE[mac]['online'] = False
     except KeyboardInterrupt:
-        pass
+        LOGGER.warning("User interrupted")
+    except Exception as e:
+        LOGGER.error("An error occurred", exc_info=True)
     finally:
         Stop()

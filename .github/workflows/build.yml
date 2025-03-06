@@ -3,6 +3,12 @@ name: Publish to container registries
 on:
   release:
     types: [ "published" ]
+  push:
+    branches:
+      - devel
+  pull_request:
+    branches:
+      - devel
 
 jobs:
   ghcr-io:
