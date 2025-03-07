@@ -2,9 +2,11 @@
 #
 
 # WyzeSense2MQTT requirements
-paho_mqtt
+paho-mqtt < 3
+PyYAML
 retrying
-pyyaml
+six
+
 # Now includes custom WyzeSensePy library to resolve assertion error, issues #12, #17
 #wyzesense
 
