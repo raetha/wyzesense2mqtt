@@ -113,7 +113,7 @@ docker-compose up -d
 
 ### Linux Systemd
 
-If you would like to use this project outside of docker, please follow the instructions at [Installing for Linux Systemd](docs/linux_systemd_installation.md). This method is not actively tested and may require more knowledge to succesfully implement.
+If you would like to use this project outside of docker, please follow the instructions at [Linux Systemd Installation](docs/linux_systemd_installation.md). This method is not actively tested and may require more knowledge to succesfully implement.
 
 ## Configuration Files
 The gateway uses three config files located in the config directory. Examples of each are below and in the repository.
@@ -238,9 +238,9 @@ Home Assistant simply needs to be configured with the MQTT broker that the gatew
     * Contact Sensor
     * Leak Sensor
     * Motion Sensor
-* Wyze Sense Hub Sensors (Coming Soon!) - Requires installing the Wyze Sense Hub firmware onto a Wyze Sense Bridge (unsupported and untested)
-    * Climate Sensor (WSCS1)
+* Wyze Sense Hub Sensors - Requires installing the Wyze Sense Hub firmware onto a Wyze Sense Bridge (unsupported and untested)
     * Entry Sensor v2 (WSES2)
-    * Keypad (WSKP1)
-    * Leak Sensor (WSLS1)
     * Motion Sensor v2 (WSMS2)
+    * Climate Sensor (WSCS1) - Coming Soon Hopefully
+    * Keypad (WSKP1) - Coming Soon Hopefully
+    * Leak Sensor (WSLS1) - Coming Soon Hopefully
