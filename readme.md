@@ -7,12 +7,12 @@
 [![GitHub Release](https://img.shields.io/github/v/release/raetha/wyzesense2mqtt)](https://github.com/raetha/wyzesense2mqtt/releases)
 [![Python Validation](https://github.com/raetha/wyzesense2mqtt/workflows/Python%20Validation/badge.svg)](https://github.com/raetha/wyzesense2mqtt/actions?query=workflow%3A%22Python+Validation%22)
 
-Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use MQTT discovery mechanisms. The gateway allows direct local access to [Wyze Sense](https://wyze.com/wyze-sense.html) products without the need for a Wyze Cam or cloud services. This project and its dependencies have no relation to Wyze Labs Inc.
+Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use the same MQTT discovery mechanisms. The gateway allows direct local access to [Wyze Sense](https://wyze.com/wyze-sense.html) products without the need for a Wyze Cam or cloud services. This project and its dependencies have no relation to Wyze Labs Inc.
 
 Please submit pull requests against the devel branch.
 
 ## Special Thanks
-* [HcLX](https://hclxing.wordpress.com) for [WyzeSensePy](https://github.com/HclX/WyzeSensePy), the core library this project uses.
+* [HcLX](https://hclxing.wordpress.com) for [WyzeSensePy](https://github.com/HclX/WyzeSensePy), the core library this project forked.
 * [Kevin Vincent](http://kevinvincent.me) for [HA-WyzeSense](https://github.com/kevinvincent/ha-wyzesense), the reference code I used to get things working right with the calls to WyzeSensePy.
 * [ozczecho](https://github.com/ozczecho) for [wyze-mqtt](https://github.com/ozczecho/wyze-mqtt), the inspiration for this project.
 
@@ -33,13 +33,14 @@ Please submit pull requests against the devel branch.
     - [Reload Sensors](#reload-sensors)
     - [Command Line Tool](#command-line-tool)
   - [Home Assistant](#home-assistant)
+  - [Compatible Hardware](#compatible-hardware)
 
 ## Installation
 
 ### Docker
-This is the most highly tested method of running the gateway. It allows for persistance and easy migration assuming the hardware dongle moves along with the configuration. All steps are performed from Docker host, not container. Images are published to GHCR and Docker Hub.
+This is the most tested method of running the gateway. It allows for persistance and easy migration assuming the hardware dongle moves along with the configuration. All steps are performed from the Docker host, not the container. Images are published to GHCR and Docker Hub.
 
-1. Plug Wyze Sense Bridge into USB port on Docker host. Confirm that it shows up as /dev/hidraw0, if not, update devices entry in Docker Compose file with correct path.
+1. Plug the Wyze Sense Bridge into a USB port on the Docker host. Confirm that it shows up as /dev/hidraw0, if not, update the devices entry in the Docker Compose file with the correct device path.
 2. Create a Docker Compose file and a .env file similar to the following. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details on the file format and options. Example files for docker-compose.yml and .env are also included in the repository for easy copying.
 ```yaml
 ### Example docker-compose.yml ###
@@ -96,24 +97,24 @@ DEV_WYZESENSE=/dev/hidraw0
 VOL_CONFIG=/docker/wyzesense2mqtt/config
 VOL_LOGS=/docker/wyzesense2mqtt/logs
 ```
-3. Create your local volume mounts. Use the same folders as selected in the Docker Compose file created above.
+3. Create your local volume mounts. Use the same folders you entered in the Docker Compose files created above.
 ```bash
 mkdir /docker/wyzesense2mqtt/config
 mkdir /docker/wyzesense2mqtt/logs
 ```
-4. (Optional if using Docker environment variables) Create or copy a config.yaml file into the config folder (see example below or copy from repository). The script will automatically create a default config.yaml if one is not found, but it will need to be modified with your MQTT details before things will work.
-5. Copy a logging.yaml file into the config folder (see example below or copy from repository). The script will automatically create a default logging.yaml if one does not exist. You only need to modify this if more complex logging is required.
-6. If desired, pre-populate a sensors.yaml file into the config folder with your existing sensors. This file will automatically be created if it doesn't exist. (see example below or copy from repository)
+4. (Optional, when using Docker environment variables) Create or copy a config.yaml file into the config folder (see example below or copy from repository). The script will automatically create a default config.yaml if one is not found, but it will need to be modified with the correct MQTT details before things will work.
+5. (Optional) Copy a logging.yaml file into the config folder (see example below or copy from repository). The script will automatically use the default logging.yaml if one does not exist. You only need to modify this if more complex logging is required.
+6. (Optional) Pre-populate a sensors.yaml file into the config folder with your existing sensors. This file will automatically be created if it doesn't exist. (see example below or copy from repository)
 7. Start the Docker container
 ```bash
 docker-compose up -d
 ```
-8. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, but the sensor version will be unknown.
+8. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, though the sensor version will be unknown and the class will default to opening, i.e. a contact sensor. You should manually update these entries.
 
 ### Linux Systemd
 
-The gateway can also be run as a systemd service for those not wanting to use Docker. Requires Python 3.6 or newer. You may need to do all commands as root, depending on filesystem permissions.
-1. Plug Wyze Sense Bridge into USB port on Linux host.
+The gateway can also be run as a systemd service for those not wanting to use Docker. Requires Python 3.6 or newer. You may need to do all commands as root, depending on filesystem permissions. This is NOT actively tested, please submit an issue or PR if you experience problems.
+1. Plug the Wyze Sense Bridge into a USB port on the Linux host.
 2. Pull down a copy of the repository
 ```bash
 cd /tmp
@@ -155,14 +156,13 @@ sudo systemctl start wyzesense2mqtt
 sudo systemctl status wyzesense2mqtt
 sudo systemctl enable wyzesense2mqtt # Enable start on reboot
 ```
-9. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, but the sensor version will be unknown and the 
-class will default to opening, I.E. a contact sensor.
+9. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, though the sensor version will be unknown and the class will default to opening, i.e. a contact sensor. You should manually update these entries.
 
 ## Config Files
 The gateway uses three config files located in the config directory. Examples of each are below and in the repository.
 
 ### config.yaml
-This is the main configuration file. Aside from MQTT host, username, and password, the defaults should work for most people. This will be created automatically if ENV values are supplied and does not need to be created in advance.
+This is the main configuration file. Aside from MQTT host, username, and password, the defaults should work for most people. A working configuration will be created automatically if ENV values are available for at least mqtt_host, mqtt_username, and mqtt_password. So it does not need to be created in advance.
 ```yaml
 mqtt_host: <host>
 mqtt_port: 1883
@@ -266,4 +266,20 @@ Once run it will present a menu of its functions:
 * F - Fix invalid sensors (Removes sensors with invalid MACs, common problem with broken sensors or low batteries)
 
 ## Home Assistant
-Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add devices for each sensor along with entites for the state, battery_level, and signal_strength. By default these entities will have a device_class of "opening" for contact sensors, "motion" for motion sensors, and "moisture" for leak sensors. They will be named for the sensor type and MAC, e.g. Wyze Sense Contact Sensor AABBCCDD. To adjust the device_class to "door" or "window", and set a custom name, update the sensors.yaml configuration file and replace the defaults, then restart WyzeSense2MQTT. For a comprehensive list of device classes the Home Assistant recognizes, see the [`binary_sensor` documentation](https://www.home-assistant.io/integrations/binary_sensor/).
+Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add devices for each sensor along with entites for the state, battery_level, and signal_strength. By default these entities will have a device_class of "opening" for contact sensors, "motion" for motion sensors, and "moisture" for leak sensors. They will be named for the sensor type and MAC, e.g. Wyze Sense Contact Sensor AABBCCDD. To adjust the device_class to "door" or "window", and set a custom name, update the sensors.yaml configuration file and replace the defaults, then restart WyzeSense2MQTT. For a comprehensive list of device classes that Home Assistant recognizes, see the [binary_sensor documentation](https://www.home-assistant.io/integrations/binary_sensor/).
+
+## Compatible Hardware
+### Bridge Devices
+* Wyze Sense Bridge (WHSB1)
+* Neos Smart Bridge (N-LSP-US1) - Untested, but theoretically compatible
+
+### Sensors
+* Wyze Sense Contact Sensor v1
+* Wyze Sense Motion Sensor v1
+* Neos Smart Leak Sensor
+* Wyze Sense v2 Devices (Coming Soon!) - Requires installing the Wyze Sense Hub firmware onto a Wyze Sense Bridge (unsupported and untested)
+    * Wyze Sense Entry Sensor v2 (WSES2)
+    * Wyse Sense Motion Sensor v2 (WSMS2)
+    * Wyze Sense Leak Sensor (WSLS1)
+    * Wyze Sense Keypad (WSKP1)
+    * Wyze Sense Climate Sensor (WSCS1)
