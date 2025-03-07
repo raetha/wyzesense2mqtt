@@ -112,15 +112,44 @@ def init_config():
     global CONFIG
     LOGGER.info("Initializing configuration...")
 
-    # load base config - allows for auto addition of new settings
-    if (os.path.isfile(os.path.join(SAMPLES_PATH, MAIN_CONFIG_FILE))):
-        CONFIG = read_yaml_file(os.path.join(SAMPLES_PATH, MAIN_CONFIG_FILE))
+    # Initialize CONFIG dictionary with default values
+    # Allows for addition of new settings and ensures that missing values will have a default at runtime
+    CONFIG = {
+        'mqtt_host': None,
+        'mqtt_port': 1883,
+        'mqtt_username': None,
+        'mqtt_password': None,
+        'mqtt_client_id': 'wyzesense2mqtt',
+        'mqtt_clean_session': False,
+        'mqtt_keepalive': 60,
+        'mqtt_qos': 0,
+        'mqtt_retain': True,
+        'self_topic_root': 'wyzesense2mqtt',
+        'hass_topic_root': 'homeassistant',
+        'hass_discovery': True,
+        'publish_sensor_name': True,
+        'usb_dongle': 'auto'
+    }
 
-    # load user config over base
-    user_config = None
+    # load config file over default values
+    config_from_file = None
     if (os.path.isfile(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE))):
-        user_config = read_yaml_file(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE))
-        CONFIG.update(user_config)
+        config_from_file = read_yaml_file(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE))
+        CONFIG.update(config_from_file)
+
+    # load ENV supplied config over default values and config file values
+    for key,value in os.environ.items():
+        key = str(key).lower()
+        if key in CONFIG:
+            if value.isnumeric():
+                value = int(value)
+            elif value.lower() == 'true':
+                value = True
+            elif value.lower() == 'false':
+                value = False
+            elif value.lower() == 'none':
+                value = None
+            CONFIG.update({key: value})
 
     # fail on no config
     if (CONFIG is None):
@@ -128,7 +157,7 @@ def init_config():
         exit(1)
 
     # write updated config file if needed
-    if (user_config is None or CONFIG != user_config):
+    if (config_from_file is None or CONFIG != config_from_file):
         LOGGER.info("Writing updated config file")
         write_yaml_file(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE), CONFIG)
 
@@ -140,7 +169,12 @@ def init_mqtt_client():
     mqtt.Client.connected_flag = False
 
     # Configure MQTT Client
-    MQTT_CLIENT = mqtt.Client(client_id=CONFIG['mqtt_client_id'], clean_session=CONFIG['mqtt_clean_session'])
+    if not hasattr(mqtt, "CallbackAPIVersion"):
+        # paho-mqtt 1.x
+        MQTT_CLIENT = mqtt.Client(client_id=CONFIG['mqtt_client_id'], clean_session=CONFIG['mqtt_clean_session'])
+    else:
+        # paho-mqtt 2.x
+        MQTT_CLIENT = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1,client_id=CONFIG['mqtt_client_id'], clean_session=CONFIG['mqtt_clean_session'])
     MQTT_CLIENT.username_pw_set(username=CONFIG['mqtt_username'], password=CONFIG['mqtt_password'])
     MQTT_CLIENT.reconnect_delay_set(min_delay=1, max_delay=120)
     MQTT_CLIENT.on_connect = on_connect
