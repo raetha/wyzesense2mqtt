@@ -13,7 +13,7 @@ import logging
 
 def bytes_to_hex(s):
     if s:
-        return binascii.hexlify(s)
+        return ','.join(f"{x:02x}" for x in s)
     else:
         return "<None>"
 
@@ -29,6 +29,37 @@ TYPE_ASYNC = 0x53
 CONTACT_IDS = {0x01: "switch", 0x0E: "switchv2", "states": ["close", "open"]}
 MOTION_IDS = {0x02: "motion", 0x0F: "motionv2", "states": ["inactive", "active"]}
 LEAK_IDS = {0x03: "leak", "states": ["dry", "wet"]}
+
+EVENT_TYPE_HEARTBEAT    = 0xA1
+EVENT_TYPE_ALARM        = 0xA2
+EVENT_TYPE_CLIMATE      = 0xE8
+EVENT_TYPE_LEAK         = 0xEA
+
+SENSOR_TYPE_SWITCH      = 0x01
+SENSOR_TYPE_MOTION      = 0x02
+SENSOR_TYPE_LEAK        = 0x03
+SENSOR_TYPE_CLIMATE     = 0x07
+SENSOR_TYPE_CHIME       = 0x0C
+SENSOR_TYPE_SWITCH_V2   = 0x0E
+SENSOR_TYPE_MOTION_V2   = 0x0F
+
+SENSOR_TYPES = {
+    SENSOR_TYPE_SWITCH:    "switch",
+    SENSOR_TYPE_SWITCH_V2: "switchv2",
+    SENSOR_TYPE_MOTION:    "motion",
+    SENSOR_TYPE_MOTION_V2: "motionv2",
+    SENSOR_TYPE_LEAK:      "leak",
+    SENSOR_TYPE_CLIMATE:   "climate",
+    SENSOR_TYPE_CHIME:     "chime",
+}
+
+BINARY_SENSOR_STATES = {
+    SENSOR_TYPE_SWITCH:     ("closed", "open"),
+    SENSOR_TYPE_SWITCH_V2:  ("closed", "open"),
+    SENSOR_TYPE_MOTION:     ("inactive", "active"),
+    SENSOR_TYPE_MOTION_V2:  ("inactive", "active"),
+    SENSOR_TYPE_LEAK:       ("dry", "wet"),
+}
 
 
 def MAKE_CMD(type, cmd):
@@ -57,14 +88,23 @@ class Packet(object):
     CMD_GET_SENSOR_R1 = MAKE_CMD(TYPE_ASYNC, 0x21)
     CMD_VERIFY_SENSOR = MAKE_CMD(TYPE_ASYNC, 0x23)
     CMD_DEL_SENSOR = MAKE_CMD(TYPE_ASYNC, 0x25)
+    CMD_DEL_ALL_SENSORS = MAKE_CMD(TYPE_ASYNC, 0x3F)
+
     CMD_GET_SENSOR_COUNT = MAKE_CMD(TYPE_ASYNC, 0x2E)
     CMD_GET_SENSOR_LIST = MAKE_CMD(TYPE_ASYNC, 0x30)
+
+    CMD_PLAY_CHIME = MAKE_CMD(TYPE_ASYNC, 0x70)
+    # CMD_PLAY_CHIME_2 = MAKE_CMD(TYPE_ASYNC, 0x47)
+    # aa,55,53,0e,47,37,37,41,38,38,45,39,36,03,02,00,01,03,a8
+    # This command is not supported by the HMS cc1310 firmware, seems to be only
+    # available on doorbell
 
     # Notifications initiated from dongle side
     NOTIFY_SENSOR_ALARM = MAKE_CMD(TYPE_ASYNC, 0x19)
     NOTIFY_SENSOR_SCAN = MAKE_CMD(TYPE_ASYNC, 0x20)
     NOTIFY_SYNC_TIME = MAKE_CMD(TYPE_ASYNC, 0x32)
     NOTIFY_EVENT_LOG = MAKE_CMD(TYPE_ASYNC, 0x35)
+    NOTIFY_SENSOR_ALARM2 = MAKE_CMD(TYPE_ASYNC, 0x55)
 
     def __init__(self, cmd, payload=bytes()):
         self._cmd = cmd
@@ -201,6 +241,10 @@ class Packet(object):
         return cls(cls.CMD_DEL_SENSOR, mac.encode('ascii'))
 
     @classmethod
+    def DelAllSensor(cls):
+        return cls(cls.CMD_DEL_ALL_SENSOR)
+
+    @classmethod
     def GetSensorR1(cls, mac, r):
         assert isinstance(r, bytes)
         assert len(r) == 16
@@ -221,6 +265,20 @@ class Packet(object):
     @classmethod
     def Ch554Upgrade(cls):
         return cls(cls.CMD_SET_CH554_UPGRADE)
+    
+    @classmethod
+    def PlayChime(cls, mac, ringid, repeat_cnt, volume):
+        assert isinstance(mac, str)
+        assert len(mac) == 8
+        assert isinstance(ringid, int)
+        assert ringid >= 0 and ringid <= 0xFF
+        assert isinstance(repeat_cnt, int)
+        assert isinstance(volume, int)
+        if volume < 1:
+            volume = 1
+        if volume > 9:
+            volume = 9
+        return cls(cls.CMD_PLAY_CHIME, mac.encode('ascii') + bytes([ringid, repeat_cnt, volume]))
 
     @classmethod
     def SyncTimeAck(cls):
@@ -233,20 +291,122 @@ class Packet(object):
 
 
 class SensorEvent(object):
-    def __init__(self, mac, timestamp, event_type, event_data):
-        self.MAC = mac
-        self.Timestamp = timestamp
-        self.Type = event_type
-        self.Data = event_data
+    def __init__(self, event, mac, timestamp, **kwargs):
+        self.__dict__.update(kwargs)
+
+        if 'battery' in self.__dict__:
+            # V2 switch sensor uses a single 1.5v battery and reports half the
+            # battery level of other sensors with 3v batteries
+            if self.sensor_type == SENSOR_TYPES[SENSOR_TYPE_SWITCH_V2]:
+                self.battery = self.battery * 2
+
+            # Adjust battery to max it at 100%
+            self.battery = min(self.battery, 100)
+
+        if 'signal_strength' in self.__dict__:
+            self.signal_strength = - self.signal_strength
+
+        self.event = event
+        self.mac = mac
+        self.timestamp = timestamp
 
     def __str__(self):
-        if self.Type == 'alarm':
-            return f"AlarmEvent [{self.MAC}]: time={self.Timestamp.strftime('%Y-%m-%d %H:%M:%S')}, sensor_type={self.Data[0]}, state={self.Data[1]}, battery={self.Data[2]}, signal={self.Data[3]}"
-        elif self.Type == 'status':
-            return f"StatusEvent [{self.MAC}]: time={self.Timestamp.strftime('%Y-%m-%d %H:%M:%S')}, sensor_type={self.Data[0]}, state={self.Data[1]}, battery={self.Data[2]}, signal={self.Data[3]}"
-        else:
-            return f"RawEvent [{self.MAC}]: time={self.Timestamp.strftime('%Y-%m-%d %H:%M:%S')}, event_type={self.Type}, data={bytes_to_hex(self.Data)}"
+        return ','.join(f'{attr}={value}' for attr, value in self.__dict__.items())
 
+    @classmethod
+    def _AlarmParser(cls, mac, event, sensor_type, timestamp, data):
+        _, battery, _, _, state, seq, signal_strength = struct.unpack_from(">BBBBBHB", data)
+        if sensor_type not in SENSOR_TYPES:
+            LOGGER.warn(f"Unknown sensor type: {sensor_type: 02X}")
+            return cls._UnknownParser(mac, event, timestamp, data)
+
+        if sensor_type not in BINARY_SENSOR_STATES:
+            LOGGER.warn(f"Not expecting {sensor_type} sensor for event {event:02X}")
+            return cls._UnknownParser(mac, event, timestamp, data)
+
+        return cls(
+            "alarm", mac, timestamp,
+            sensor_type=SENSOR_TYPES[sensor_type],
+            battery=battery, signal_strength=signal_strength,
+            state=BINARY_SENSOR_STATES[sensor_type][state])
+
+    @classmethod
+    def _HeartbeatParser(cls, mac, event, sensor_type, timestamp, data):
+        _, battery, _, _, state, seq, signal_strength = struct.unpack_from(">BBBBBHB", data)
+        if sensor_type not in SENSOR_TYPES:
+            LOGGER.warn(f"Unknown sensor type: {sensor_type: 02X}")
+            return cls._UnknownParser(mac, event, timestamp, data)
+
+        return cls(
+            "status", mac, timestamp,
+            sensor_type=SENSOR_TYPES[sensor_type],
+            battery=battery, signal_strength=signal_strength)
+
+    @classmethod
+    def _ClimateParser(cls, mac, event, sensor_type, timestamp, data):
+        _, battery, _, _, temp_hi, temp_lo, humidity, _, seq, signal_strength = struct.unpack_from(">BBBBBBBBBB", data)
+
+        if sensor_type != SENSOR_TYPE_CLIMATE:
+            LOGGER.warn(f"Unexpected sensor ({sensor_type:02X}) for event {event:02X}")
+            return cls._UnknownParser(mac, event, timestamp, data)
+
+        temperature = f"{temp_hi + (temp_lo / 100.0):.2f}"
+        return cls(
+            "status", mac, timestamp,
+            sensor_type=SENSOR_TYPES[sensor_type],
+            battery=battery, signal_strength=signal_strength,
+            temperature=temperature,
+            humidity=humidity)
+
+    @classmethod
+    def _LeakParser(cls, mac, event, sensor_type, timestamp, data):
+        _, _, battery, _, _, state, probe_state, probe_available, _, seq, signal_strength = struct.unpack_from(">BBBBBBBBBBB", data)
+
+        if sensor_type not in BINARY_SENSOR_STATES:
+            LOGGER.warn(f"Not expecting {sensor_type} sensor for event {event:02X}")
+            return cls._UnknownParser(mac, event, timestamp, data)
+
+        return cls(
+            "alarm", mac, timestamp,
+            sensor_type=SENSOR_TYPES[sensor_type],
+            battery=battery, signal_strength=signal_strength,
+            state=BINARY_SENSOR_STATES[sensor_type][state],
+            probe_state=BINARY_SENSOR_STATES[sensor_type][probe_state],
+            probe_available=bool(probe_available),
+        )
+
+    @classmethod
+    def _UnknownParser(cls, mac, event, sensor_type, timestamp, data):
+        return cls(f"unknown:{event:02X}", mac, timestamp, raw=bytes_to_hex(data))
+
+    @classmethod
+    def Parse(cls, data):
+        _EVENT_PARSERS = {
+            EVENT_TYPE_HEARTBEAT: cls._HeartbeatParser,
+            EVENT_TYPE_ALARM: cls._AlarmParser,
+            EVENT_TYPE_CLIMATE: cls._ClimateParser,
+        }
+
+        timestamp, event, mac, sensor_type = struct.unpack_from(">QB8sB", data)
+        data = data[18:]
+        timestamp = timestamp / 1000.0
+        mac = mac.decode('ascii')
+
+        parser = _EVENT_PARSERS.get(event, cls._UnknownParser)
+        return parser(mac, event, sensor_type, timestamp, data)
+
+    @classmethod
+    def Parse2(cls, data):
+        event, mac, sensor_type = struct.unpack_from(">B8sB", data)
+        data = data[10:]
+        timestamp = time.time()
+        mac = mac.decode('ascii')
+
+        _EVENT_PARSERS = {
+            EVENT_TYPE_LEAK: cls._LeakParser,
+        }
+        parser = _EVENT_PARSERS.get(event, cls._UnknownParser)
+        return parser(mac, event, sensor_type, timestamp, data)
 
 class Dongle(object):
     _CMD_TIMEOUT = 2
@@ -257,46 +417,19 @@ class Dongle(object):
                 setattr(self, key, kwargs[key])
 
     def _OnSensorAlarm(self, pkt):
-        global CONTACT_IDS, MOTION_IDS, LEAK_IDS
-
-        if len(pkt.Payload) < 18:
-            LOGGER.info("Unknown alarm packet: %s", bytes_to_hex(pkt.Payload))
+        if len(pkt.Payload) < 19:
+            LOGGER.warn("Unknown alarm packet: %s", bytes_to_hex(pkt.Payload))
             return
 
-        timestamp, event, mac = struct.unpack_from(">QB8s", pkt.Payload)
-        data = pkt.Payload[17:]
-        timestamp = datetime.datetime.fromtimestamp(timestamp / 1000.0)
-        mac = mac.decode('ascii')
+        e = SensorEvent.Parse(pkt.Payload)
+        self.__on_event(self, e)
 
-        if event == 0xA2 or event == 0xA1:
-            type, b1, battery, b2, state1, state2, counter, signal = struct.unpack_from(">BBBBBBHB", data)
-            sensor = {}
-            if type in CONTACT_IDS:
-                sensor = CONTACT_IDS
-            elif type in MOTION_IDS:
-                sensor = MOTION_IDS
-            elif type in LEAK_IDS:
-                sensor = LEAK_IDS
+    def _OnSensorAlarm2(self, pkt):
+        if len(pkt.Payload) < 10:
+            LOGGER.warn("Unknown alarm packet: %s", bytes_to_hex(pkt.Payload))
+            return
 
-            if sensor:
-                sensor_type = sensor[type]
-                sensor_state = sensor["states"][state2]
-            else:
-                sensor_type = f"unknown({type:02X})"
-                sensor_state = f"unknown({state2:02X})"
-            e = SensorEvent(mac, timestamp, ("alarm" if event == 0xA2 else "status"), (sensor_type, sensor_state, battery, signal))
-        elif event == 0xE8:
-            type, b1, battery, b2, state1, state2, counter, signal = struct.unpack_from(">BBBBBBHB", data)
-            if type == 0x03:
-                sensor_type = "leak:temperature"
-                sensor_state = "%d.%d" % (state1, state2)
-            else:
-                sensor_type = f"unknown({type:02X})"
-                sensor_state = f"unknown({state2:02X})"
-            e = SensorEvent(mac, timestamp, "status", (sensor_type, sensor_state, battery, signal))
-        else:
-            e = SensorEvent(mac, timestamp, f"{event:02X}", data)
-
+        e = SensorEvent.Parse2(pkt.Payload)
         self.__on_event(self, e)
 
     def _OnSyncTime(self, pkt):
@@ -310,8 +443,6 @@ class Dongle(object):
         tm = datetime.datetime.fromtimestamp(ts / 1000.0)
         msg = pkt.Payload[9:]
         LOGGER.info("LOG: time=%s, data=%s", tm.isoformat(), bytes_to_hex(msg))
-        if ts == 0:
-            self.__on_event(self, "ERROR")
         # Check if we have a message after, length includes the msglen byte
 #        if ((len(msg) + 1) >= msg_len and msg_len >= 13):
 #            event, mac, type, state, counter = struct.unpack(">B8sBBH", msg)
@@ -330,6 +461,7 @@ class Dongle(object):
         self.__handlers = {
             Packet.NOTIFY_SYNC_TIME: self._OnSyncTime,
             Packet.NOTIFY_SENSOR_ALARM: self._OnSensorAlarm,
+            Packet.NOTIFY_SENSOR_ALARM2: self._OnSensorAlarm2,
             Packet.NOTIFY_EVENT_LOG: self._OnEventLog,
         }
 
@@ -591,9 +723,15 @@ class Dongle(object):
             self._DoSimpleCommand(Packet.DisableScan())
         finally:
             self._SetHandler(Packet.NOTIFY_SENSOR_SCAN, old_handler)
+
         if ctx.result:
             s_mac, s_type, s_ver = ctx.result
             self._DoSimpleCommand(Packet.VerifySensor(s_mac), 10)
+
+            s_type = SENSOR_TYPES.get(s_type, f'unknown:{s_type:02X}')
+            s_ver = f'{s_ver}'
+            ctx.result = (s_mac, s_type, s_ver)
+
         return ctx.result
 
     def Delete(self, mac):
@@ -602,10 +740,24 @@ class Dongle(object):
         assert len(resp.Payload) == 9
         ack_mac = resp.Payload[:8].decode('ascii')
         ack_code = resp.Payload[8]
-        assert ack_code == 0xFF, "CmdDelSensor: Unexpected ACK code: 0x%02X" % ack_code
-        assert ack_mac == mac, "CmdDelSensor: MAC mismatch, requested:%s, returned:%s" % (mac, ack_mac)
+        assert ack_code == 0xFF, f"CmdDelSensor: Unexpected ACK code: 0x{ack_code:02X}"
+        assert ack_mac == mac, f"CmdDelSensor: MAC mismatch, requested:{mac}, returned:{ack_mac}"
         LOGGER.info("CmdDelSensor: %s deleted", mac)
 
+    def DeleteAll(self):
+        resp = self._DoSimpleCommand(Packet.DelAllSensor())
+        LOGGER.debug("CmdDelSensor returns %s", bytes_to_hex(resp.Payload))
+        assert len(resp.Payload) == 1
+        ack_code = resp.Payload[0]
+        assert ack_code == 0xFF, "CmdDelAllSensor: Unexpected ACK code: 0x%02X" % ack_code
+
+    def PlayChime(self, mac, ringid, repeat_cnt, volume):
+        self._DoSimpleCommand(Packet.PlayChime(mac, ringid, repeat_cnt, volume))
+
+    def SendRaw(self, data):
+        LOGGER.debug("Sending raw data: %s", bytes_to_hex(data))
+        pkt = Packet.Parse(data)
+        self._DoSimpleCommand(pkt)
 
 def Open(device, event_handler, logger):
     global LOGGER
