@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 '''
 WyzeSense to MQTT Gateway
 '''
@@ -30,7 +31,8 @@ SENSORS_STATE_FILE = "state.yaml"
 DEVICE_CLASSES = {
     **dict.fromkeys([0x01, 0x0E, 'switch', 'switchv2'], 'opening'),
     **dict.fromkeys([0x02, 0x0F, 'motion', 'motionv2'], 'motion'),
-    **dict.fromkeys([0x03, 'leak'], 'moisture')
+    **dict.fromkeys([0x03, 'leak'], 'moisture'),
+    **dict.fromkeys([0x07, 'climate'], 'temperature')
 }
 
 
@@ -52,6 +54,60 @@ SENSORS_STATE = {}
 # offline.
 DEFAULT_V1_TIMEOUT_HOURS = 8
 DEFAULT_V2_TIMEOUT_HOURS = 4
+
+_DEVICE_MAPPING = {
+    'motion': {
+        'class': 'motion',
+        'on': 'active',
+        'off': 'inactive',
+        'model': 'WyzeSense Motion Sensor',
+        'timeout': DEFAULT_V1_TIMEOUT_HOURS,
+    },
+    'motionv2': {
+        'class': 'motion',
+        'on': 'active',
+        'off': 'inactive',
+        'model': 'WyzeSense Motion V2 Sensor',
+        'timeout': DEFAULT_V2_TIMEOUT_HOURS,
+    },
+    'switch': {
+        'class': 'opening',
+        'on': 'open',
+        'off': 'closed',
+        'model': 'WyzeSense Door/Window Sensor',
+        'timeout': DEFAULT_V1_TIMEOUT_HOURS,
+    },
+    'switchv2': {
+        'class': 'opening',
+        'on': 'open',
+        'off': 'closed',
+        'model': 'WyzeSense Door/Window V2 Sensor',
+        'timeout': DEFAULT_V2_TIMEOUT_HOURS,
+    },
+    'leak': {
+        'class': 'moisture',
+        'on': 'wet',
+        'off': 'dry',
+        'model': 'WyzeSense Leak Sensor',
+        'timeout': DEFAULT_V2_TIMEOUT_HOURS,
+    },
+    'climate': {
+        'class': 'temperature',
+        'model': 'WyzeSense Climate Sensor',
+        'timeout': DEFAULT_V2_TIMEOUT_HOURS,
+    },
+    'unknown': {
+        'timeout': DEFAULT_V1_TIMEOUT_HOURS
+    }
+}
+
+_BINARY_SENSORS = (
+    'motion',
+    'motionv2',
+    'switch',
+    'switchv2',
+    'leak'
+)
 
 
 # List of sw versions for V1 and V2 sensors, to determine which timeout to use by default
@@ -266,7 +322,7 @@ def init_sensors(wait=True):
             for sensor_mac in result:
                 if (valid_sensor_mac(sensor_mac)):
                     if (SENSORS.get(sensor_mac) is None):
-                        add_sensor_to_config(sensor_mac, None, None)
+                        add_sensor_to_config(sensor_mac)
                         LOGGER.warning(f"Linked sensor with mac {sensor_mac} automatically added to sensors configuration")
                         LOGGER.warning(f"Please update sensor configuration file {os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE)} restart the service/reload the sensors")
 
@@ -342,18 +398,17 @@ def valid_sensor_mac(sensor_mac):
 
 
 # Add sensor to config
-def add_sensor_to_config(sensor_mac, sensor_type, sensor_version):
+def add_sensor_to_config(sensor_mac, sensor_type=None, sensor_version=None):
     global SENSORS, SENSORS_STATE
     LOGGER.info(f"Adding sensor to config: {sensor_mac}")
-    SENSORS[sensor_mac] = {
-        'name': f"Wyze Sense {sensor_mac}",
-        'invert_state': False
-    }
+    SENSORS[sensor_mac] = {'name': f"WyzeSense {sensor_mac}"}
+    if sensor_type:
+        SENSORS[sensor_mac]['sensor_type']  = sensor_type
+        if sensor_type in DEVICE_CLASSES:
+            SENSORS[sensor_mac]['class'] = DEVICE_CLASSES[sensor_type]
 
-    SENSORS[sensor_mac]['class'] = "opening" if sensor_type is None else DEVICE_CLASSES.get(sensor_type)
-
-    if (sensor_version is not None):
-        SENSORS[sensor_mac]['sw_version'] = sensor_version
+    if sensor_version:
+        SENSORS[sensor_mac]['sw_version']  = sensor_version
 
     # Intialize last seen time to now and start online
     SENSORS_STATE[sensor_mac] = {
@@ -401,52 +456,109 @@ def send_discovery_topics(sensor_mac, wait=True):
 
     LOGGER.info(f"Publishing discovery topics for {sensor_mac}")
 
-    sensor_name = SENSORS[sensor_mac]['name']
-    sensor_class = SENSORS[sensor_mac]['class']
-    if (SENSORS[sensor_mac].get('sw_version') is not None):
-        sensor_version = SENSORS[sensor_mac]['sw_version']
-    else:
-        sensor_version = ""
+    sensor = SENSORS[sensor_mac]
+    sensor_type = sensor.get('sensor_type', 'unknown')
+    if sensor_type not in _DEVICE_MAPPING:
+        LOGGER.error(f'Unsupported sensor type: {sensor_type}')
+        return
+
+    attr = {
+        "sw_version": "unknown",
+        "mac": "sensor_mac"
+    }
+
+    attr.update(_DEVICE_MAPPING[sensor_type])
+    attr.update(sensor)
 
     mac_topic = f"{CONFIG['self_topic_root']}/{sensor_mac}"
 
-    entity_payloads = {
-        'state': {
+    entity_payloads = {}
+    if sensor_type in _BINARY_SENSORS:
+        entity_payloads['state'] = {
             'name': None,
-            'device_class': sensor_class,
-            'payload_on': "1",
-            'payload_off': "0",
+            'device_class': attr['class'],
+            'payload_on': attr['on'],
+            'payload_off': attr['off'],
             'json_attributes_topic': mac_topic,
             'device' : {
                'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
                'manufacturer': "Wyze",
-               'model': (
-                  "Sense Motion Sensor" if (sensor_class == "motion") else "Sense Contact Sensor"
-               ),
-               'name': sensor_name,
-               'sw_version': sensor_version,
+               'model': attr['model'],
+               'name': attr['name'],
+               'sw_version': attr['sw_version'],
                'via_device': "wyzesense2mqtt"
             }
-        },
-        'signal_strength': {
-            'device_class': "signal_strength",
-            'state_class': "measurement",
-            'unit_of_measurement': "%",
-            'entity_category': "diagnostic",
+        }
+
+        # Extra payloads for leak sensor
+        if sensor_type == "leak":
+            entity_payloads['probe_state'] = {
+                'name': "Extension Probe",
+                'device_class': attr['class'],
+                'payload_on': attr['on'],
+                'payload_off': attr['off'],
+                'json_attributes_topic': mac_topic,
+                'device' : {
+                'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
+                'manufacturer': "Wyze",
+                'model': attr['model'],
+                'name': attr['name'],
+                'sw_version': attr['sw_version'],
+                'via_device': "wyzesense2mqtt"
+                }
+            }
+
+    elif sensor_type == 'climate':
+        entity_payloads['temperature'] = {
+            'name': 'Temperature',
+            'device_class':'temperature',
+            'state_class':'measurement',
+            'unit_of_measurement': '°C',
+            'json_attributes_topic': mac_topic,
             'device' : {
                'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
-               'name': sensor_name
+               'manufacturer': "Wyze",
+               'model': attr['model'],
+               'name': attr['name'],
+               'sw_version': attr['sw_version'],
+               'via_device': "wyzesense2mqtt"
             }
-        },
-        'battery': {
-            'device_class': "battery",
-            'state_class': "measurement",
-            'unit_of_measurement': "%",
-            'entity_category': "diagnostic",
+        }
+
+        entity_payloads['humidity'] = {
+            'name': 'Humidity',
+            'device_class':'humidity',
+            'state_class':'measurement',
+            'unit_of_measurement': '%',
+            'json_attributes_topic': mac_topic,
             'device' : {
                'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
-               'name': sensor_name
+               'name': attr['name'],
             }
+        }
+    else:
+        LOGGER.error(f'Unexpected sensor type: {sensor_type}')
+        return
+
+    # Common payloads for sensors
+    entity_payloads['signal_strength'] = {
+        'device_class': "signal_strength",
+        'state_class': "measurement",
+        'unit_of_measurement': "dBm",
+        'entity_category': "diagnostic",
+        'device' : {
+            'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
+            'name': attr['name']
+        }
+    }
+    entity_payloads['battery'] = {
+        'device_class': "battery",
+        'state_class': "measurement",
+        'unit_of_measurement': "%",
+        'entity_category': "diagnostic",
+        'device' : {
+            'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
+            'name': attr['name']
         }
     }
 
@@ -463,7 +575,8 @@ def send_discovery_topics(sensor_mac, wait=True):
         entity_payload['availability_mode'] = "all"
         entity_payload['platform'] = "mqtt"
 
-        entity_topic = f"{CONFIG['hass_topic_root']}/{'binary_sensor' if (entity == 'state') else 'sensor'}/wyzesense_{sensor_mac}/{entity}/config"
+        component = "binary_sensor" if entity in ("state", "probe_state") else "sensor"
+        entity_topic = f"{CONFIG['hass_topic_root']}/{component}/wyzesense_{sensor_mac}/{entity}/config"
         mqtt_publish(entity_topic, entity_payload, wait=wait)
 
         LOGGER.info(f"  {entity_topic}")
@@ -478,17 +591,27 @@ def clear_topics(sensor_mac, wait=True):
     mqtt_publish(f"{CONFIG['self_topic_root']}/{sensor_mac}", None, wait=wait)
 
     # clear discovery topics if configured
-    if(CONFIG['hass_discovery']):
-        entity_types = ['state', 'signal_strength', 'battery']
-        for entity_type in entity_types:
-            sensor_type = (
-                "binary_sensor" if (entity_type == "state")
-                else "sensor"
-            )
-            mqtt_publish(f"{CONFIG['hass_topic_root']}/{sensor_type}/wyzesense_{sensor_mac}/{entity_type}/config", None, wait=wait)
-            mqtt_publish(f"{CONFIG['hass_topic_root']}/{sensor_type}/wyzesense_{sensor_mac}/{entity_type}", None, wait=wait)
-            mqtt_publish(f"{CONFIG['hass_topic_root']}/{sensor_type}/wyzesense_{sensor_mac}", None, wait=wait)
+    if CONFIG['hass_discovery']:
+        sensor = SENSORS[sensor_mac]
+        sensor_type = sensor.get('sensor_type', 'unknown')
+        if sensor_type not in _DEVICE_MAPPING:
+            LOGGER.error(f'Unsupported sensor type: f{sensor_type}')
+            return
 
+        entity_types = ['signal_strength', 'battery']
+        if sensor_type in _BINARY_SENSORS:
+            entity_types.add('state')
+        else:
+            entity_types.extend(['temperature', 'humidity'])
+
+        if sensor_type == "leak":
+            entity_types.add('probe_state')
+
+        for entity_type in entity_types:
+            component = "binary_sensor" if entity_type in ("state", "probe_state") else "sensor"
+            mqtt_publish(f"{CONFIG['hass_topic_root']}/{component}/wyzesense_{sensor_mac}/{entity_type}/config", None, wait=wait)
+            mqtt_publish(f"{CONFIG['hass_topic_root']}/{component}/wyzesense_{sensor_mac}/{entity_type}", None, wait=wait)
+            mqtt_publish(f"{CONFIG['hass_topic_root']}/{component}/wyzesense_{sensor_mac}", None, wait=wait)
 
 def on_connect(MQTT_CLIENT, userdata, flags, rc):
     global CONFIG
@@ -586,69 +709,52 @@ def on_event(WYZESENSE_DONGLE, event):
     if not INITIALIZED:
         return
 
-    if event == "ERROR":
-        mqtt_publish(f"{CONFIG['self_topic_root']}/status", "offline", is_json=False)
+    LOGGER.info(f"State event data: {event}")
+    if not valid_sensor_mac(event.mac):
+        LOGGER.warning(f"!Invalid MAC detected")
+        return
 
-    if (valid_sensor_mac(event.MAC)):
-        if (event.MAC not in SENSORS):
-            add_sensor_to_config(event.MAC, None, None)
+    if (valid_sensor_mac(event.mac)):
+        if (event.mac not in SENSORS):
+            add_sensor_to_config(event.mac, event.sensor_type)
             if(CONFIG['hass_discovery']):
-                send_discovery_topics(event.MAC)
-            LOGGER.warning(f"Linked sensor with mac {event.MAC} automatically added to sensors configuration")
+                send_discovery_topics(event.mac)
+            LOGGER.warning(f"Linked sensor with mac {event.mac} automatically added to sensors configuration")
             LOGGER.warning(f"Please update sensor configuration file {os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE)} restart the service/reload the sensors")
+            s = SENSORS[event.mac]
+        else:
+            s = SENSORS[event.mac]
+            old_type = s.get('sensor_type', 'unknown')
+            if event.sensor_type != old_type:
+                LOGGER.info("Updating Sensors Config File")
+                s['sensor_type'] = event.sensor_type
+                write_yaml_file(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE), SENSORS)
+                if(CONFIG['hass_discovery']):
+                    send_discovery_topics(event.mac)
+                LOGGER.warning(f"Linked sensor with mac {event.mac} automatically added to sensors configuration")
+                LOGGER.warning(f"Please update sensor configuration file {os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE)} restart the service/reload the sensors")
 
         # Store last seen time for availability
-        SENSORS_STATE[event.MAC]['last_seen'] = event.Timestamp.timestamp()
+        SENSORS_STATE[event.mac]['last_seen'] = event.timestamp
 
-        mqtt_publish(f"{CONFIG['self_topic_root']}/{event.MAC}/status", "online", is_json=False)
+        mqtt_publish(f"{CONFIG['self_topic_root']}/{event.mac}/status", "online", is_json=False)
 
         # Set back online if it was offline
-        if not SENSORS_STATE[event.MAC]['online']:
-            SENSORS_STATE[event.MAC]['online'] = True
-            LOGGER.info(f"{event.MAC} is back online!")
+        if not SENSORS_STATE[event.mac]['online']:
+            SENSORS_STATE[event.mac]['online'] = True
+            LOGGER.info(f"{event.mac} is back online!")
 
-        if (event.Type == "alarm") or (event.Type == "status"):
-            LOGGER.debug(f"State event data: {event}")
-            (sensor_type, sensor_state, sensor_battery, sensor_signal) = event.Data
+        if event.event not in ("alarm", "status"):
+            LOGGER.info(f"Unknown event: {e}")
+            return
 
-            # Set state depending on state string and `invert_state` setting.
-            #     State ON ^ NOT Inverted = True
-            #     State OFF ^ NOT Inverted = False
-            #     State ON ^ Inverted = False
-            #     State OFF ^ Inverted = True
-            sensor_state = int((sensor_state in STATES_ON) ^ (SENSORS[event.MAC].get('invert_state')))
+        payload = {}
+        payload.update(s)
+        payload.update(vars(event))
 
-            # V2 sensors use a single 1.5v battery and reports half the battery level of other sensors with 3v batteries
-            if sensor_type == "switchv2":
-                sensor_battery = sensor_battery * 2
-
-            # Adjust battery to max it at 100%
-            sensor_battery = 100 if sensor_battery > 100 else sensor_battery
-
-            # Negate signal strength to match dbm vs percent
-            sensor_signal = sensor_signal * -1
-
-            sensor_signal = min(max(2 * (sensor_signal + 115), 1), 100)
-
-            # Build event payload
-            event_payload = {
-                'mac': event.MAC,
-                'signal_strength': sensor_signal,
-                'battery': sensor_battery,
-                'state': sensor_state,
-                'last_seen': event.Timestamp.isoformat(),
-            }
-
-            if (CONFIG['publish_sensor_name']):
-                event_payload['name'] = SENSORS[event.MAC]['name']
-
-            mqtt_publish(f"{CONFIG['self_topic_root']}/{event.MAC}", event_payload)
-
-            LOGGER.info(f"{CONFIG['self_topic_root']}/{event.MAC}")
-            LOGGER.info(event_payload)
-        else:
-            LOGGER.info(f"{event}")
-
+        LOGGER.info(f"{CONFIG['self_topic_root']}/{event.mac}")
+        LOGGER.info(payload)
+        mqtt_publish(f"{CONFIG['self_topic_root']}/{event.mac}", payload)
     else:
         LOGGER.warning("!Invalid MAC detected!")
         LOGGER.warning(f"Event data: {event}")
@@ -700,21 +806,12 @@ if __name__ == "__main__":
     # And mark the service as online
     mqtt_publish(f"{CONFIG['self_topic_root']}/status", "online", is_json=False)
 
-    dongle_offline = False
-
     # Loop forever until keyboard interrupt or SIGINT
     try:
-        loop_counter = 0
         while True:
             time.sleep(5)
             # Check if there is any exceptions in the dongle thread
             WYZESENSE_DONGLE.CheckError()
-
-            # Skip everything while dongle is offline, service needs to be restarted
-            if dongle_offline:
-                continue
-
-            loop_counter += 1
 
             if not MQTT_CLIENT.connected_flag:
                 LOGGER.warning("Reconnecting MQTT...")
@@ -723,31 +820,21 @@ if __name__ == "__main__":
             if MQTT_CLIENT.connected_flag:
                 mqtt_publish(f"{CONFIG['self_topic_root']}/status", "online", is_json=False)
 
-            # Every minute, try to get the dongle mac address. Hopefully this will tell us if we are having trouble
-            # communicating with the dongle. If so, set the service offline
-            if loop_counter > 12:
-                loop_counter = 0
-                try:
-                    WYZESENSE_DONGLE._GetMac()
-                except TimeoutError:
-                    LOGGER.error("Failed to communicate with dongle")
-                    dongle_offline = True
-                    mqtt_publish(f"{CONFIG['self_topic_root']}/status", "offline", is_json=False)
 
             # Check for availability of the devices
             now = time.time()
             for mac in SENSORS_STATE:
                 if SENSORS_STATE[mac]['online']:
                     LOGGER.debug(f"Checking availability of {mac}")
-                    # If there is a timeout configured, use that. Must be in seconds.
-                    # If no timeout configured, check if it's a V2 device (quicker reporting period)
-                    # Otherwise, use the longer V1 timeout period
-                    if (SENSORS[mac].get('timeout') is not None):
-                        timeout = SENSORS[mac]['timeout']
-                    elif (SENSORS[mac].get('sw_version') is not None and SENSORS[mac]['sw_version'] in V2_SW):
-                        timeout = DEFAULT_V2_TIMEOUT_HOURS*60*60
-                    else:
-                        timeout = DEFAULT_V1_TIMEOUT_HOURS*60*60
+                    
+                    sensor = SENSORS[mac]
+                    
+                    sensor_type = sensor.get('sensor_type', 'unknown')
+                    # First the sensor type to decide the timeout value
+                    timeout = _DEVICE_MAPPING[sensor_type]['timeout'] * 60 * 60
+
+                    # Then check if the device has its own timeout value
+                    timeout = sensor.get('timeout', timeout)
 
                     if ((now - SENSORS_STATE[mac]['last_seen']) > timeout):
                         mqtt_publish(f"{CONFIG['self_topic_root']}/{mac}/status", "offline", is_json=False)
