@@ -513,7 +513,7 @@ def send_discovery_topics(sensor_mac, wait=True):
             'name': 'Temperature',
             'device_class':'temperature',
             'state_class':'measurement',
-            'unit_of_measurement': '°C',
+            'unit_of_measurement': '°F',
             'json_attributes_topic': mac_topic,
             'device' : {
                'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
