@@ -464,6 +464,42 @@ def mqtt_single_publish(mqtt_topic, payload):
     )
 
 
+def mqtt_simple_subscribe(mqtt_topic):
+    global CONFIG
+    msg = subscribe.simple(
+        mqtt_topic,
+        qos=CONFIG['mqtt_qos'],
+        retained=True,
+        hostname=CONFIG['mqtt_host'],
+        port=CONFIG['mqtt_port'],
+        client_id=CONFIG['mqtt_client_id'],
+        auth={'username': CONFIG['mqtt_username'], 'password': CONFIG['mqtt_password']}
+        if CONFIG['mqtt_username']
+        else None,
+        keepalive=CONFIG['mqtt_keepalive'],
+    )
+
+    LOGGER.debug(f"Received {msg.payload} from {mqtt_topic}")
+    return json.loads(msg.payload)
+
+
+def mqtt_single_publish(mqtt_topic, payload):
+    global CONFIG
+    publish.single(
+        mqtt_topic,
+        payload=json.dumps(payload),
+        qos=CONFIG['mqtt_qos'],
+        retain=CONFIG['mqtt_retain'],
+        hostname=CONFIG['mqtt_host'],
+        port=CONFIG['mqtt_port'],
+        client_id=CONFIG['mqtt_client_id'],
+        auth={'username': CONFIG['mqtt_username'], 'password': CONFIG['mqtt_password']}
+        if CONFIG['mqtt_username']
+        else None,
+        keepalive=CONFIG['mqtt_keepalive'],
+    )
+
+
 # Send discovery topics
 def send_discovery_topics(sensor_mac, wait=True):
     global SENSORS, CONFIG, SENSORS_STATE
@@ -594,19 +630,6 @@ def send_discovery_topics(sensor_mac, wait=True):
         entity_payload['availability_mode'] = "all"
         entity_payload['platform'] = "mqtt"
 
-        sensor_type = ""
-        if sensor_class != "alarm_control_panel":
-            sensor_type = "binary_sensor" if (entity == "state") else "sensor"
-        else:
-            if entity == "mode":
-                sensor_type = "alarm_control_panel"
-                entity = "state"
-            elif entity == "motion":
-                sensor_type = "binary_sensor"
-                entity = "state"
-            else:
-                sensor_type = "sensor"
-
         entity_topic = f"{CONFIG['hass_topic_root']}/{sensor_type}/wyzesense_{sensor_mac}/{entity}/config"
         mqtt_publish(entity_topic, entity_payload, wait=wait)
 
@@ -616,9 +639,10 @@ def send_discovery_topics(sensor_mac, wait=True):
 
 # Clear any retained topics in MQTT
 def clear_topics(sensor_mac):
-    global CONFIG
+    global CONFIG, SENSORS
     LOGGER.info("Clearing sensor topics")
     state_topic = f"{CONFIG['self_topic_root']}/{sensor_mac}"
+
     mqtt_publish(state_topic, None, wait=wait)
     mqtt_publish(f"{state_topic}/status}", None, wait=wait)
 
@@ -737,6 +761,97 @@ def on_message_reload(MQTT_CLIENT, userdata, msg):
 
     # We are in a mqtt callback so cannot wait for new messages to publish
     init_sensors(wait=False)
+
+
+# Process message to set keypad state
+def on_message_set(MQTT_CLIENT, userdata, msg):
+    LOGGER.info(f"In on_message_set: {msg.payload.decode()}")
+    parts = msg.topic.split('/')
+    payload = json.loads(msg.payload)
+    if payload and payload['mode'] is not None:
+        set_keypad_mode(parts[1], payload)
+
+
+def set_keypad_mode(keypad_mac, payload):
+    mode = payload['mode']
+    pin = payload['pin']
+
+    if not validate_pin_entry(keypad_mac, mode, pin):
+        return
+
+    mode_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/mode"
+    current_mode = mqtt_simple_subscribe(mode_topic)['state']
+    delay_keypad_mode(keypad_mac, mode, current_mode)
+
+    mode_payload = {'state': mode}
+    mqtt_publish(mode_topic, mode_payload)
+
+    set_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/set"
+    mqtt_publish(set_topic, {'mode': None, 'pin': False})
+    if SENSORS[keypad_mac]['expose_pin']:
+        pin_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/pin"
+        pin_payload = {'state': pin}
+        mqtt_publish(pin_topic, pin_payload)
+
+
+def validate_pin_entry(mac, mode, pin=None):
+    pin_topic = f"{CONFIG['self_topic_root']}/{mac}/pin"
+    config = SENSORS[mac]
+    accepted_pins = config['pin'] if type(config['pin']) == list else [config['pin']]
+
+    if pin is None:
+        pin = mqtt_simple_subscribe(pin_topic)['state']
+
+    if pin not in accepted_pins:
+        if (mode in ["armed_away", "armed_home"] and config['arm_required']) or (
+            mode == "disarmed" and config['disarm_required']
+        ):
+            LOGGER.debug("PIN rejected, aborting.")
+            return False
+        else:
+            LOGGER.debug(f"PIN not required for {mode}, continuing...")
+            return True
+    else:
+        LOGGER.debug("PIN accepted, continuing...")
+        return True
+
+
+def delay_keypad_mode(keypad_mac, to_mode, from_mode):
+    mode_topic = f"{CONFIG['self_topic_root']}/{keypad_mac}/mode"
+    sleep_time = 0
+    event_payload = {}
+    state = SENSORS[keypad_mac].get(to_mode) or SENSORS[keypad_mac]
+
+    if to_mode in ["armed_away", "armed_home"]:
+        event_payload['state'] = 'arming'
+        sleep_time = state.get(
+            'arming_time', SENSORS[keypad_mac].get('arming_time', 60)
+        )
+    elif to_mode in ["disarmed"]:
+        event_payload['state'] = 'disarming'
+    elif to_mode in ["triggered"]:
+        event_payload['state'] = 'pending'
+        state = SENSORS[keypad_mac].get(from_mode) or SENSORS[keypad_mac]
+        sleep_time = state.get('delay_time', SENSORS[keypad_mac].get('delay_time', 60))
+
+    LOGGER.debug(f"Changing to {event_payload['state']}...")
+    mqtt_single_publish(mode_topic, event_payload)
+    if sleep_time > 0:
+        LOGGER.debug(f"Delaying change to {to_mode} for {sleep_time} seconds...")
+        if to_mode == "triggered":
+            slept = 0
+            while slept < sleep_time:
+                if mqtt_simple_subscribe(mode_topic)['state'] in [
+                    "disarmed",
+                    "armed_home",
+                ]:
+                    LOGGER.debug(f"Disarmed during trigger delay, canceling alarm.")
+                    return False
+                time.sleep(1)
+                slept += 1
+        else:
+            time.sleep(sleep_time)
+    return True
 
 
 # Process message to set keypad state
