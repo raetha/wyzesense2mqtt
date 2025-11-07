@@ -263,10 +263,15 @@ class Dongle(object):
             LOGGER.info("Unknown alarm packet: %s", bytes_to_hex(pkt.Payload))
             return
 
-        timestamp, event, mac = struct.unpack_from(">QB8s", pkt.Payload)
+        timestamp, event, mac_bytes = struct.unpack_from(">QB8s", pkt.Payload)
         data = pkt.Payload[17:]
         timestamp = datetime.datetime.fromtimestamp(timestamp / 1000.0)
-        mac = mac.decode('ascii')
+        try:
+            mac = mac_bytes.decode('ascii')
+        except UnicodeDecodeError:
+            LOGGER.warning("Invalid MAC address in sensor alarm (non-ASCII bytes): %s",
+                           bytes_to_hex(mac_bytes))
+            mac = bytes_to_hex(mac_bytes).decode('ascii')
 
         if event == 0xA2 or event == 0xA1:
             type, b1, battery, b2, state1, state2, counter, signal = struct.unpack_from(">BBBBBBHB", data)
@@ -311,7 +316,7 @@ class Dongle(object):
         msg = pkt.Payload[9:]
         LOGGER.info("LOG: time=%s, data=%s", tm.isoformat(), bytes_to_hex(msg))
         if ts == 0:
-            self.__on_event(self, "ERROR")
+            LOGGER.debug("Dongle sent event log with timestamp=0 (clock not yet synchronized)")
         # Check if we have a message after, length includes the msglen byte
 #        if ((len(msg) + 1) >= msg_len and msg_len >= 13):
 #            event, mac, type, state, counter = struct.unpack(">B8sBBH", msg)
@@ -467,7 +472,11 @@ class Dongle(object):
         LOGGER.debug("Start GetMAC...")
         resp = self._DoSimpleCommand(Packet.GetMAC())
         assert len(resp.Payload) == 8
-        mac = resp.Payload.decode('ascii')
+        try:
+            mac = resp.Payload.decode('ascii')
+        except UnicodeDecodeError:
+            LOGGER.warning("Invalid MAC address data (non-ASCII bytes): %s", bytes_to_hex(resp.Payload))
+            mac = bytes_to_hex(resp.Payload).decode('ascii')
         LOGGER.debug("GetMAC returns %s", mac)
         return mac
 
@@ -481,7 +490,11 @@ class Dongle(object):
     def _GetVersion(self):
         LOGGER.debug("Start GetVersion...")
         resp = self._DoSimpleCommand(Packet.GetVersion())
-        version = resp.Payload.decode('ascii')
+        try:
+            version = resp.Payload.decode('ascii')
+        except UnicodeDecodeError:
+            LOGGER.warning("Invalid version data (non-ASCII bytes): %s", bytes_to_hex(resp.Payload))
+            version = bytes_to_hex(resp.Payload).decode('ascii')
         LOGGER.debug("GetVersion returns %s", version)
         return version
 
@@ -517,7 +530,13 @@ class Dongle(object):
 
             def cmd_handler(pkt, e):
                 assert len(pkt.Payload) == 8
-                mac = pkt.Payload.decode('ascii')
+                try:
+                    mac = pkt.Payload.decode('ascii')
+                except UnicodeDecodeError:
+                    LOGGER.warning("Sensor %d/%d: Invalid MAC address data (non-ASCII bytes): %s",
+                                   ctx.index + 1, ctx.count, bytes_to_hex(pkt.Payload))
+                    mac = bytes_to_hex(pkt.Payload).decode('ascii')
+
                 LOGGER.info("Sensor %d/%d, MAC:%s", ctx.index + 1, ctx.count, mac)
 
                 ctx.sensors.append(mac)
@@ -525,7 +544,12 @@ class Dongle(object):
                 if ctx.index == ctx.count:
                     e.set()
 
-            self._DoCommand(Packet.GetSensorList(count), cmd_handler, timeout=10)
+            try:
+                self._DoCommand(Packet.GetSensorList(count), cmd_handler, timeout=10)
+            except TimeoutError:
+                LOGGER.error("Timeout waiting for sensor list. Dongle may have corrupted sensor data.")
+                LOGGER.error("Received %d of %d expected sensors: %s", ctx.index, ctx.count, ctx.sensors)
+                raise
         else:
             LOGGER.info("No sensors bond yet...")
         return ctx.sensors
@@ -573,7 +597,31 @@ class Dongle(object):
 
         def scan_handler(pkt):
             assert len(pkt.Payload) == 11
-            ctx.result = (pkt.Payload[1:9].decode('ascii'), pkt.Payload[9], pkt.Payload[10])
+            mac_bytes = pkt.Payload[1:9]
+
+            # Check for invalid MAC addresses (all 0x00 or all 0xFF)
+            if mac_bytes == b'\xff\xff\xff\xff\xff\xff\xff\xff':
+                LOGGER.warning("Received invalid MAC (all 0xFF).")
+                ctx.result = None
+                ctx.evt.set()
+                return
+            elif mac_bytes == b'\x00\x00\x00\x00\x00\x00\x00\x00':
+                LOGGER.warning("Received invalid MAC (all 0x00).")
+                ctx.result = None
+                ctx.evt.set()
+                return
+
+            try:
+                mac = mac_bytes.decode('ascii')
+            except UnicodeDecodeError:
+                LOGGER.warning("Invalid MAC address in scan response (non-ASCII bytes): %s",
+                               bytes_to_hex(mac_bytes))
+                # Don't try to pair sensors with non-ASCII MAC addresses
+                ctx.result = None
+                ctx.evt.set()
+                return
+
+            ctx.result = (mac, pkt.Payload[9], pkt.Payload[10])
             ctx.evt.set()
 
         old_handler = self._SetHandler(Packet.NOTIFY_SENSOR_SCAN, scan_handler)
@@ -581,10 +629,13 @@ class Dongle(object):
             self._DoSimpleCommand(Packet.EnableScan())
 
             if ctx.evt.wait(timeout):
-                s_mac, s_type, s_ver = ctx.result
-                LOGGER.info("Sensor found: mac=[%s], type=%d, version=%d", s_mac, s_type, s_ver)
-                r1 = self._GetSensorR1(s_mac, b'Ok5HPNQ4lf77u754')
-                LOGGER.debug("Sensor R1: %r", bytes_to_hex(r1))
+                if ctx.result is not None:
+                    s_mac, s_type, s_ver = ctx.result
+                    LOGGER.info("Sensor found: mac=[%s], type=%d, version=%d", s_mac, s_type, s_ver)
+                    r1 = self._GetSensorR1(s_mac, b'Ok5HPNQ4lf77u754')
+                    LOGGER.debug("Sensor R1: %r", bytes_to_hex(r1))
+                else:
+                    LOGGER.info("Invalid sensor response received")
             else:
                 LOGGER.info("Sensor discovery timeout...")
 
@@ -600,7 +651,12 @@ class Dongle(object):
         resp = self._DoSimpleCommand(Packet.DelSensor(str(mac)))
         LOGGER.debug("CmdDelSensor returns %s", bytes_to_hex(resp.Payload))
         assert len(resp.Payload) == 9
-        ack_mac = resp.Payload[:8].decode('ascii')
+        try:
+            ack_mac = resp.Payload[:8].decode('ascii')
+        except UnicodeDecodeError:
+            LOGGER.warning("Invalid MAC address in delete response (non-ASCII bytes): %s",
+                           bytes_to_hex(resp.Payload[:8]))
+            ack_mac = bytes_to_hex(resp.Payload[:8]).decode('ascii')
         ack_code = resp.Payload[8]
         assert ack_code == 0xFF, "CmdDelSensor: Unexpected ACK code: 0x%02X" % ack_code
         assert ack_mac == mac, "CmdDelSensor: MAC mismatch, requested:%s, returned:%s" % (mac, ack_mac)

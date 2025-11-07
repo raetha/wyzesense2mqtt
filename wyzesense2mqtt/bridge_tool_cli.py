@@ -29,6 +29,10 @@ import wyzesense
 
 
 def on_event(ws, e):
+    if isinstance(e, str):
+        # Handle error string
+        print(f"Event: {e}")
+        return
     s = f"[{e.Timestamp.strftime('%Y-%m-%d %H:%M:%S')}][{e.MAC}]"
     if e.Type == 'state':
         (s_type, s_state, s_battery, s_signal) = e.Data
@@ -61,21 +65,26 @@ def main(args):
         return 2
 
     def List(unused_args):
-        result = ws.List()
-        print(f"{len(result)} sensors paired:")
-        logging.debug(f"{len(result)} sensors paired:")
-        for mac in result:
-            print(f"\tSensor: {mac}")
-            logging.debug(f"\tSensor: {mac}")
+        try:
+            result = ws.List()
+            print(f"{len(result)} sensors paired:")
+            logging.debug(f"{len(result)} sensors paired:")
+            for mac in result:
+                print(f"\tSensor: {mac}")
+                logging.debug(f"\tSensor: {mac}")
+        except TimeoutError:
+            print("Error: Timeout while retrieving sensor list.")
+            print("This may indicate corrupted sensor data in the dongle.")
+            print("Try using the 'F' (Fix) command to remove invalid sensors.")
 
     def Pair(unused_args):
         result = ws.Scan()
-        (s_mac, s_type, s_version) = result
         if result:
+            (s_mac, s_type, s_version) = result
             print(f"Sensor found: mac={s_mac}, type={s_type}, version={s_version}")
             logging.debug(f"Sensor found: mac={s_mac}, type={s_type}, version={s_version}")
         else:
-            print("No sensor found!")
+            print("No valid sensor found!")
             logging.debug("No sensor found!")
 
     def Unpair(mac_list):
@@ -97,15 +106,19 @@ def main(args):
         invalid_mac_list = [
             "00000000",
             "\0\0\0\0\0\0\0\0",
-            "\x00\x00\x00\x00\x00\x00\x00\x00"
+            "\x00\x00\x00\x00\x00\x00\x00\x00",
+            "ffffffffffffffff"
         ]
         print("Un-pairing bad sensors")
         logging.debug("Un-pairing bad sensors")
         for mac in invalid_mac_list:
-            result = ws.Delete(mac)
-            if result is not None:
-                print(f"Result: {result}")
-                logging.debug(f"Result: {result}")
+            try:
+                result = ws.Delete(mac)
+                if result is not None:
+                    print(f"Removed sensor: {mac}")
+                    logging.debug(f"Removed sensor: {mac}")
+            except Exception as e:
+                logging.debug(f"Could not remove {mac}: {e}")
         print("Bad sensors removed")
         logging.debug("Bad sensors removed")
 
