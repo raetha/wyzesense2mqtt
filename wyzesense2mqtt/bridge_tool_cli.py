@@ -26,18 +26,11 @@ import sys
 import logging
 import binascii
 import wyzesense
-
+from datetime import datetime
 
 def on_event(ws, e):
-    s = f"[{e.Timestamp.strftime('%Y-%m-%d %H:%M:%S')}][{e.MAC}]"
-    if e.Type == 'state':
-        (s_type, s_state, s_battery, s_signal) = e.Data
-        s += f"StateEvent: sensor_type={s_type}, state={s_state}, " \
-             f"battery={s_battery}, signal={s_signal}"
-    else:
-        s += f"RawEvent: type={e.Type}, data={e.Data}"
+    s = f"[{datetime.fromtimestamp(e.timestamp).strftime('%Y-%m-%d %H:%M:%S')}][{e.mac}]: {e}"
     print(s)
-
 
 def main(args):
     if args['--debug']:
@@ -109,13 +102,34 @@ def main(args):
         print("Bad sensors removed")
         logging.debug("Bad sensors removed")
 
+    def Chime(args):
+        if len(args) < 4:
+            print("Need 4 parameters")
+            return
+
+        mac, ring, repeat, volume = args
+        ws.PlayChime(mac, int(ring), int(repeat), int(volume))
+
+    def Raw(args):
+        if len(args) <= 0:
+            print("Missing argument!")
+            return
+
+        data = args[0]
+        data = bytes([int(x, 16) for x in data.strip().split(',')])
+        str_data = ','.join([f"{x:02X}" for x in data])
+        print(f"Sending raw bytes: {str_data}")
+        ws.SendRaw(data)
+
     def HandleCmd():
         cmd_handlers = {
-            'L': ('L - List paired sensors', List),
-            'P': ('P - Pair new sensors', Pair),
-            'U': ('U <mac> - Unpair sensor', Unpair),
-            'F': ('F - Fix invalid sensors', Fix),
-            'X': ('X - Exit tool', None),
+            'L': ('L - [L]ist paired sensors', List),
+            'P': ('P - [P]air new sensors', Pair),
+            'U': ('U - [U]npair sensor, args: <mac>', Unpair),
+            'F': ('F - [F]ix invalid sensors', Fix),
+            'C': ('C - Play [C]hime, args: <mac> <ring> <repeat> <volume>', Chime),
+            'R': ('R - Sending [R]aw packet, args: <hex bytes, separated by comma', Raw),
+            'X': ('X - E[X]it tool', None),
         }
 
         for v in list(cmd_handlers.values()):

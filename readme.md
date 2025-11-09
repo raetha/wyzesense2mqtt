@@ -226,21 +226,21 @@ Once run it will present a menu of its functions:
 Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add devices for each sensor along with entites for the state, battery_level, and signal_strength. By default these entities will have a device_class of "opening" for contact sensors, "motion" for motion sensors, and "moisture" for leak sensors. They will be named for the sensor type and MAC, e.g. Wyze Sense Contact Sensor AABBCCDD. To adjust the device_class to "door" or "window", and set a custom name, update the sensors.yaml configuration file and replace the defaults, then restart WyzeSense2MQTT. For a comprehensive list of device classes that Home Assistant recognizes, see the [binary_sensor documentation](https://www.home-assistant.io/integrations/binary_sensor/).
 
 ## Compatible Hardware
-### Bridge Devices
+### Wyze Branded
 * Wyze Sense Bridge (WHSB1)
-* Neos Smart Bridge (N-LSP-US1) - Untested, but theoretically compatible
-
-### Sensors
 * Wyze Sense Bridge Sensors
     * Contact Sensor v1
     * Motion Sensor v1
-* Neos Smart Sensors - Untested, but theoretically compatible
-    * Contact Sensor
-    * Leak Sensor
-    * Motion Sensor
-* Wyze Sense Hub Sensors - Requires installing the Wyze Sense Hub firmware onto a Wyze Sense Bridge (unsupported and untested)
+* Wyze Sense Hub Sensors - Requires installing the Wyze Sense Hub firmware onto a Wyze Sense Bridge (unsupported)
     * Entry Sensor v2 (WSES2)
     * Motion Sensor v2 (WSMS2)
-    * Climate Sensor (WSCS1) - Coming Soon Hopefully
-    * Keypad (WSKP1) - Coming Soon Hopefully
-    * Leak Sensor (WSLS1) - Coming Soon Hopefully
+    * Climate Sensor (WSCS1)
+    * Leak Sensor (WSLS1)
+    * Keypad (WSKP1) - Future Possibility (need help)
+
+### Neos Smart Branded
+* Neos Smart Bridge (N-LSP-US1)
+* Neos Smart Sensors - Not tested, but theoretically compatible
+    * Contact Sensor
+    * Motion Sensor
+    * Leak Sensor
