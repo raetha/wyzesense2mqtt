@@ -236,9 +236,15 @@ class Packet(object):
 
     @classmethod
     def DelSensor(cls, mac):
+        if isinstance(mac, bytes):
+            assert len(mac) == 8
+            return cls(cls.CMD_DEL_SENSOR, mac)
         assert isinstance(mac, str)
         assert len(mac) == 8
-        return cls(cls.CMD_DEL_SENSOR, mac.encode('ascii'))
+        try:
+            return cls(cls.CMD_DEL_SENSOR, mac.encode('ascii'))
+        except UnicodeEncodeError:
+            return cls(cls.CMD_DEL_SENSOR, mac.encode('latin-1'))
 
     @classmethod
     def DelAllSensor(cls):
@@ -344,11 +350,11 @@ class SensorEvent(object):
 
     @classmethod
     def _ClimateParser(cls, mac, event, sensor_type, timestamp, data):
-        _, battery, _, _, temp_hi, temp_lo, humidity, _, seq, signal_strength = struct.unpack_from(">BBBBBBBBBB", data)
+        _, battery, _, _, temp_hi, temp_lo, humidity, signal_strength = struct.unpack_from(">BBBBBBBB", data)
 
         if sensor_type != SENSOR_TYPE_CLIMATE:
             LOGGER.warn(f"Unexpected sensor ({sensor_type:02X}) for event {event:02X}")
-            return cls._UnknownParser(mac, event, timestamp, data)
+            return cls._UnknownParser(mac, event, sensor_type, timestamp, data)
 
         temperature = f"{temp_hi + (temp_lo / 100.0):.2f}"
         return cls(
@@ -443,6 +449,8 @@ class Dongle(object):
         tm = datetime.datetime.fromtimestamp(ts / 1000.0)
         msg = pkt.Payload[9:]
         LOGGER.info("LOG: time=%s, data=%s", tm.isoformat(), bytes_to_hex(msg))
+        if ts == 0:
+            self.__on_event(self, "Dongle sent event log with timestamp=0 (clock not yet synchronized)")
         # Check if we have a message after, length includes the msglen byte
 #        if ((len(msg) + 1) >= msg_len and msg_len >= 13):
 #            event, mac, type, state, counter = struct.unpack(">B8sBBH", msg)
@@ -599,7 +607,11 @@ class Dongle(object):
         LOGGER.debug("Start GetMAC...")
         resp = self._DoSimpleCommand(Packet.GetMAC())
         assert len(resp.Payload) == 8
-        mac = resp.Payload.decode('ascii')
+        try:
+            mac = resp.Payload.decode('ascii')
+        except UnicodeDecodeError:
+            LOGGER.warning("Invalid MAC address data (non-ASCII bytes): %s", bytes_to_hex(resp.Payload))
+            mac = bytes_to_hex(resp.Payload)
         LOGGER.debug("GetMAC returns %s", mac)
         return mac
 
@@ -613,7 +625,11 @@ class Dongle(object):
     def _GetVersion(self):
         LOGGER.debug("Start GetVersion...")
         resp = self._DoSimpleCommand(Packet.GetVersion())
-        version = resp.Payload.decode('ascii')
+        try:
+            version = resp.Payload.decode('ascii')
+        except UnicodeDecodeError:
+            LOGGER.warning("Invalid version data (non-ASCII bytes): %s", bytes_to_hex(resp.Payload))
+            version = bytes_to_hex(resp.Payload)
         LOGGER.debug("GetVersion returns %s", version)
         return version
 
@@ -649,15 +665,28 @@ class Dongle(object):
 
             def cmd_handler(pkt, e):
                 assert len(pkt.Payload) == 8
-                mac = pkt.Payload.decode('ascii')
-                LOGGER.info("Sensor %d/%d, MAC:%s", ctx.index + 1, ctx.count, mac)
+                try:
+                    mac = pkt.Payload.decode('ascii')
+                    LOGGER.info("Sensor %d/%d, MAC:%s", ctx.index + 1, ctx.count, mac)
+                except UnicodeDecodeError:
+                    # Use latin-1 which can encode any byte value
+                    mac = pkt.Payload.decode('latin-1')
+                    LOGGER.warning("Sensor %d/%d: Invalid MAC address data (non-ASCII bytes): %s",
+                                   ctx.index + 1, ctx.count, bytes_to_hex(pkt.Payload))
+                    LOGGER.info("Sensor %d/%d, MAC (hex): %s", ctx.index + 1, ctx.count,
+                               ''.join(f"{b:02x}" for b in pkt.Payload))
 
                 ctx.sensors.append(mac)
                 ctx.index += 1
                 if ctx.index == ctx.count:
                     e.set()
 
-            self._DoCommand(Packet.GetSensorList(count), cmd_handler, timeout=10)
+            try:
+                self._DoCommand(Packet.GetSensorList(count), cmd_handler, timeout=10)
+            except TimeoutError:
+                LOGGER.error("Timeout waiting for sensor list. Dongle may have corrupted sensor data.")
+                LOGGER.error("Received %d of %d expected sensors: %s", ctx.index, ctx.count, ctx.sensors)
+                raise
         else:
             LOGGER.info("No sensors bond yet...")
         return ctx.sensors
@@ -701,11 +730,38 @@ class Dongle(object):
     def Scan(self, timeout=60):
         LOGGER.info("Start Scan...")
 
+        # Check if worker thread has crashed
+        self.CheckError()
+
         ctx = self.CmdContext(evt=threading.Event(), result=None)
 
         def scan_handler(pkt):
             assert len(pkt.Payload) == 11
-            ctx.result = (pkt.Payload[1:9].decode('ascii'), pkt.Payload[9], pkt.Payload[10])
+            mac_bytes = pkt.Payload[1:9]
+
+            # Check for invalid MAC addresses (all 0x00 or all 0xFF)
+            if mac_bytes == b'\xff\xff\xff\xff\xff\xff\xff\xff':
+                LOGGER.warning("Received invalid MAC (all 0xFF).")
+                ctx.result = None
+                ctx.evt.set()
+                return
+            elif mac_bytes == b'\x00\x00\x00\x00\x00\x00\x00\x00':
+                LOGGER.warning("Received invalid MAC (all 0x00).")
+                ctx.result = None
+                ctx.evt.set()
+                return
+
+            try:
+                mac = mac_bytes.decode('ascii')
+            except UnicodeDecodeError:
+                LOGGER.warning("Invalid MAC address in scan response (non-ASCII bytes): %s",
+                               bytes_to_hex(mac_bytes))
+                # Don't try to pair sensors with non-ASCII MAC addresses
+                ctx.result = None
+                ctx.evt.set()
+                return
+
+            ctx.result = (mac, pkt.Payload[9], pkt.Payload[10])
             ctx.evt.set()
 
         old_handler = self._SetHandler(Packet.NOTIFY_SENSOR_SCAN, scan_handler)
@@ -713,10 +769,13 @@ class Dongle(object):
             self._DoSimpleCommand(Packet.EnableScan())
 
             if ctx.evt.wait(timeout):
-                s_mac, s_type, s_ver = ctx.result
-                LOGGER.info("Sensor found: mac=[%s], type=%d, version=%d", s_mac, s_type, s_ver)
-                r1 = self._GetSensorR1(s_mac, b'Ok5HPNQ4lf77u754')
-                LOGGER.debug("Sensor R1: %r", bytes_to_hex(r1))
+                if ctx.result is not None:
+                    s_mac, s_type, s_ver = ctx.result
+                    LOGGER.info("Sensor found: mac=[%s], type=%d, version=%d", s_mac, s_type, s_ver)
+                    r1 = self._GetSensorR1(s_mac, b'Ok5HPNQ4lf77u754')
+                    LOGGER.debug("Sensor R1: %r", bytes_to_hex(r1))
+                else:
+                    LOGGER.info("Invalid sensor response received")
             else:
                 LOGGER.info("Sensor discovery timeout...")
 
@@ -735,14 +794,31 @@ class Dongle(object):
         return ctx.result
 
     def Delete(self, mac):
-        resp = self._DoSimpleCommand(Packet.DelSensor(str(mac)))
+        if ',' in mac:
+            # Convert "ff,ff,ff,ff,ff,ff,ff,ff" back to bytes
+            mac_bytes = bytes([int(x, 16) for x in mac.split(',')])
+            resp = self._DoSimpleCommand(Packet.DelSensor(mac_bytes))
+        else:
+            resp = self._DoSimpleCommand(Packet.DelSensor(str(mac)))
         LOGGER.debug("CmdDelSensor returns %s", bytes_to_hex(resp.Payload))
         assert len(resp.Payload) == 9
-        ack_mac = resp.Payload[:8].decode('ascii')
+        try:
+            ack_mac = resp.Payload[:8].decode('ascii')
+        except UnicodeDecodeError:
+            LOGGER.warning("Invalid MAC address in delete response (non-ASCII bytes): %s",
+                           bytes_to_hex(resp.Payload[:8]))
+            ack_mac = resp.Payload[:8].decode('latin-1')
         ack_code = resp.Payload[8]
         assert ack_code == 0xFF, f"CmdDelSensor: Unexpected ACK code: 0x{ack_code:02X}"
-        assert ack_mac == mac, f"CmdDelSensor: MAC mismatch, requested:{mac}, returned:{ack_mac}"
-        LOGGER.info("CmdDelSensor: %s deleted", mac)
+
+        ack_mac_bytes = ack_mac.encode('latin-1') if len(ack_mac) == 8 else ack_mac.encode('ascii')
+        try:
+            mac_bytes = mac.encode('ascii') if len(mac) == 8 else mac.encode('latin-1')
+        except UnicodeEncodeError:
+            mac_bytes = mac.encode('latin-1')
+
+        assert ack_mac_bytes == mac_bytes, f"CmdDelSensor: MAC mismatch, requested:{bytes_to_hex(mac_bytes)}, returned:{bytes_to_hex(ack_mac_bytes)}"
+        LOGGER.info("CmdDelSensor: %s deleted", bytes_to_hex(mac_bytes) if not mac.isascii() else mac)
 
     def DeleteAll(self):
         resp = self._DoSimpleCommand(Packet.DelAllSensor())

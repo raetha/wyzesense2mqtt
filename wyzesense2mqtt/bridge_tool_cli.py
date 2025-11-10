@@ -29,7 +29,20 @@ import wyzesense
 from datetime import datetime
 
 def on_event(ws, e):
-    s = f"[{datetime.fromtimestamp(e.timestamp).strftime('%Y-%m-%d %H:%M:%S')}][{e.mac}]: {e}"
+    if isinstance(e, str):
+        # Handle error string
+        print(f"Event: {e}")
+        return
+    s = f"[{datetime.fromtimestamp(e.timestamp).strftime('%Y-%m-%d %H:%M:%S')}][{e.mac}]: "
+    s += f"type={e.event}"
+    if hasattr(e, 'sensor_type'):
+        s += f", sensor_type={e.sensor_type}"
+    if hasattr(e, 'state'):
+        s += f", state={e.state}"
+    if hasattr(e, 'battery'):
+        s += f", battery={e.battery}"
+    if hasattr(e, 'signal_strength'):
+        s += f", signal={e.signal_strength}"
     print(s)
 
 def main(args):
@@ -54,17 +67,26 @@ def main(args):
         return 2
 
     def List(unused_args):
-        result = ws.List()
-        print(f"{len(result)} sensors paired:")
-        logging.debug(f"{len(result)} sensors paired:")
-        for mac in result:
-            print(f"\tSensor: {mac}")
-            logging.debug(f"\tSensor: {mac}")
+        try:
+            result = ws.List()
+            print(f"{len(result)} sensors paired:")
+            logging.debug(f"{len(result)} sensors paired:")
+            for mac in result:
+                # Display corrupted MACs (non-ASCII) in hex format
+                try:
+                    mac.encode('ascii')
+                    display_mac = mac
+                except UnicodeEncodeError:
+                    display_mac = ''.join(f"{ord(c):02x}" for c in mac)
+                print(f"\tSensor: {display_mac}")
+                logging.debug(f"\tSensor: {display_mac}")
+        except TimeoutError:
+            print("Error: Timeout while retrieving sensor list.")
 
     def Pair(unused_args):
         result = ws.Scan()
-        (s_mac, s_type, s_version) = result
         if result:
+            (s_mac, s_type, s_version) = result
             print(f"Sensor found: mac={s_mac}, type={s_type}, version={s_version}")
             logging.debug(f"Sensor found: mac={s_mac}, type={s_type}, version={s_version}")
         else:
@@ -73,11 +95,20 @@ def main(args):
 
     def Unpair(mac_list):
         for mac in mac_list:
-            if len(mac) != 8:
-                print(f"Invalid mac address, must be 8 characters: {mac}")
-                logging.debug(f"Invalid mac address, must be 8 characters: {mac}")
+            # Handle both ASCII MACs (8 chars) and hex-encoded corrupted MACs (16 chars)
+            if len(mac) == 16:
+                try:
+                    mac_bytes = bytes.fromhex(mac)
+                    mac = mac_bytes.decode('latin-1')
+                except (ValueError, UnicodeDecodeError) as e:
+                    print(f"Invalid hex MAC address: {mac}")
+                    logging.debug(f"Invalid hex MAC address: {mac}: {e}")
+                    continue
+            elif len(mac) != 8:
+                print(f"Invalid mac address, must be 8 or 16 characters: {mac}")
+                logging.debug(f"Invalid mac address, must be 8 or 16 characters: {mac}")
                 continue
-            print(f"Un-pairing sensor {mac}:")
+            print(f"Un-pairing sensor {mac if len(mac) == 8 and mac.isascii() else ''.join(f'{ord(c):02x}' for c in mac)}:")
             logging.debug(f"Un-pairing sensor {mac}:")
             result = ws.Delete(mac)
             if result is not None:
@@ -90,15 +121,19 @@ def main(args):
         invalid_mac_list = [
             "00000000",
             "\0\0\0\0\0\0\0\0",
-            "\x00\x00\x00\x00\x00\x00\x00\x00"
+            "\x00\x00\x00\x00\x00\x00\x00\x00",
+            "ffffffffffffffff"
         ]
         print("Un-pairing bad sensors")
         logging.debug("Un-pairing bad sensors")
         for mac in invalid_mac_list:
-            result = ws.Delete(mac)
-            if result is not None:
-                print(f"Result: {result}")
-                logging.debug(f"Result: {result}")
+            try:
+                result = ws.Delete(mac)
+                if result is not None:
+                    print(f"Removed sensor: {mac}")
+                    logging.debug(f"Removed sensor: {mac}")
+            except Exception as e:
+                logging.debug(f"Could not remove {mac}: {e}")
         print("Bad sensors removed")
         logging.debug("Bad sensors removed")
 
