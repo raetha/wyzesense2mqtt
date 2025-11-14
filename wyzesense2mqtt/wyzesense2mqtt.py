@@ -508,6 +508,39 @@ def send_discovery_topics(sensor_mac, wait=True):
                 }
             }
 
+            # Leak sensors report temperature in Celsius and humidity
+            entity_payloads['temperature'] = {
+                'name': 'Temperature',
+                'device_class':'temperature',
+                'state_class':'measurement',
+                'unit_of_measurement': '°C',  # Leak sensors report in Celsius
+                'json_attributes_topic': mac_topic,
+                'device' : {
+                   'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
+                   'manufacturer': "Wyze",
+                   'model': attr['model'],
+                   'name': attr['name'],
+                   'sw_version': attr['sw_version'],
+                   'via_device': "wyzesense2mqtt"
+                }
+            }
+
+            entity_payloads['humidity'] = {
+                'name': 'Humidity',
+                'device_class':'humidity',
+                'state_class':'measurement',
+                'unit_of_measurement': '%',
+                'json_attributes_topic': mac_topic,
+                'device' : {
+                   'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
+                   'manufacturer': "Wyze",
+                   'model': attr['model'],
+                   'name': attr['name'],
+                   'sw_version': attr['sw_version'],
+                   'via_device': "wyzesense2mqtt"
+                }
+            }
+
     elif sensor_type == 'climate':
         entity_payloads['temperature'] = {
             'name': 'Temperature',
