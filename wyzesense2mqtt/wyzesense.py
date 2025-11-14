@@ -352,7 +352,7 @@ class SensorEvent(object):
     def _ClimateParser(cls, mac, event, sensor_type, timestamp, data):
         _, battery, _, _, temp_hi, temp_lo, humidity, signal_strength = struct.unpack_from(">BBBBBBBB", data)
 
-        if sensor_type != SENSOR_TYPE_CLIMATE:
+        if sensor_type not in (SENSOR_TYPE_CLIMATE, SENSOR_TYPE_LEAK):
             LOGGER.warn(f"Unexpected sensor ({sensor_type:02X}) for event {event:02X}")
             return cls._UnknownParser(mac, event, sensor_type, timestamp, data)
 
