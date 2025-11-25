@@ -8,7 +8,7 @@ jobs:
     name: Update Pull Request Description
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
     
     # https://github.com/octue/generate-pull-request-description
     # Use the lines below in the PR description to trigger
