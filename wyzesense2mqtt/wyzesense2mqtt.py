@@ -60,40 +60,46 @@ _DEVICE_MAPPING = {
         'class': 'motion',
         'on': 'active',
         'off': 'inactive',
-        'model': 'WyzeSense Motion Sensor',
+        'model': 'Wyze Sense V1 Motion Sensor',
+        'hw_version': 'V1',
         'timeout': DEFAULT_V1_TIMEOUT_HOURS,
     },
     'motionv2': {
         'class': 'motion',
         'on': 'active',
         'off': 'inactive',
-        'model': 'WyzeSense Motion V2 Sensor',
+        'model': 'Wyze Sense V2 Motion Sensor',
+        'hw_version': 'V2',
         'timeout': DEFAULT_V2_TIMEOUT_HOURS,
     },
     'switch': {
         'class': 'opening',
         'on': 'open',
         'off': 'closed',
-        'model': 'WyzeSense Door/Window Sensor',
+        'model': 'Wyze Sense V1 Contact Sensor',
+        'hw_version': 'V1',
         'timeout': DEFAULT_V1_TIMEOUT_HOURS,
     },
     'switchv2': {
         'class': 'opening',
         'on': 'open',
         'off': 'closed',
-        'model': 'WyzeSense Door/Window V2 Sensor',
+        'model': 'Wyze Sense V2 Contact Sensor',
+        'hw_version': 'V2',
         'timeout': DEFAULT_V2_TIMEOUT_HOURS,
     },
     'leak': {
         'class': 'moisture',
         'on': 'wet',
         'off': 'dry',
-        'model': 'WyzeSense Leak Sensor',
+        'model': 'Wyze Sense V2 Leak Sensor',
+        'hw_version': 'V2',
         'timeout': DEFAULT_V2_TIMEOUT_HOURS,
     },
     'climate': {
         'class': 'temperature',
-        'model': 'WyzeSense Climate Sensor',
+        'model': 'Wyze Sense V2 Climate Sensor',
+        'hw_version': 'V2',
         'timeout': DEFAULT_V2_TIMEOUT_HOURS,
     },
     'unknown': {
@@ -481,12 +487,13 @@ def send_discovery_topics(sensor_mac, wait=True):
             'payload_off': attr['off'],
             'json_attributes_topic': mac_topic,
             'device' : {
-               'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
-               'manufacturer': "Wyze",
-               'model': attr['model'],
-               'name': attr['name'],
-               'sw_version': attr['sw_version'],
-               'via_device': "wyzesense2mqtt"
+                'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
+                'manufacturer': "WyzeLabs",
+                'model': attr['model'],
+                'hw_version': attr['hw_version'],
+                'name': attr['name'],
+                'sw_version': attr['sw_version'],
+                'via_device': "wyzesense2mqtt"
             }
         }
 
@@ -499,12 +506,13 @@ def send_discovery_topics(sensor_mac, wait=True):
                 'payload_off': attr['off'],
                 'json_attributes_topic': mac_topic,
                 'device' : {
-                'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
-                'manufacturer': "Wyze",
-                'model': attr['model'],
-                'name': attr['name'],
-                'sw_version': attr['sw_version'],
-                'via_device': "wyzesense2mqtt"
+                    'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
+                    'manufacturer': "WyzeLabs",
+                    'model': attr['model'],
+                    'hw_version': attr['hw_version'],
+                    'name': attr['name'],
+                    'sw_version': attr['sw_version'],
+                    'via_device': "wyzesense2mqtt"
                 }
             }
 
@@ -516,12 +524,13 @@ def send_discovery_topics(sensor_mac, wait=True):
                 'unit_of_measurement': '°C',  # Leak sensors report in Celsius
                 'json_attributes_topic': mac_topic,
                 'device' : {
-                   'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
-                   'manufacturer': "Wyze",
-                   'model': attr['model'],
-                   'name': attr['name'],
-                   'sw_version': attr['sw_version'],
-                   'via_device': "wyzesense2mqtt"
+                    'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
+                    'manufacturer': "WyzeLabs",
+                    'model': attr['model'],
+                    'hw_version': attr['hw_version'],
+                    'name': attr['name'],
+                    'sw_version': attr['sw_version'],
+                    'via_device': "wyzesense2mqtt"
                 }
             }
 
@@ -532,12 +541,13 @@ def send_discovery_topics(sensor_mac, wait=True):
                 'unit_of_measurement': '%',
                 'json_attributes_topic': mac_topic,
                 'device' : {
-                   'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
-                   'manufacturer': "Wyze",
-                   'model': attr['model'],
-                   'name': attr['name'],
-                   'sw_version': attr['sw_version'],
-                   'via_device': "wyzesense2mqtt"
+                    'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
+                    'manufacturer': "WyzeLabs",
+                    'model': attr['model'],
+                    'hw_version': attr['hw_version'],
+                    'name': attr['name'],
+                    'sw_version': attr['sw_version'],
+                    'via_device': "wyzesense2mqtt"
                 }
             }
 
@@ -549,12 +559,13 @@ def send_discovery_topics(sensor_mac, wait=True):
             'unit_of_measurement': '°F',
             'json_attributes_topic': mac_topic,
             'device' : {
-               'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
-               'manufacturer': "Wyze",
-               'model': attr['model'],
-               'name': attr['name'],
-               'sw_version': attr['sw_version'],
-               'via_device': "wyzesense2mqtt"
+                'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
+                'manufacturer': "WyzeLabs",
+                'model': attr['model'],
+                'hw_version': attr['hw_version'],
+                'name': attr['name'],
+                'sw_version': attr['sw_version'],
+                'via_device': "wyzesense2mqtt"
             }
         }
 
@@ -565,8 +576,13 @@ def send_discovery_topics(sensor_mac, wait=True):
             'unit_of_measurement': '%',
             'json_attributes_topic': mac_topic,
             'device' : {
-               'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
-               'name': attr['name'],
+                'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
+                'manufacturer': "WyzeLabs",
+                'model': attr['model'],
+                'hw_version': attr['hw_version'],
+                'name': attr['name'],
+                'sw_version': attr['sw_version'],
+                'via_device': "wyzesense2mqtt"
             }
         }
     else:
@@ -581,7 +597,12 @@ def send_discovery_topics(sensor_mac, wait=True):
         'entity_category': "diagnostic",
         'device' : {
             'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
-            'name': attr['name']
+            'manufacturer': "WyzeLabs",
+            'model': attr['model'],
+            'hw_version': attr['hw_version'],
+            'name': attr['name'],
+            'sw_version': attr['sw_version'],
+            'via_device': "wyzesense2mqtt"
         }
     }
     entity_payloads['battery'] = {
@@ -591,7 +612,12 @@ def send_discovery_topics(sensor_mac, wait=True):
         'entity_category': "diagnostic",
         'device' : {
             'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
-            'name': attr['name']
+            'manufacturer': "WyzeLabs",
+            'model': attr['model'],
+            'hw_version': attr['hw_version'],
+            'name': attr['name'],
+            'sw_version': attr['sw_version'],
+            'via_device': "wyzesense2mqtt"
         }
     }
 
