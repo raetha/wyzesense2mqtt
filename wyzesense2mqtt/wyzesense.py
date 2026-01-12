@@ -410,6 +410,7 @@ class SensorEvent(object):
 
         _EVENT_PARSERS = {
             EVENT_TYPE_LEAK: cls._LeakParser,
+            EVENT_TYPE_CLIMATE: cls._ClimateParser,
         }
         parser = _EVENT_PARSERS.get(event, cls._UnknownParser)
         return parser(mac, event, sensor_type, timestamp, data)
