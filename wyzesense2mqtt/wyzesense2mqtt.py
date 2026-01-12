@@ -521,7 +521,7 @@ def send_discovery_topics(sensor_mac, wait=True):
                 'hw_version': attr['hw_version'],
                 'name': attr['name'],
                 'sw_version': attr['sw_version'],
-                'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
+                'via_device': f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
             }
         }
 
@@ -540,7 +540,7 @@ def send_discovery_topics(sensor_mac, wait=True):
                     'hw_version': attr['hw_version'],
                     'name': attr['name'],
                     'sw_version': attr['sw_version'],
-                    'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
+                    'via_device': f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
                 }
             }
 
@@ -558,7 +558,7 @@ def send_discovery_topics(sensor_mac, wait=True):
                     'hw_version': attr['hw_version'],
                     'name': attr['name'],
                     'sw_version': attr['sw_version'],
-                    'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
+                    'via_device': f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
                 }
             }
 
@@ -575,7 +575,7 @@ def send_discovery_topics(sensor_mac, wait=True):
                     'hw_version': attr['hw_version'],
                     'name': attr['name'],
                     'sw_version': attr['sw_version'],
-                    'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
+                    'via_device': f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
                 }
             }
 
@@ -593,7 +593,7 @@ def send_discovery_topics(sensor_mac, wait=True):
                 'hw_version': attr['hw_version'],
                 'name': attr['name'],
                 'sw_version': attr['sw_version'],
-                'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
+                'via_device': f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
             }
         }
 
@@ -610,7 +610,7 @@ def send_discovery_topics(sensor_mac, wait=True):
                 'hw_version': attr['hw_version'],
                 'name': attr['name'],
                 'sw_version': attr['sw_version'],
-                'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
+                'via_device': f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
             }
         }
     else:
@@ -630,7 +630,7 @@ def send_discovery_topics(sensor_mac, wait=True):
             'hw_version': attr['hw_version'],
             'name': attr['name'],
             'sw_version': attr['sw_version'],
-            'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
+            'via_device': f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
         }
     }
     entity_payloads['battery'] = {
@@ -645,7 +645,7 @@ def send_discovery_topics(sensor_mac, wait=True):
             'hw_version': attr['hw_version'],
             'name': attr['name'],
             'sw_version': attr['sw_version'],
-            'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
+            'via_device': f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
         }
     }
 
