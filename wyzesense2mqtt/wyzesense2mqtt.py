@@ -16,6 +16,7 @@ import paho.mqtt.client as mqtt
 import wyzesense
 from retrying import retry
 
+WYZESENSE2MQTT_VERSION = "3.1"
 
 # Configuration File Locations
 CONFIG_PATH = "config"
@@ -121,6 +122,7 @@ V1_SW=[19]
 V2_SW=[23]
 
 INITIALIZED = False
+
 
 # Read data from YAML file
 def read_yaml_file(filename):
@@ -254,7 +256,8 @@ def init_mqtt_client():
         time.sleep(1)
 
     # Make sure the service stays marked as offline until everything is initialized
-    mqtt_publish(f"{CONFIG['self_topic_root']}/status", "offline", is_json=False)
+    mqtt_publish(f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status", "offline", is_json=False)
+
 
 # Retry forever on IO Error
 def retry_if_io_error(exception):
@@ -283,6 +286,36 @@ def init_wyzesense_dongle():
                     f" ENR: {WYZESENSE_DONGLE.ENR}]")
     except IOError as error:
         LOGGER.error(f"No device found on path {CONFIG['usb_dongle']}: {str(error)}")
+
+
+# Initialize bridge discovery
+def init_bridge_discovery(wait=True):
+    if(CONFIG['hass_discovery']):
+        connection_state_payload = {
+            'default_entity_id': 'binary_sensor.wyzesense2mqtt_bridge_connection_state',
+            'device': {
+                'hw_version': {WYZESENSE_DONGLE.Version},
+                'identifiers': [f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"],
+                'manufacturer': 'Raetha',
+                'model': 'Bridge',
+                'name': 'WyzeSense2MQTT Bridge',
+                'sw_version': {WYZESENSE2MQTT_VERSION}
+            },
+            'device_class': 'connectivity',
+            'entity_category': 'diagnostic',
+            'name': 'Connection state',
+            'object_id': 'wyzesense2mqtt_bridge_connection_state',
+            'origin': {
+                'name': 'WyzeSense2MQTT Bridge',
+                'sw_version': {WYZESENSE2MQTT_VERSION},
+                'support_url': 'https://github.com/raetha/wyzesense2mqtt'
+            },
+            'payload_off': 'offline',
+            'payload_on': 'online',
+            'state_topic': 'wyzesense2mqtt/bridge_{WYZESENSE_DONGLE.MAC}/status',
+            'unique_id': f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}_connection_state"
+        }
+        mqtt_publish(f"{CONFIG['hass_topic_root']}/binary_sensor/wyzesense_{WYZESENSE_DONGLE.MAC}/connection_state/config", connection_state_payload, wait=wait)
 
 
 # Initialize sensor configuration
@@ -488,7 +521,7 @@ def send_discovery_topics(sensor_mac, wait=True):
                 'hw_version': attr['hw_version'],
                 'name': attr['name'],
                 'sw_version': attr['sw_version'],
-                'via_device': "wyzesense2mqtt"
+                'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
             }
         }
 
@@ -507,7 +540,7 @@ def send_discovery_topics(sensor_mac, wait=True):
                     'hw_version': attr['hw_version'],
                     'name': attr['name'],
                     'sw_version': attr['sw_version'],
-                    'via_device': "wyzesense2mqtt"
+                    'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
                 }
             }
 
@@ -525,7 +558,7 @@ def send_discovery_topics(sensor_mac, wait=True):
                     'hw_version': attr['hw_version'],
                     'name': attr['name'],
                     'sw_version': attr['sw_version'],
-                    'via_device': "wyzesense2mqtt"
+                    'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
                 }
             }
 
@@ -542,7 +575,7 @@ def send_discovery_topics(sensor_mac, wait=True):
                     'hw_version': attr['hw_version'],
                     'name': attr['name'],
                     'sw_version': attr['sw_version'],
-                    'via_device': "wyzesense2mqtt"
+                    'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
                 }
             }
 
@@ -560,7 +593,7 @@ def send_discovery_topics(sensor_mac, wait=True):
                 'hw_version': attr['hw_version'],
                 'name': attr['name'],
                 'sw_version': attr['sw_version'],
-                'via_device': "wyzesense2mqtt"
+                'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
             }
         }
 
@@ -577,7 +610,7 @@ def send_discovery_topics(sensor_mac, wait=True):
                 'hw_version': attr['hw_version'],
                 'name': attr['name'],
                 'sw_version': attr['sw_version'],
-                'via_device': "wyzesense2mqtt"
+                'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
             }
         }
     else:
@@ -597,7 +630,7 @@ def send_discovery_topics(sensor_mac, wait=True):
             'hw_version': attr['hw_version'],
             'name': attr['name'],
             'sw_version': attr['sw_version'],
-            'via_device': "wyzesense2mqtt"
+            'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
         }
     }
     entity_payloads['battery'] = {
@@ -612,13 +645,13 @@ def send_discovery_topics(sensor_mac, wait=True):
             'hw_version': attr['hw_version'],
             'name': attr['name'],
             'sw_version': attr['sw_version'],
-            'via_device': "wyzesense2mqtt"
+            'via_device': "wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"
         }
     }
 
     availability_topics = [
         { 'topic': f"{CONFIG['self_topic_root']}/{sensor_mac}/status" },
-        { 'topic': f"{CONFIG['self_topic_root']}/status" }
+        { 'topic': f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status" }
     ]
 
     for entity, entity_payload in entity_payloads.items():
@@ -809,10 +842,10 @@ def on_event(WYZESENSE_DONGLE, event):
         LOGGER.warning(f"Event data: {event}")
 
 def Stop():
+    mqtt_publish(f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status", "offline", is_json=False)
+
     # Stop the dongle first, letting this thread finish anything it might be busy doing, like handling an event
     WYZESENSE_DONGLE.Stop()
-
-    mqtt_publish(f"{CONFIG['self_topic_root']}/status", "offline", is_json=False)
 
     # All event handling should now be done, close the mqtt connection
     MQTT_CLIENT.loop_stop()
@@ -840,11 +873,14 @@ if __name__ == "__main__":
     REMOVE_TOPIC = f"{CONFIG['self_topic_root']}/remove"
     RELOAD_TOPIC = f"{CONFIG['self_topic_root']}/reload"
 
+    # Initialize USB dongle
+    init_wyzesense_dongle()
+
     # Initialize MQTT client connection
     init_mqtt_client()
 
-    # Initialize USB dongle
-    init_wyzesense_dongle()
+    # Initialize bridge discovery topics
+    init_bridge_discovery()
 
     # Initialize sensor configuration
     init_sensors()
@@ -853,7 +889,7 @@ if __name__ == "__main__":
     INITIALIZED = True
 
     # And mark the service as online
-    mqtt_publish(f"{CONFIG['self_topic_root']}/status", "online", is_json=False)
+    mqtt_publish(f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status", "online", is_json=False)
 
     # Loop forever until keyboard interrupt or SIGINT
     try:
@@ -867,7 +903,7 @@ if __name__ == "__main__":
                 MQTT_CLIENT.reconnect()
 
             if MQTT_CLIENT.connected_flag:
-                mqtt_publish(f"{CONFIG['self_topic_root']}/status", "online", is_json=False)
+                mqtt_publish(f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status", "online", is_json=False)
 
 
             # Check for availability of the devices
