@@ -294,12 +294,12 @@ def init_bridge_discovery(wait=True):
         connection_state_payload = {
             'default_entity_id': 'binary_sensor.wyzesense2mqtt_bridge_connection_state',
             'device': {
-                'hw_version': {WYZESENSE_DONGLE.Version},
+                'hw_version': f"{WYZESENSE_DONGLE.Version}",
                 'identifiers': [f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"],
                 'manufacturer': 'Raetha',
                 'model': 'Bridge',
                 'name': 'WyzeSense2MQTT Bridge',
-                'sw_version': {WYZESENSE2MQTT_VERSION}
+                'sw_version': f"{WYZESENSE2MQTT_VERSION}"
             },
             'device_class': 'connectivity',
             'entity_category': 'diagnostic',
@@ -307,7 +307,7 @@ def init_bridge_discovery(wait=True):
             'object_id': 'wyzesense2mqtt_bridge_connection_state',
             'origin': {
                 'name': 'WyzeSense2MQTT Bridge',
-                'sw_version': {WYZESENSE2MQTT_VERSION},
+                'sw_version': f"{WYZESENSE2MQTT_VERSION}",
                 'support_url': 'https://github.com/raetha/wyzesense2mqtt'
             },
             'payload_off': 'offline',
