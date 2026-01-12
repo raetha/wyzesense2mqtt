@@ -804,7 +804,7 @@ def on_event(WYZESENSE_DONGLE, event):
             LOGGER.info(f"{event.mac} is back online!")
 
         if event.event not in ("alarm", "status"):
-            LOGGER.info(f"Unknown event: {e}")
+            LOGGER.info(f"Unknown event: {event}")
             return
 
         payload = {}
