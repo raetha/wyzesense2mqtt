@@ -312,7 +312,7 @@ def init_bridge_discovery(wait=True):
             },
             'payload_off': 'offline',
             'payload_on': 'online',
-            'state_topic': 'wyzesense2mqtt/bridge_{WYZESENSE_DONGLE.MAC}/status',
+            'state_topic': f"wyzesense2mqtt/bridge_{WYZESENSE_DONGLE.MAC}/status",
             'unique_id': f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}_connection_state"
         }
         mqtt_publish(f"{CONFIG['hass_topic_root']}/binary_sensor/wyzesense_{WYZESENSE_DONGLE.MAC}/connection_state/config", connection_state_payload, wait=wait)
