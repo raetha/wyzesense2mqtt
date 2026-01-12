@@ -226,7 +226,7 @@ def init_config():
 
 # Initialize MQTT client connection
 def init_mqtt_client():
-    global MQTT_CLIENT, CONFIG, LOGGER
+    global MQTT_CLIENT
     # Used for alternate MQTT connection method
     mqtt.Client.connected_flag = False
 
@@ -264,7 +264,7 @@ def retry_if_io_error(exception):
 # Initialize USB dongle
 @retry(wait_exponential_multiplier=1000, wait_exponential_max=30000, retry_on_exception=retry_if_io_error)
 def init_wyzesense_dongle():
-    global WYZESENSE_DONGLE, CONFIG, LOGGER
+    global WYZESENSE_DONGLE
     if (CONFIG['usb_dongle'].lower() == "auto"):
         device_list = subprocess.check_output(["ls", "-la", "/sys/class/hidraw"]).decode("utf-8").lower()
         for line in device_list.split("\n"):
@@ -405,7 +405,6 @@ def valid_sensor_mac(sensor_mac):
 
 # Add sensor to config
 def add_sensor_to_config(sensor_mac, sensor_type=None, sensor_version=None):
-    global SENSORS, SENSORS_STATE
     LOGGER.info(f"Adding sensor to config: {sensor_mac}")
     SENSORS[sensor_mac] = {'name': f"WyzeSense {sensor_mac}"}
     if sensor_type:
@@ -427,7 +426,6 @@ def add_sensor_to_config(sensor_mac, sensor_type=None, sensor_version=None):
 
 # Delete sensor from config
 def delete_sensor_from_config(sensor_mac):
-    global SENSORS, SENSORS_STATE
     LOGGER.info(f"Deleting sensor from config: {sensor_mac}")
     try:
         del SENSORS[sensor_mac]
@@ -439,7 +437,6 @@ def delete_sensor_from_config(sensor_mac):
 
 # Publish MQTT topic
 def mqtt_publish(mqtt_topic, mqtt_payload, is_json=True, wait=True):
-    global MQTT_CLIENT, CONFIG
     payload = json.dumps(mqtt_payload) if is_json else mqtt_payload
     LOGGER.debug(f"Publishing, {mqtt_topic=}, {payload=}")
     mqtt_message_info = MQTT_CLIENT.publish(
@@ -458,8 +455,6 @@ def mqtt_publish(mqtt_topic, mqtt_payload, is_json=True, wait=True):
 
 # Send discovery topics
 def send_discovery_topics(sensor_mac, wait=True):
-    global SENSORS, CONFIG, SENSORS_STATE
-
     LOGGER.info(f"Publishing discovery topics for {sensor_mac}")
 
     sensor = SENSORS[sensor_mac]
@@ -644,7 +639,6 @@ def send_discovery_topics(sensor_mac, wait=True):
 
 # Clear any retained topics in MQTT
 def clear_topics(sensor_mac, wait=True):
-    global CONFIG
     LOGGER.info("Clearing sensor topics")
     mqtt_publish(f"{CONFIG['self_topic_root']}/{sensor_mac}/status", None, wait=wait)
     mqtt_publish(f"{CONFIG['self_topic_root']}/{sensor_mac}", None, wait=wait)
@@ -673,7 +667,6 @@ def clear_topics(sensor_mac, wait=True):
             mqtt_publish(f"{CONFIG['hass_topic_root']}/{component}/wyzesense_{sensor_mac}", None, wait=wait)
 
 def on_connect(MQTT_CLIENT, userdata, flags, rc):
-    global CONFIG
     if rc == mqtt.MQTT_ERR_SUCCESS:
         MQTT_CLIENT.subscribe(
             [(SCAN_TOPIC, CONFIG['mqtt_qos']),
@@ -704,7 +697,6 @@ def on_message(MQTT_CLIENT, userdata, msg):
 
 # Process message to scan for new sensors
 def on_message_scan(MQTT_CLIENT, userdata, msg):
-    global SENSORS, CONFIG
     result = None
     LOGGER.info(f"In on_message_scan: {msg.payload.decode()}")
 
@@ -763,8 +755,6 @@ def on_message_reload(MQTT_CLIENT, userdata, msg):
 
 # Process event
 def on_event(WYZESENSE_DONGLE, event):
-    global SENSORS, SENSORS_STATE
-
     if not INITIALIZED:
         return
 
