@@ -899,12 +899,10 @@ if __name__ == "__main__":
             WYZESENSE_DONGLE.CheckError()
 
             if not MQTT_CLIENT.connected_flag:
+                mqtt_publish(f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status", "offline", is_json=False)
                 LOGGER.warning("Reconnecting MQTT...")
                 MQTT_CLIENT.reconnect()
-
-            if MQTT_CLIENT.connected_flag:
                 mqtt_publish(f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status", "online", is_json=False)
-
 
             # Check for availability of the devices
             now = time.time()
