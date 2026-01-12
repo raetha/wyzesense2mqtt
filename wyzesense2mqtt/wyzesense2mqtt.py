@@ -298,7 +298,7 @@ def init_bridge_discovery(wait=True):
                 'identifiers': [f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}"],
                 'manufacturer': 'Raetha',
                 'model': 'Bridge',
-                'name': 'WyzeSense2MQTT Bridge',
+                'name': f"WyzeSense2MQTT Bridge {WYZESENSE_DONGLE.MAC}",
                 'sw_version': f"{WYZESENSE2MQTT_VERSION}"
             },
             'device_class': 'connectivity',
@@ -306,7 +306,7 @@ def init_bridge_discovery(wait=True):
             'name': 'Connection state',
             'object_id': 'wyzesense2mqtt_bridge_connection_state',
             'origin': {
-                'name': 'WyzeSense2MQTT Bridge',
+                'name': 'WyzeSense2MQTT',
                 'sw_version': f"{WYZESENSE2MQTT_VERSION}",
                 'support_url': 'https://github.com/raetha/wyzesense2mqtt'
             },
@@ -315,7 +315,7 @@ def init_bridge_discovery(wait=True):
             'state_topic': f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status",
             'unique_id': f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}_connection_state"
         }
-        mqtt_publish(f"{CONFIG['hass_topic_root']}/binary_sensor/wyzesense_{WYZESENSE_DONGLE.MAC}/connection_state/config", connection_state_payload, wait=wait)
+        mqtt_publish(f"{CONFIG['hass_topic_root']}/binary_sensor/wyzesense_bridge_{WYZESENSE_DONGLE.MAC}/connection_state/config", connection_state_payload, wait=wait)
 
 
 # Initialize sensor configuration
