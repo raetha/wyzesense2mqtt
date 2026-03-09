@@ -24,7 +24,7 @@ jobs:
 
       # https://github.com/docker/setup-qemu-action
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       # Set up BuildKit Docker container builder to be able to build multi-platform images and export cache
       # https://github.com/docker/setup-buildx-action
@@ -74,7 +74,7 @@ jobs:
 
       # https://github.com/docker/setup-qemu-action
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       # Set up BuildKit Docker container builder to be able to build multi-platform images and export cache
       # https://github.com/docker/setup-buildx-action
