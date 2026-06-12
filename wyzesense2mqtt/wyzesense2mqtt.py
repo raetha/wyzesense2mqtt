@@ -233,12 +233,7 @@ def init_mqtt_client():
     mqtt.Client.connected_flag = False
 
     # Configure MQTT Client
-    if not hasattr(mqtt, "CallbackAPIVersion"):
-        # paho-mqtt 1.x
-        MQTT_CLIENT = mqtt.Client(client_id=CONFIG['mqtt_client_id'], clean_session=CONFIG['mqtt_clean_session'])
-    else:
-        # paho-mqtt 2.x
-        MQTT_CLIENT = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1,client_id=CONFIG['mqtt_client_id'], clean_session=CONFIG['mqtt_clean_session'])
+    MQTT_CLIENT = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=CONFIG['mqtt_client_id'], clean_session=CONFIG['mqtt_clean_session'])
     MQTT_CLIENT.username_pw_set(username=CONFIG['mqtt_username'], password=CONFIG['mqtt_password'])
     MQTT_CLIENT.reconnect_delay_set(min_delay=1, max_delay=120)
     MQTT_CLIENT.on_connect = on_connect
@@ -699,8 +694,8 @@ def clear_topics(sensor_mac, wait=True):
             mqtt_publish(f"{CONFIG['hass_topic_root']}/{component}/wyzesense_{sensor_mac}/{entity_type}", None, wait=wait)
             mqtt_publish(f"{CONFIG['hass_topic_root']}/{component}/wyzesense_{sensor_mac}", None, wait=wait)
 
-def on_connect(MQTT_CLIENT, userdata, flags, rc):
-    if rc == mqtt.MQTT_ERR_SUCCESS:
+def on_connect(MQTT_CLIENT, userdata, flags, reason_code, properties):
+    if reason_code == 0:
         MQTT_CLIENT.subscribe(
             [(SCAN_TOPIC, CONFIG['mqtt_qos']),
              (REMOVE_TOPIC, CONFIG['mqtt_qos']),
@@ -710,17 +705,19 @@ def on_connect(MQTT_CLIENT, userdata, flags, rc):
         MQTT_CLIENT.message_callback_add(REMOVE_TOPIC, on_message_remove)
         MQTT_CLIENT.message_callback_add(RELOAD_TOPIC, on_message_reload)
         MQTT_CLIENT.connected_flag = True
-        LOGGER.info(f"Connected to MQTT: {mqtt.error_string(rc)}")
+        LOGGER.info(f"Connected to MQTT: {reason_code}")
+        # We are in a mqtt callback, so can not wait for new messages to publish
+        mqtt_publish(f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status", "online", is_json=False, wait=False)
     else:
-        LOGGER.warning(f"Connection to MQTT failed: {mqtt.error_string(rc)}")
+        LOGGER.warning(f"Connection to MQTT failed: {reason_code}")
 
 
-def on_disconnect(MQTT_CLIENT, userdata, rc):
+def on_disconnect(MQTT_CLIENT, userdata, flags, reason_code, properties):
     MQTT_CLIENT.message_callback_remove(SCAN_TOPIC)
     MQTT_CLIENT.message_callback_remove(REMOVE_TOPIC)
     MQTT_CLIENT.message_callback_remove(RELOAD_TOPIC)
     MQTT_CLIENT.connected_flag = False
-    LOGGER.info(f"Disconnected from MQTT: {mqtt.error_string(rc)}")
+    LOGGER.info(f"Disconnected from MQTT: {reason_code}")
 
 
 # We don't handle any additional messages from MQTT, just log them
@@ -900,9 +897,6 @@ if __name__ == "__main__":
 
             if not MQTT_CLIENT.connected_flag:
                 mqtt_publish(f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status", "offline", is_json=False)
-                LOGGER.warning("Reconnecting MQTT...")
-                MQTT_CLIENT.reconnect()
-                mqtt_publish(f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status", "online", is_json=False)
 
             # Check for availability of the devices
             now = time.time()
