@@ -28,6 +28,7 @@ import binascii
 import wyzesense
 from datetime import datetime
 
+
 def on_event(ws, e):
     if isinstance(e, str):
         # Handle error string
@@ -44,6 +45,7 @@ def on_event(ws, e):
     if hasattr(e, 'signal_strength'):
         s += f", signal={e.signal_strength}"
     print(s)
+
 
 def main(args):
     if args['--debug']:

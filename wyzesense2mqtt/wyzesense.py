@@ -6,8 +6,6 @@ import time
 import struct
 import threading
 import datetime
-import binascii
-
 import logging
 
 
@@ -30,18 +28,18 @@ CONTACT_IDS = {0x01: "switch", 0x0E: "switchv2", "states": ["close", "open"]}
 MOTION_IDS = {0x02: "motion", 0x0F: "motionv2", "states": ["inactive", "active"]}
 LEAK_IDS = {0x03: "leak", "states": ["dry", "wet"]}
 
-EVENT_TYPE_HEARTBEAT    = 0xA1
-EVENT_TYPE_ALARM        = 0xA2
-EVENT_TYPE_CLIMATE      = 0xE8
-EVENT_TYPE_LEAK         = 0xEA
+EVENT_TYPE_HEARTBEAT = 0xA1
+EVENT_TYPE_ALARM = 0xA2
+EVENT_TYPE_CLIMATE = 0xE8
+EVENT_TYPE_LEAK = 0xEA
 
-SENSOR_TYPE_SWITCH      = 0x01
-SENSOR_TYPE_MOTION      = 0x02
-SENSOR_TYPE_LEAK        = 0x03
-SENSOR_TYPE_CLIMATE     = 0x07
-SENSOR_TYPE_CHIME       = 0x0C
-SENSOR_TYPE_SWITCH_V2   = 0x0E
-SENSOR_TYPE_MOTION_V2   = 0x0F
+SENSOR_TYPE_SWITCH = 0x01
+SENSOR_TYPE_MOTION = 0x02
+SENSOR_TYPE_LEAK = 0x03
+SENSOR_TYPE_CLIMATE = 0x07
+SENSOR_TYPE_CHIME = 0x0C
+SENSOR_TYPE_SWITCH_V2 = 0x0E
+SENSOR_TYPE_MOTION_V2 = 0x0F
 
 SENSOR_TYPES = {
     SENSOR_TYPE_SWITCH:    "switch",
@@ -271,7 +269,7 @@ class Packet(object):
     @classmethod
     def Ch554Upgrade(cls):
         return cls(cls.CMD_SET_CH554_UPGRADE)
-    
+
     @classmethod
     def PlayChime(cls, mac, ringid, repeat_cnt, volume):
         assert isinstance(mac, str)
@@ -415,6 +413,7 @@ class SensorEvent(object):
         parser = _EVENT_PARSERS.get(event, cls._UnknownParser)
         return parser(mac, event, sensor_type, timestamp, data)
 
+
 class Dongle(object):
     _CMD_TIMEOUT = 2
 
@@ -443,7 +442,7 @@ class Dongle(object):
         self._SendPacket(Packet.SyncTimeAck())
 
     def _OnEventLog(self, pkt):
-#        global CONTACT_IDS, MOTION_IDS, LEAK_IDS
+        # global CONTACT_IDS, MOTION_IDS, LEAK_IDS
 
         assert len(pkt.Payload) >= 9
         ts, msg_len = struct.unpack_from(">QB", pkt.Payload)
@@ -675,7 +674,7 @@ class Dongle(object):
                     LOGGER.warning("Sensor %d/%d: Invalid MAC address data (non-ASCII bytes): %s",
                                    ctx.index + 1, ctx.count, bytes_to_hex(pkt.Payload))
                     LOGGER.info("Sensor %d/%d, MAC (hex): %s", ctx.index + 1, ctx.count,
-                               ''.join(f"{b:02x}" for b in pkt.Payload))
+                                ''.join(f"{b:02x}" for b in pkt.Payload))
 
                 ctx.sensors.append(mac)
                 ctx.index += 1
@@ -710,14 +709,14 @@ class Dongle(object):
             LOGGER.info("Dongle version: %s", self.Version)
 
             self._FinishAuth()
-        except:
+        except Exception:
             self.Stop()
             raise
 
     def List(self):
         sensors = self._GetSensors()
         return sensors
-    
+
     def CheckError(self):
         if self.__last_exception:
             raise self.__last_exception
@@ -836,10 +835,11 @@ class Dongle(object):
         pkt = Packet.Parse(data)
         self._DoSimpleCommand(pkt)
 
+
 def Open(device, event_handler, logger):
     global LOGGER
     if logger is not None:
-       LOGGER = logger
+        LOGGER = logger
     else:
-       LOGGER = logging.getLogger(__name__)
+        LOGGER = logging.getLogger(__name__)
     return Dongle(device, event_handler)

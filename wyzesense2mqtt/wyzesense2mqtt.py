@@ -118,8 +118,8 @@ _BINARY_SENSORS = (
 
 
 # List of sw versions for V1 and V2 sensors, to determine which timeout to use by default
-V1_SW=[19]
-V2_SW=[23]
+V1_SW = [19]
+V2_SW = [23]
 
 INITIALIZED = False
 
@@ -202,7 +202,7 @@ def init_config():
         CONFIG.update(config_from_file)
 
     # load ENV supplied config over default values and config file values
-    for key,value in os.environ.items():
+    for key, value in os.environ.items():
         key = str(key).lower()
         if key in CONFIG:
             if value.isnumeric():
@@ -217,7 +217,7 @@ def init_config():
 
     # fail on no config
     if (CONFIG is None):
-        LOGGER.error(f"Failed to load configuration, please configure.")
+        LOGGER.error("Failed to load configuration, please configure.")
         exit(1)
 
     # write updated config file if needed
@@ -285,7 +285,7 @@ def init_wyzesense_dongle():
 
 # Initialize bridge discovery
 def init_bridge_discovery(wait=True):
-    if(CONFIG['hass_discovery']):
+    if (CONFIG['hass_discovery']):
         connection_state_payload = {
             'default_entity_id': 'binary_sensor.wyzesense2mqtt_bridge_connection_state',
             'device': {
@@ -398,14 +398,13 @@ def init_sensors(wait=True):
                     'online': True
                 }
 
-
     # Save sensors file if didn't exist
     if (not sensors_config_file_found):
         LOGGER.info("Writing Sensors Config File")
         write_yaml_file(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE), SENSORS)
 
     # Send discovery topics
-    if(CONFIG['hass_discovery']):
+    if (CONFIG['hass_discovery']):
         for sensor_mac in SENSORS_STATE:
             if (valid_sensor_mac(sensor_mac)):
                 send_discovery_topics(sensor_mac, wait=wait)
@@ -436,12 +435,12 @@ def add_sensor_to_config(sensor_mac, sensor_type=None, sensor_version=None):
     LOGGER.info(f"Adding sensor to config: {sensor_mac}")
     SENSORS[sensor_mac] = {'name': f"WyzeSense {sensor_mac}"}
     if sensor_type:
-        SENSORS[sensor_mac]['sensor_type']  = sensor_type
+        SENSORS[sensor_mac]['sensor_type'] = sensor_type
         if sensor_type in DEVICE_CLASSES:
             SENSORS[sensor_mac]['class'] = DEVICE_CLASSES[sensor_type]
 
     if sensor_version:
-        SENSORS[sensor_mac]['sw_version']  = sensor_version
+        SENSORS[sensor_mac]['sw_version'] = sensor_version
 
     # Intialize last seen time to now and start online
     SENSORS_STATE[sensor_mac] = {
@@ -509,7 +508,7 @@ def send_discovery_topics(sensor_mac, wait=True):
             'payload_on': attr['on'],
             'payload_off': attr['off'],
             'json_attributes_topic': mac_topic,
-            'device' : {
+            'device': {
                 'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
                 'manufacturer': "WyzeLabs",
                 'model': attr['model'],
@@ -528,7 +527,7 @@ def send_discovery_topics(sensor_mac, wait=True):
                 'payload_on': attr['on'],
                 'payload_off': attr['off'],
                 'json_attributes_topic': mac_topic,
-                'device' : {
+                'device': {
                     'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
                     'manufacturer': "WyzeLabs",
                     'model': attr['model'],
@@ -542,11 +541,11 @@ def send_discovery_topics(sensor_mac, wait=True):
             # Leak sensors report temperature in Celsius and humidity
             entity_payloads['temperature'] = {
                 'name': 'Temperature',
-                'device_class':'temperature',
-                'state_class':'measurement',
+                'device_class': 'temperature',
+                'state_class': 'measurement',
                 'unit_of_measurement': '°C',  # Leak sensors report in Celsius
                 'json_attributes_topic': mac_topic,
-                'device' : {
+                'device': {
                     'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
                     'manufacturer': "WyzeLabs",
                     'model': attr['model'],
@@ -559,11 +558,11 @@ def send_discovery_topics(sensor_mac, wait=True):
 
             entity_payloads['humidity'] = {
                 'name': 'Humidity',
-                'device_class':'humidity',
-                'state_class':'measurement',
+                'device_class': 'humidity',
+                'state_class': 'measurement',
                 'unit_of_measurement': '%',
                 'json_attributes_topic': mac_topic,
-                'device' : {
+                'device': {
                     'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
                     'manufacturer': "WyzeLabs",
                     'model': attr['model'],
@@ -577,11 +576,11 @@ def send_discovery_topics(sensor_mac, wait=True):
     elif sensor_type == 'climate':
         entity_payloads['temperature'] = {
             'name': 'Temperature',
-            'device_class':'temperature',
-            'state_class':'measurement',
+            'device_class': 'temperature',
+            'state_class': 'measurement',
             'unit_of_measurement': '°F',
             'json_attributes_topic': mac_topic,
-            'device' : {
+            'device': {
                 'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
                 'manufacturer': "WyzeLabs",
                 'model': attr['model'],
@@ -594,11 +593,11 @@ def send_discovery_topics(sensor_mac, wait=True):
 
         entity_payloads['humidity'] = {
             'name': 'Humidity',
-            'device_class':'humidity',
-            'state_class':'measurement',
+            'device_class': 'humidity',
+            'state_class': 'measurement',
             'unit_of_measurement': '%',
             'json_attributes_topic': mac_topic,
-            'device' : {
+            'device': {
                 'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
                 'manufacturer': "WyzeLabs",
                 'model': attr['model'],
@@ -618,7 +617,7 @@ def send_discovery_topics(sensor_mac, wait=True):
         'state_class': "measurement",
         'unit_of_measurement': "dBm",
         'entity_category': "diagnostic",
-        'device' : {
+        'device': {
             'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
             'manufacturer': "WyzeLabs",
             'model': attr['model'],
@@ -633,7 +632,7 @@ def send_discovery_topics(sensor_mac, wait=True):
         'state_class': "measurement",
         'unit_of_measurement': "%",
         'entity_category': "diagnostic",
-        'device' : {
+        'device': {
             'identifiers': [f"wyzesense_{sensor_mac}", sensor_mac],
             'manufacturer': "WyzeLabs",
             'model': attr['model'],
@@ -645,8 +644,8 @@ def send_discovery_topics(sensor_mac, wait=True):
     }
 
     availability_topics = [
-        { 'topic': f"{CONFIG['self_topic_root']}/{sensor_mac}/status" },
-        { 'topic': f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status" }
+        {'topic': f"{CONFIG['self_topic_root']}/{sensor_mac}/status"},
+        {'topic': f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status"}
     ]
 
     for entity, entity_payload in entity_payloads.items():
@@ -664,6 +663,7 @@ def send_discovery_topics(sensor_mac, wait=True):
         LOGGER.info(f"  {entity_topic}")
         LOGGER.info(f"  {json.dumps(entity_payload)}")
     mqtt_publish(f"{CONFIG['self_topic_root']}/{sensor_mac}/status", "online" if SENSORS_STATE[sensor_mac]['online'] else "offline", is_json=False, wait=wait)
+
 
 # Clear any retained topics in MQTT
 def clear_topics(sensor_mac, wait=True):
@@ -693,6 +693,7 @@ def clear_topics(sensor_mac, wait=True):
             mqtt_publish(f"{CONFIG['hass_topic_root']}/{component}/wyzesense_{sensor_mac}/{entity_type}/config", None, wait=wait)
             mqtt_publish(f"{CONFIG['hass_topic_root']}/{component}/wyzesense_{sensor_mac}/{entity_type}", None, wait=wait)
             mqtt_publish(f"{CONFIG['hass_topic_root']}/{component}/wyzesense_{sensor_mac}", None, wait=wait)
+
 
 def on_connect(MQTT_CLIENT, userdata, flags, reason_code, properties):
     if reason_code == 0:
@@ -743,7 +744,7 @@ def on_message_scan(MQTT_CLIENT, userdata, msg):
         if (valid_sensor_mac(sensor_mac)):
             if (SENSORS.get(sensor_mac)) is None:
                 add_sensor_to_config(sensor_mac, sensor_type, sensor_version)
-                if(CONFIG['hass_discovery']):
+                if (CONFIG['hass_discovery']):
                     # We are in a mqtt callback, so can not wait for new messages to publish
                     send_discovery_topics(sensor_mac, wait=False)
         else:
@@ -790,13 +791,13 @@ def on_event(WYZESENSE_DONGLE, event):
 
     LOGGER.info(f"State event data: {event}")
     if not valid_sensor_mac(event.mac):
-        LOGGER.warning(f"!Invalid MAC detected")
+        LOGGER.warning("!Invalid MAC detected")
         return
 
     if (valid_sensor_mac(event.mac)):
         if (event.mac not in SENSORS):
             add_sensor_to_config(event.mac, event.sensor_type)
-            if(CONFIG['hass_discovery']):
+            if (CONFIG['hass_discovery']):
                 send_discovery_topics(event.mac)
             LOGGER.warning(f"Linked sensor with mac {event.mac} automatically added to sensors configuration")
             LOGGER.warning(f"Please update sensor configuration file {os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE)} restart the service/reload the sensors")
@@ -808,7 +809,7 @@ def on_event(WYZESENSE_DONGLE, event):
                 LOGGER.info("Updating Sensors Config File")
                 s['sensor_type'] = event.sensor_type
                 write_yaml_file(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE), SENSORS)
-                if(CONFIG['hass_discovery']):
+                if (CONFIG['hass_discovery']):
                     send_discovery_topics(event.mac)
                 LOGGER.warning(f"Linked sensor with mac {event.mac} automatically added to sensors configuration")
                 LOGGER.warning(f"Please update sensor configuration file {os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE)} restart the service/reload the sensors")
@@ -837,6 +838,7 @@ def on_event(WYZESENSE_DONGLE, event):
     else:
         LOGGER.warning("!Invalid MAC detected!")
         LOGGER.warning(f"Event data: {event}")
+
 
 def Stop():
     mqtt_publish(f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status", "offline", is_json=False)
@@ -903,9 +905,9 @@ if __name__ == "__main__":
             for mac in SENSORS_STATE:
                 if SENSORS_STATE[mac]['online']:
                     LOGGER.debug(f"Checking availability of {mac}")
-                    
+
                     sensor = SENSORS[mac]
-                    
+
                     sensor_type = sensor.get('sensor_type', 'unknown')
                     # First the sensor type to decide the timeout value
                     timeout = _DEVICE_MAPPING[sensor_type]['timeout'] * 60 * 60
@@ -919,7 +921,7 @@ if __name__ == "__main__":
                         SENSORS_STATE[mac]['online'] = False
     except KeyboardInterrupt:
         LOGGER.warning("User interrupted")
-    except Exception as e:
+    except Exception:
         LOGGER.error("An error occurred", exc_info=True)
     finally:
         Stop()
