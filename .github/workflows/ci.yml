@@ -24,6 +24,8 @@ jobs:
         run: pip install ruff
       - name: Run ruff check
         run: ruff check wyzesense2mqtt/
+      - name: Run ruff format check
+        run: ruff format --check wyzesense2mqtt/
 
   # ── Verify dependencies install and the app imports cleanly ────────────
   build:

@@ -1,6 +1,7 @@
 target-version = "py313"
-# Matches the GitHub editor width historically used for the flake8 config.
-line-length = 200
+# Common middle-ground line length (wider than the black/ruff default of 88,
+# narrower than the previous flake8 setting of 200).
+line-length = 120
 
 [lint]
 select = [

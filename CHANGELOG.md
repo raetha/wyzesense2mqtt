@@ -45,5 +45,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   removed redundant `object` base classes, replaced `bytes()` calls with
   `b""` literals, replaced `%`-style string formatting with f-strings, and
   sorted/organized imports.
+- Ran `ruff format` across `wyzesense.py`, `wyzesense2mqtt.py`, and
+  `bridge_tool_cli.py` for consistent style, and added a `ruff format
+  --check` step to CI to enforce it going forward.
+- Changed the ruff/lint line-length from 200 (an artifact of the old
+  flake8 config) to 120, wrapping the handful of long log messages and
+  comments that exceeded it.
 
 [Unreleased]: https://github.com/raetha/wyzesense2mqtt/compare/v3.0.2...HEAD

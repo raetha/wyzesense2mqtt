@@ -1,4 +1,3 @@
-
 import datetime
 import logging
 import os
@@ -9,7 +8,7 @@ import time
 
 def bytes_to_hex(s):
     if s:
-        return ','.join(f"{x:02x}" for x in s)
+        return ",".join(f"{x:02x}" for x in s)
     else:
         return "<None>"
 
@@ -40,21 +39,21 @@ SENSOR_TYPE_SWITCH_V2 = 0x0E
 SENSOR_TYPE_MOTION_V2 = 0x0F
 
 SENSOR_TYPES = {
-    SENSOR_TYPE_SWITCH:    "switch",
+    SENSOR_TYPE_SWITCH: "switch",
     SENSOR_TYPE_SWITCH_V2: "switchv2",
-    SENSOR_TYPE_MOTION:    "motion",
+    SENSOR_TYPE_MOTION: "motion",
     SENSOR_TYPE_MOTION_V2: "motionv2",
-    SENSOR_TYPE_LEAK:      "leak",
-    SENSOR_TYPE_CLIMATE:   "climate",
-    SENSOR_TYPE_CHIME:     "chime",
+    SENSOR_TYPE_LEAK: "leak",
+    SENSOR_TYPE_CLIMATE: "climate",
+    SENSOR_TYPE_CHIME: "chime",
 }
 
 BINARY_SENSOR_STATES = {
-    SENSOR_TYPE_SWITCH:     ("closed", "open"),
-    SENSOR_TYPE_SWITCH_V2:  ("closed", "open"),
-    SENSOR_TYPE_MOTION:     ("inactive", "active"),
-    SENSOR_TYPE_MOTION_V2:  ("inactive", "active"),
-    SENSOR_TYPE_LEAK:       ("dry", "wet"),
+    SENSOR_TYPE_SWITCH: ("closed", "open"),
+    SENSOR_TYPE_SWITCH_V2: ("closed", "open"),
+    SENSOR_TYPE_MOTION: ("inactive", "active"),
+    SENSOR_TYPE_MOTION_V2: ("inactive", "active"),
+    SENSOR_TYPE_LEAK: ("dry", "wet"),
 }
 
 
@@ -102,7 +101,7 @@ class Packet:
     NOTIFY_EVENT_LOG = MAKE_CMD(TYPE_ASYNC, 0x35)
     NOTIFY_SENSOR_ALARM2 = MAKE_CMD(TYPE_ASYNC, 0x55)
 
-    def __init__(self, cmd, payload=b''):
+    def __init__(self, cmd, payload=b""):
         self._cmd = cmd
         if self._cmd == self.ASYNC_ACK:
             assert isinstance(payload, int)
@@ -132,7 +131,7 @@ class Packet:
         return self._payload
 
     def Send(self, fd):
-        pkt = b''
+        pkt = b""
 
         pkt += struct.pack(">HB", 0xAA55, self._cmd >> 8)
         if self._cmd == self.ASYNC_ACK:
@@ -155,7 +154,8 @@ class Packet:
         if len(s) < 5:
             LOGGER.error("Invalid packet: %s", bytes_to_hex(s))
             LOGGER.error("Invalid packet length: %d", len(s))
-            # This error can be corrected by waiting for additional data, throw an exception we can catch to handle differently
+            # This error can be corrected by waiting for additional data; raise an
+            # exception we can catch to handle this differently.
             raise EOFError
 
         magic, cmd_type, b2, cmd_id = struct.unpack_from(">HBBB", s)
@@ -175,7 +175,8 @@ class Packet:
         else:
             LOGGER.error("Invalid packet: %s", bytes_to_hex(s))
             LOGGER.error("Short packet: expected %d, got %d", (b2 + 4), len(s))
-            # This error can be corrected by waiting for additional data, throw an exception we can catch to handle differently
+            # This error can be corrected by waiting for additional data; raise an
+            # exception we can catch to handle this differently.
             raise EOFError
 
         cs_remote = (s[-2] << 8) | s[-1]
@@ -228,7 +229,7 @@ class Packet:
 
     @classmethod
     def FinishAuth(cls):
-        return cls(cls.CMD_FINISH_AUTH, b"\xFF")
+        return cls(cls.CMD_FINISH_AUTH, b"\xff")
 
     @classmethod
     def DelSensor(cls, mac):
@@ -238,9 +239,9 @@ class Packet:
         assert isinstance(mac, str)
         assert len(mac) == 8
         try:
-            return cls(cls.CMD_DEL_SENSOR, mac.encode('ascii'))
+            return cls(cls.CMD_DEL_SENSOR, mac.encode("ascii"))
         except UnicodeEncodeError:
-            return cls(cls.CMD_DEL_SENSOR, mac.encode('latin-1'))
+            return cls(cls.CMD_DEL_SENSOR, mac.encode("latin-1"))
 
     @classmethod
     def DelAllSensor(cls):
@@ -252,13 +253,13 @@ class Packet:
         assert len(r) == 16
         assert isinstance(mac, str)
         assert len(mac) == 8
-        return cls(cls.CMD_GET_SENSOR_R1, mac.encode('ascii') + r)
+        return cls(cls.CMD_GET_SENSOR_R1, mac.encode("ascii") + r)
 
     @classmethod
     def VerifySensor(cls, mac):
         assert isinstance(mac, str)
         assert len(mac) == 8
-        return cls(cls.CMD_VERIFY_SENSOR, mac.encode('ascii') + b"\xFF\x04")
+        return cls(cls.CMD_VERIFY_SENSOR, mac.encode("ascii") + b"\xff\x04")
 
     @classmethod
     def UpdateCC1310(cls):
@@ -280,7 +281,7 @@ class Packet:
             volume = 1
         if volume > 9:
             volume = 9
-        return cls(cls.CMD_PLAY_CHIME, mac.encode('ascii') + bytes([ringid, repeat_cnt, volume]))
+        return cls(cls.CMD_PLAY_CHIME, mac.encode("ascii") + bytes([ringid, repeat_cnt, volume]))
 
     @classmethod
     def SyncTimeAck(cls):
@@ -296,7 +297,7 @@ class SensorEvent:
     def __init__(self, event, mac, timestamp, **kwargs):
         self.__dict__.update(kwargs)
 
-        if 'battery' in self.__dict__:
+        if "battery" in self.__dict__:
             # V2 switch sensor uses a single 1.5v battery and reports half the
             # battery level of other sensors with 3v batteries
             if self.sensor_type == SENSOR_TYPES[SENSOR_TYPE_SWITCH_V2]:
@@ -305,15 +306,15 @@ class SensorEvent:
             # Adjust battery to max it at 100%
             self.battery = min(self.battery, 100)
 
-        if 'signal_strength' in self.__dict__:
-            self.signal_strength = - self.signal_strength
+        if "signal_strength" in self.__dict__:
+            self.signal_strength = -self.signal_strength
 
         self.event = event
         self.mac = mac
         self.timestamp = timestamp
 
     def __str__(self):
-        return ','.join(f'{attr}={value}' for attr, value in self.__dict__.items())
+        return ",".join(f"{attr}={value}" for attr, value in self.__dict__.items())
 
     @classmethod
     def _AlarmParser(cls, mac, event, sensor_type, timestamp, data):
@@ -327,10 +328,14 @@ class SensorEvent:
             return cls._UnknownParser(mac, event, timestamp, data)
 
         return cls(
-            "alarm", mac, timestamp,
+            "alarm",
+            mac,
+            timestamp,
             sensor_type=SENSOR_TYPES[sensor_type],
-            battery=battery, signal_strength=signal_strength,
-            state=BINARY_SENSOR_STATES[sensor_type][state])
+            battery=battery,
+            signal_strength=signal_strength,
+            state=BINARY_SENSOR_STATES[sensor_type][state],
+        )
 
     @classmethod
     def _HeartbeatParser(cls, mac, event, sensor_type, timestamp, data):
@@ -340,9 +345,13 @@ class SensorEvent:
             return cls._UnknownParser(mac, event, timestamp, data)
 
         return cls(
-            "status", mac, timestamp,
+            "status",
+            mac,
+            timestamp,
             sensor_type=SENSOR_TYPES[sensor_type],
-            battery=battery, signal_strength=signal_strength)
+            battery=battery,
+            signal_strength=signal_strength,
+        )
 
     @classmethod
     def _ClimateParser(cls, mac, event, sensor_type, timestamp, data):
@@ -354,24 +363,33 @@ class SensorEvent:
 
         temperature = f"{temp_hi + (temp_lo / 100.0):.2f}"
         return cls(
-            "status", mac, timestamp,
+            "status",
+            mac,
+            timestamp,
             sensor_type=SENSOR_TYPES[sensor_type],
-            battery=battery, signal_strength=signal_strength,
+            battery=battery,
+            signal_strength=signal_strength,
             temperature=temperature,
-            humidity=humidity)
+            humidity=humidity,
+        )
 
     @classmethod
     def _LeakParser(cls, mac, event, sensor_type, timestamp, data):
-        _, _, battery, _, _, state, probe_state, probe_available, _, seq, signal_strength = struct.unpack_from(">BBBBBBBBBBB", data)
+        _, _, battery, _, _, state, probe_state, probe_available, _, seq, signal_strength = struct.unpack_from(
+            ">BBBBBBBBBBB", data
+        )
 
         if sensor_type not in BINARY_SENSOR_STATES:
             LOGGER.warn(f"Not expecting {sensor_type} sensor for event {event:02X}")
             return cls._UnknownParser(mac, event, timestamp, data)
 
         return cls(
-            "alarm", mac, timestamp,
+            "alarm",
+            mac,
+            timestamp,
             sensor_type=SENSOR_TYPES[sensor_type],
-            battery=battery, signal_strength=signal_strength,
+            battery=battery,
+            signal_strength=signal_strength,
             state=BINARY_SENSOR_STATES[sensor_type][state],
             probe_state=BINARY_SENSOR_STATES[sensor_type][probe_state],
             probe_available=bool(probe_available),
@@ -392,7 +410,7 @@ class SensorEvent:
         timestamp, event, mac, sensor_type = struct.unpack_from(">QB8sB", data)
         data = data[18:]
         timestamp = timestamp / 1000.0
-        mac = mac.decode('ascii')
+        mac = mac.decode("ascii")
 
         parser = _EVENT_PARSERS.get(event, cls._UnknownParser)
         return parser(mac, event, sensor_type, timestamp, data)
@@ -402,7 +420,7 @@ class SensorEvent:
         event, mac, sensor_type = struct.unpack_from(">B8sB", data)
         data = data[10:]
         timestamp = time.time()
-        mac = mac.decode('ascii')
+        mac = mac.decode("ascii")
 
         _EVENT_PARSERS = {
             EVENT_TYPE_LEAK: cls._LeakParser,
@@ -450,10 +468,11 @@ class Dongle:
         if ts == 0:
             self.__on_event(self, "Dongle sent event log with timestamp=0 (clock not yet synchronized)")
         # Check if we have a message after, length includes the msglen byte
-#        if ((len(msg) + 1) >= msg_len and msg_len >= 13):
-#            event, mac, type, state, counter = struct.unpack(">B8sBBH", msg)
-# TODO: What can we do with this? At the very least, we can update the last seen time for the sensor
-# and it appears that the log message happens before every alarm message, so doesn't really gain much of anything
+
+    #        if ((len(msg) + 1) >= msg_len and msg_len >= 13):
+    #            event, mac, type, state, counter = struct.unpack(">B8sBBH", msg)
+    # TODO: What can we do with this? At the very least, we can update the last seen time for the sensor
+    # and it appears that the log message happens before every alarm message, so doesn't really gain much of anything
 
     def __init__(self, device, event_handler):
         self.__lock = threading.Lock()
@@ -492,7 +511,7 @@ class Dongle:
 
         # LOGGER.debug("Raw HID packet: %s", bytes_to_hex(s))
         assert len(s) >= length + 1
-        return s[1: 1 + length]
+        return s[1 : 1 + length]
 
     def _SetHandler(self, cmd, handler):
         with self.__lock:
@@ -530,7 +549,7 @@ class Dongle:
                 #     LOGGER.info("Incoming buffer: %s", bytes_to_hex(s))
 
                 # Look for the start of the next message, indicated by the magic bytes 0x55AA
-                start = s.find(b"\x55\xAA")
+                start = s.find(b"\x55\xaa")
                 if start == -1:
                     time.sleep(0.1)
                     continue
@@ -553,8 +572,8 @@ class Dongle:
                     time.sleep(0.1)
                     continue
 
-                LOGGER.debug("Received: %s", bytes_to_hex(s[:pkt.Length]))
-                s = s[pkt.Length:]
+                LOGGER.debug("Received: %s", bytes_to_hex(s[: pkt.Length]))
+                s = s[pkt.Length :]
                 self._HandlePacket(pkt)
         except Exception as e:
             LOGGER.error("Error occured in dongle worker thread", exc_info=True)
@@ -606,7 +625,7 @@ class Dongle:
         resp = self._DoSimpleCommand(Packet.GetMAC())
         assert len(resp.Payload) == 8
         try:
-            mac = resp.Payload.decode('ascii')
+            mac = resp.Payload.decode("ascii")
         except UnicodeDecodeError:
             LOGGER.warning("Invalid MAC address data (non-ASCII bytes): %s", bytes_to_hex(resp.Payload))
             mac = bytes_to_hex(resp.Payload)
@@ -624,7 +643,7 @@ class Dongle:
         LOGGER.debug("Start GetVersion...")
         resp = self._DoSimpleCommand(Packet.GetVersion())
         try:
-            version = resp.Payload.decode('ascii')
+            version = resp.Payload.decode("ascii")
         except UnicodeDecodeError:
             LOGGER.warning("Invalid version data (non-ASCII bytes): %s", bytes_to_hex(resp.Payload))
             version = bytes_to_hex(resp.Payload)
@@ -664,15 +683,23 @@ class Dongle:
             def cmd_handler(pkt, e):
                 assert len(pkt.Payload) == 8
                 try:
-                    mac = pkt.Payload.decode('ascii')
+                    mac = pkt.Payload.decode("ascii")
                     LOGGER.info("Sensor %d/%d, MAC:%s", ctx.index + 1, ctx.count, mac)
                 except UnicodeDecodeError:
                     # Use latin-1 which can encode any byte value
-                    mac = pkt.Payload.decode('latin-1')
-                    LOGGER.warning("Sensor %d/%d: Invalid MAC address data (non-ASCII bytes): %s",
-                                   ctx.index + 1, ctx.count, bytes_to_hex(pkt.Payload))
-                    LOGGER.info("Sensor %d/%d, MAC (hex): %s", ctx.index + 1, ctx.count,
-                                ''.join(f"{b:02x}" for b in pkt.Payload))
+                    mac = pkt.Payload.decode("latin-1")
+                    LOGGER.warning(
+                        "Sensor %d/%d: Invalid MAC address data (non-ASCII bytes): %s",
+                        ctx.index + 1,
+                        ctx.count,
+                        bytes_to_hex(pkt.Payload),
+                    )
+                    LOGGER.info(
+                        "Sensor %d/%d, MAC (hex): %s",
+                        ctx.index + 1,
+                        ctx.count,
+                        "".join(f"{b:02x}" for b in pkt.Payload),
+                    )
 
                 ctx.sensors.append(mac)
                 ctx.index += 1
@@ -738,22 +765,21 @@ class Dongle:
             mac_bytes = pkt.Payload[1:9]
 
             # Check for invalid MAC addresses (all 0x00 or all 0xFF)
-            if mac_bytes == b'\xff\xff\xff\xff\xff\xff\xff\xff':
+            if mac_bytes == b"\xff\xff\xff\xff\xff\xff\xff\xff":
                 LOGGER.warning("Received invalid MAC (all 0xFF).")
                 ctx.result = None
                 ctx.evt.set()
                 return
-            elif mac_bytes == b'\x00\x00\x00\x00\x00\x00\x00\x00':
+            elif mac_bytes == b"\x00\x00\x00\x00\x00\x00\x00\x00":
                 LOGGER.warning("Received invalid MAC (all 0x00).")
                 ctx.result = None
                 ctx.evt.set()
                 return
 
             try:
-                mac = mac_bytes.decode('ascii')
+                mac = mac_bytes.decode("ascii")
             except UnicodeDecodeError:
-                LOGGER.warning("Invalid MAC address in scan response (non-ASCII bytes): %s",
-                               bytes_to_hex(mac_bytes))
+                LOGGER.warning("Invalid MAC address in scan response (non-ASCII bytes): %s", bytes_to_hex(mac_bytes))
                 # Don't try to pair sensors with non-ASCII MAC addresses
                 ctx.result = None
                 ctx.evt.set()
@@ -770,7 +796,7 @@ class Dongle:
                 if ctx.result is not None:
                     s_mac, s_type, s_ver = ctx.result
                     LOGGER.info("Sensor found: mac=[%s], type=%d, version=%d", s_mac, s_type, s_ver)
-                    r1 = self._GetSensorR1(s_mac, b'Ok5HPNQ4lf77u754')
+                    r1 = self._GetSensorR1(s_mac, b"Ok5HPNQ4lf77u754")
                     LOGGER.debug("Sensor R1: %r", bytes_to_hex(r1))
                 else:
                     LOGGER.info("Invalid sensor response received")
@@ -785,37 +811,40 @@ class Dongle:
             s_mac, s_type, s_ver = ctx.result
             self._DoSimpleCommand(Packet.VerifySensor(s_mac), 10)
 
-            s_type = SENSOR_TYPES.get(s_type, f'unknown:{s_type:02X}')
-            s_ver = f'{s_ver}'
+            s_type = SENSOR_TYPES.get(s_type, f"unknown:{s_type:02X}")
+            s_ver = f"{s_ver}"
             ctx.result = (s_mac, s_type, s_ver)
 
         return ctx.result
 
     def Delete(self, mac):
-        if ',' in mac:
+        if "," in mac:
             # Convert "ff,ff,ff,ff,ff,ff,ff,ff" back to bytes
-            mac_bytes = bytes([int(x, 16) for x in mac.split(',')])
+            mac_bytes = bytes([int(x, 16) for x in mac.split(",")])
             resp = self._DoSimpleCommand(Packet.DelSensor(mac_bytes))
         else:
             resp = self._DoSimpleCommand(Packet.DelSensor(str(mac)))
         LOGGER.debug("CmdDelSensor returns %s", bytes_to_hex(resp.Payload))
         assert len(resp.Payload) == 9
         try:
-            ack_mac = resp.Payload[:8].decode('ascii')
+            ack_mac = resp.Payload[:8].decode("ascii")
         except UnicodeDecodeError:
-            LOGGER.warning("Invalid MAC address in delete response (non-ASCII bytes): %s",
-                           bytes_to_hex(resp.Payload[:8]))
-            ack_mac = resp.Payload[:8].decode('latin-1')
+            LOGGER.warning(
+                "Invalid MAC address in delete response (non-ASCII bytes): %s", bytes_to_hex(resp.Payload[:8])
+            )
+            ack_mac = resp.Payload[:8].decode("latin-1")
         ack_code = resp.Payload[8]
         assert ack_code == 0xFF, f"CmdDelSensor: Unexpected ACK code: 0x{ack_code:02X}"
 
-        ack_mac_bytes = ack_mac.encode('latin-1') if len(ack_mac) == 8 else ack_mac.encode('ascii')
+        ack_mac_bytes = ack_mac.encode("latin-1") if len(ack_mac) == 8 else ack_mac.encode("ascii")
         try:
-            mac_bytes = mac.encode('ascii') if len(mac) == 8 else mac.encode('latin-1')
+            mac_bytes = mac.encode("ascii") if len(mac) == 8 else mac.encode("latin-1")
         except UnicodeEncodeError:
-            mac_bytes = mac.encode('latin-1')
+            mac_bytes = mac.encode("latin-1")
 
-        assert ack_mac_bytes == mac_bytes, f"CmdDelSensor: MAC mismatch, requested:{bytes_to_hex(mac_bytes)}, returned:{bytes_to_hex(ack_mac_bytes)}"
+        assert ack_mac_bytes == mac_bytes, (
+            f"CmdDelSensor: MAC mismatch, requested:{bytes_to_hex(mac_bytes)}, returned:{bytes_to_hex(ack_mac_bytes)}"
+        )
         LOGGER.info("CmdDelSensor: %s deleted", bytes_to_hex(mac_bytes) if not mac.isascii() else mac)
 
     def DeleteAll(self):
