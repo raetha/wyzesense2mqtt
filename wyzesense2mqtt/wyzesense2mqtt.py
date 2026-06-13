@@ -12,19 +12,23 @@ import shutil
 import subprocess
 import time
 
+import mqtt_common
 import paho.mqtt.client as mqtt
 import wyzesense
-import yaml
+from mqtt_common import (
+    _BINARY_SENSORS,
+    CONFIG_PATH,
+    DISCOVERY_SCHEMA_VERSION,
+    MAIN_CONFIG_FILE,
+    SENSORS_CONFIG_FILE,
+    WYZESENSE2MQTT_VERSION,
+)
 from retrying import retry
 
-WYZESENSE2MQTT_VERSION = "3.1"
-
-# Configuration File Locations
-CONFIG_PATH = "config"
+# Configuration File Locations (not shared with mqtt_common, since they're
+# only relevant to the running bridge, not standalone CLI tools)
 SAMPLES_PATH = "samples"
-MAIN_CONFIG_FILE = "config.yaml"
 LOGGING_CONFIG_FILE = "logging.yaml"
-SENSORS_CONFIG_FILE = "sensors.yaml"
 SENSORS_STATE_FILE = "state.yaml"
 
 
@@ -107,8 +111,6 @@ _DEVICE_MAPPING = {
     "unknown": {"timeout": DEFAULT_V1_TIMEOUT_HOURS},
 }
 
-_BINARY_SENSORS = ("motion", "motionv2", "switch", "switchv2", "leak")
-
 
 # List of sw versions for V1 and V2 sensors, to determine which timeout to use by default
 V1_SW = [19]
@@ -119,27 +121,12 @@ INITIALIZED = False
 
 # Read data from YAML file
 def read_yaml_file(filename):
-    try:
-        with open(filename) as yaml_file:
-            data = yaml.safe_load(yaml_file)
-            return data
-    except OSError as error:
-        if LOGGER is None:
-            print(f"File error: {str(error)}")
-        else:
-            LOGGER.error(f"File error: {str(error)}")
+    return mqtt_common.read_yaml_file(filename, LOGGER)
 
 
 # Write data to YAML file
 def write_yaml_file(filename, data):
-    try:
-        with open(filename, "w") as yaml_file:
-            yaml_file.write(yaml.safe_dump(data))
-    except OSError as error:
-        if LOGGER is None:
-            print(f"File error: {str(error)}")
-        else:
-            LOGGER.error(f"File error: {str(error)}")
+    mqtt_common.write_yaml_file(filename, data, LOGGER)
 
 
 # Initialize logging
@@ -169,44 +156,10 @@ def init_config():
     global CONFIG
     LOGGER.info("Initializing configuration...")
 
-    # Initialize CONFIG dictionary with default values
+    # Initialize CONFIG dictionary with default values, overridden by
+    # config.yaml, overridden by environment variables.
     # Allows for addition of new settings and ensures that missing values will have a default at runtime
-    CONFIG = {
-        "mqtt_host": None,
-        "mqtt_port": 1883,
-        "mqtt_username": None,
-        "mqtt_password": None,
-        "mqtt_client_id": "wyzesense2mqtt",
-        "mqtt_clean_session": False,
-        "mqtt_keepalive": 60,
-        "mqtt_qos": 0,
-        "mqtt_retain": True,
-        "self_topic_root": "wyzesense2mqtt",
-        "hass_topic_root": "homeassistant",
-        "hass_discovery": True,
-        "publish_sensor_name": True,
-        "usb_dongle": "auto",
-    }
-
-    # load config file over default values
-    config_from_file = None
-    if os.path.isfile(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE)):
-        config_from_file = read_yaml_file(os.path.join(CONFIG_PATH, MAIN_CONFIG_FILE))
-        CONFIG.update(config_from_file)
-
-    # load ENV supplied config over default values and config file values
-    for key, value in os.environ.items():
-        key = str(key).lower()
-        if key in CONFIG:
-            if value.isnumeric():
-                value = int(value)
-            elif value.lower() == "true":
-                value = True
-            elif value.lower() == "false":
-                value = False
-            elif value.lower() == "none":
-                value = None
-            CONFIG.update({key: value})
+    CONFIG, config_from_file = mqtt_common.load_config(LOGGER)
 
     # fail on no config
     if CONFIG is None:
@@ -293,6 +246,7 @@ def init_bridge_discovery(wait=True):
             },
             "device_class": "connectivity",
             "entity_category": "diagnostic",
+            "has_entity_name": True,
             "name": "Connection state",
             "object_id": "wyzesense2mqtt_bridge_connection_state",
             "origin": {
@@ -302,6 +256,7 @@ def init_bridge_discovery(wait=True):
             },
             "payload_off": "offline",
             "payload_on": "online",
+            "qos": CONFIG["mqtt_qos"],
             "state_topic": f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status",
             "unique_id": f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}_connection_state",
         }
@@ -401,6 +356,21 @@ def init_sensors(wait=True):
         LOGGER.info("Writing Sensors Config File")
         write_yaml_file(os.path.join(CONFIG_PATH, SENSORS_CONFIG_FILE), SENSORS)
 
+    # One-time migration of discovery topics if the schema has changed since
+    # the last run (e.g. clears stale per-entity topics after upgrading to
+    # device-based discovery). See DISCOVERY_SCHEMA_VERSION above.
+    if CONFIG["hass_discovery"]:
+        recorded_version = get_discovery_schema_version()
+        if recorded_version < DISCOVERY_SCHEMA_VERSION:
+            LOGGER.info(
+                f"Migrating MQTT discovery topics from schema v{recorded_version} to v{DISCOVERY_SCHEMA_VERSION}..."
+            )
+            for sensor_mac in SENSORS_STATE:
+                if valid_sensor_mac(sensor_mac):
+                    sensor_type = SENSORS.get(sensor_mac, {}).get("sensor_type", "unknown")
+                    migrate_discovery_topics(sensor_mac, sensor_type, recorded_version, wait=wait)
+            set_discovery_schema_version(DISCOVERY_SCHEMA_VERSION)
+
     # Send discovery topics
     if CONFIG["hass_discovery"]:
         for sensor_mac in SENSORS_STATE:
@@ -455,20 +425,16 @@ def delete_sensor_from_config(sensor_mac):
 
 # Publish MQTT topic
 def mqtt_publish(mqtt_topic, mqtt_payload, is_json=True, wait=True):
-    payload = json.dumps(mqtt_payload) if is_json else mqtt_payload
-    LOGGER.debug(f"Publishing, {mqtt_topic=}, {payload=}")
-    mqtt_message_info = MQTT_CLIENT.publish(
-        mqtt_topic, payload=payload, qos=CONFIG["mqtt_qos"], retain=CONFIG["mqtt_retain"]
-    )
-    if mqtt_message_info.rc == mqtt.MQTT_ERR_SUCCESS:
-        if wait:
-            mqtt_message_info.wait_for_publish(2)
-        return
-
-    LOGGER.warning(f"MQTT publish error: {mqtt.error_string(mqtt_message_info.rc)}")
+    return mqtt_common.mqtt_publish(MQTT_CLIENT, CONFIG, LOGGER, mqtt_topic, mqtt_payload, is_json, wait)
 
 
 # Send discovery topics
+#
+# Uses the HA "device-based" MQTT discovery format (single config topic per
+# device, with each entity defined under "components"). This format has been
+# supported since HA 2024.4 and is the recommended approach as of the
+# HA 2026.6 MQTT integration docs. See docs/HA_MQTT_COMPLIANCE.md for the
+# verified HA/MQTT version and notes for future maintenance.
 def send_discovery_topics(sensor_mac, wait=True):
     LOGGER.info(f"Publishing discovery topics for {sensor_mac}")
 
@@ -485,147 +451,91 @@ def send_discovery_topics(sensor_mac, wait=True):
 
     mac_topic = f"{CONFIG['self_topic_root']}/{sensor_mac}"
 
-    entity_payloads = {}
+    components = {}
     if sensor_type in _BINARY_SENSORS:
-        entity_payloads["state"] = {
+        components["state"] = {
+            "platform": "binary_sensor",
             "name": None,
             "device_class": attr["class"],
             "payload_on": attr["on"],
             "payload_off": attr["off"],
             "json_attributes_topic": mac_topic,
-            "device": {
-                "identifiers": [f"wyzesense_{sensor_mac}", sensor_mac],
-                "manufacturer": "WyzeLabs",
-                "model": attr["model"],
-                "hw_version": attr["hw_version"],
-                "name": attr["name"],
-                "sw_version": attr["sw_version"],
-                "via_device": f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}",
-            },
         }
 
         # Extra payloads for leak sensor
         if sensor_type == "leak":
-            entity_payloads["probe_state"] = {
-                "name": "Extension Probe",
+            components["probe_state"] = {
+                "platform": "binary_sensor",
+                "name": "Extension probe",
                 "device_class": attr["class"],
                 "payload_on": attr["on"],
                 "payload_off": attr["off"],
                 "json_attributes_topic": mac_topic,
-                "device": {
-                    "identifiers": [f"wyzesense_{sensor_mac}", sensor_mac],
-                    "manufacturer": "WyzeLabs",
-                    "model": attr["model"],
-                    "hw_version": attr["hw_version"],
-                    "name": attr["name"],
-                    "sw_version": attr["sw_version"],
-                    "via_device": f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}",
-                },
             }
 
             # Leak sensors report temperature in Celsius and humidity
-            entity_payloads["temperature"] = {
-                "name": "Temperature",
+            components["temperature"] = {
+                "platform": "sensor",
+                "name": None,
                 "device_class": "temperature",
                 "state_class": "measurement",
                 "unit_of_measurement": "°C",  # Leak sensors report in Celsius
+                "suggested_display_precision": 1,
                 "json_attributes_topic": mac_topic,
-                "device": {
-                    "identifiers": [f"wyzesense_{sensor_mac}", sensor_mac],
-                    "manufacturer": "WyzeLabs",
-                    "model": attr["model"],
-                    "hw_version": attr["hw_version"],
-                    "name": attr["name"],
-                    "sw_version": attr["sw_version"],
-                    "via_device": f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}",
-                },
             }
 
-            entity_payloads["humidity"] = {
-                "name": "Humidity",
+            components["humidity"] = {
+                "platform": "sensor",
+                "name": None,
                 "device_class": "humidity",
                 "state_class": "measurement",
                 "unit_of_measurement": "%",
+                "suggested_display_precision": 0,
                 "json_attributes_topic": mac_topic,
-                "device": {
-                    "identifiers": [f"wyzesense_{sensor_mac}", sensor_mac],
-                    "manufacturer": "WyzeLabs",
-                    "model": attr["model"],
-                    "hw_version": attr["hw_version"],
-                    "name": attr["name"],
-                    "sw_version": attr["sw_version"],
-                    "via_device": f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}",
-                },
             }
 
     elif sensor_type == "climate":
-        entity_payloads["temperature"] = {
-            "name": "Temperature",
+        components["temperature"] = {
+            "platform": "sensor",
+            "name": None,
             "device_class": "temperature",
             "state_class": "measurement",
             "unit_of_measurement": "°F",
+            "suggested_display_precision": 1,
             "json_attributes_topic": mac_topic,
-            "device": {
-                "identifiers": [f"wyzesense_{sensor_mac}", sensor_mac],
-                "manufacturer": "WyzeLabs",
-                "model": attr["model"],
-                "hw_version": attr["hw_version"],
-                "name": attr["name"],
-                "sw_version": attr["sw_version"],
-                "via_device": f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}",
-            },
         }
 
-        entity_payloads["humidity"] = {
-            "name": "Humidity",
+        components["humidity"] = {
+            "platform": "sensor",
+            "name": None,
             "device_class": "humidity",
             "state_class": "measurement",
             "unit_of_measurement": "%",
+            "suggested_display_precision": 0,
             "json_attributes_topic": mac_topic,
-            "device": {
-                "identifiers": [f"wyzesense_{sensor_mac}", sensor_mac],
-                "manufacturer": "WyzeLabs",
-                "model": attr["model"],
-                "hw_version": attr["hw_version"],
-                "name": attr["name"],
-                "sw_version": attr["sw_version"],
-                "via_device": f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}",
-            },
         }
     else:
         LOGGER.error(f"Unexpected sensor type: {sensor_type}")
         return
 
     # Common payloads for sensors
-    entity_payloads["signal_strength"] = {
+    components["signal_strength"] = {
+        "platform": "sensor",
+        "name": None,
         "device_class": "signal_strength",
         "state_class": "measurement",
         "unit_of_measurement": "dBm",
+        "suggested_display_precision": 0,
         "entity_category": "diagnostic",
-        "device": {
-            "identifiers": [f"wyzesense_{sensor_mac}", sensor_mac],
-            "manufacturer": "WyzeLabs",
-            "model": attr["model"],
-            "hw_version": attr["hw_version"],
-            "name": attr["name"],
-            "sw_version": attr["sw_version"],
-            "via_device": f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}",
-        },
     }
-    entity_payloads["battery"] = {
+    components["battery"] = {
+        "platform": "sensor",
+        "name": None,
         "device_class": "battery",
         "state_class": "measurement",
         "unit_of_measurement": "%",
+        "suggested_display_precision": 0,
         "entity_category": "diagnostic",
-        "device": {
-            "identifiers": [f"wyzesense_{sensor_mac}", sensor_mac],
-            "manufacturer": "WyzeLabs",
-            "model": attr["model"],
-            "hw_version": attr["hw_version"],
-            "name": attr["name"],
-            "sw_version": attr["sw_version"],
-            "via_device": f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}",
-        },
     }
 
     availability_topics = [
@@ -633,26 +543,77 @@ def send_discovery_topics(sensor_mac, wait=True):
         {"topic": f"{CONFIG['self_topic_root']}/bridge_{WYZESENSE_DONGLE.MAC}/status"},
     ]
 
-    for entity, entity_payload in entity_payloads.items():
-        entity_payload["value_template"] = f"{{{{ value_json.{entity} }}}}"
-        entity_payload["unique_id"] = f"wyzesense_{sensor_mac}_{entity}"
-        entity_payload["state_topic"] = mac_topic
-        entity_payload["availability"] = availability_topics
-        entity_payload["availability_mode"] = "all"
-        entity_payload["platform"] = "mqtt"
+    for entity, component_payload in components.items():
+        component_payload["unique_id"] = f"wyzesense_{sensor_mac}_{entity}"
+        component_payload["has_entity_name"] = True
+        component_payload["value_template"] = f"{{{{ value_json.{entity} }}}}"
 
-        component = "binary_sensor" if entity in ("state", "probe_state") else "sensor"
-        entity_topic = f"{CONFIG['hass_topic_root']}/{component}/wyzesense_{sensor_mac}/{entity}/config"
-        mqtt_publish(entity_topic, entity_payload, wait=wait)
+    device_payload = {
+        "device": {
+            "identifiers": [f"wyzesense_{sensor_mac}", sensor_mac],
+            "manufacturer": "WyzeLabs",
+            "model": attr["model"],
+            "hw_version": attr["hw_version"],
+            "name": attr["name"],
+            "sw_version": attr["sw_version"],
+            "via_device": f"wyzesense2mqtt_bridge_{WYZESENSE_DONGLE.MAC}",
+        },
+        # "name" and "sw_version" identify this as a wyzesense2mqtt-managed
+        # discovery payload and which discovery schema it uses. HA ignores
+        # these extra top-level keys, but `wyzesense2mqtt_cli.py
+        # cleanup-discovery` and any future migration tooling can use them to
+        # find/identify our retained config topics on the broker, including
+        # ones for sensors no longer present in sensors.yaml.
+        "origin": {
+            "name": "WyzeSense2MQTT",
+            "sw_version": f"{WYZESENSE2MQTT_VERSION}",
+            "support_url": "https://github.com/raetha/wyzesense2mqtt",
+        },
+        "schema_version": DISCOVERY_SCHEMA_VERSION,
+        "components": components,
+        "state_topic": mac_topic,
+        "availability": availability_topics,
+        "availability_mode": "all",
+        "qos": CONFIG["mqtt_qos"],
+    }
 
-        LOGGER.info(f"  {entity_topic}")
-        LOGGER.info(f"  {json.dumps(entity_payload)}")
+    device_topic = f"{CONFIG['hass_topic_root']}/device/wyzesense_{sensor_mac}/config"
+    mqtt_publish(device_topic, device_payload, wait=wait)
+
+    LOGGER.info(f"  {device_topic}")
+    LOGGER.info(f"  {json.dumps(device_payload)}")
+
     mqtt_publish(
         f"{CONFIG['self_topic_root']}/{sensor_mac}/status",
         "online" if SENSORS_STATE[sensor_mac]["online"] else "offline",
         is_json=False,
         wait=wait,
     )
+
+
+# --- Discovery schema migrations -------------------------------------------
+#
+# On startup, init_sensors() compares the schema version recorded in
+# migrations.yaml to DISCOVERY_SCHEMA_VERSION (from mqtt_common). For each
+# version in between (inclusive of the old, exclusive of the new), the
+# matching cleaner is run once per known sensor, then the recorded version is
+# updated. This makes cleanup of stale/duplicate discovery topics automatic
+# on upgrade, without needing to re-clear topics that have already been
+# migrated. See mqtt_common.py for the version history and cleaner functions.
+#
+# Sensors that are no longer in sensors.yaml at all (e.g. removed by editing
+# the file by hand) aren't covered by this; use
+# `python3 wyzesense2mqtt_cli.py cleanup-discovery` for those.
+def get_discovery_schema_version():
+    return mqtt_common.get_discovery_schema_version(LOGGER)
+
+
+def set_discovery_schema_version(version):
+    mqtt_common.set_discovery_schema_version(version, LOGGER)
+
+
+def migrate_discovery_topics(sensor_mac, sensor_type, from_version, wait=True):
+    mqtt_common.migrate_discovery_topics(MQTT_CLIENT, CONFIG, LOGGER, sensor_mac, sensor_type, from_version, wait=wait)
 
 
 # Clear any retained topics in MQTT
@@ -663,30 +624,14 @@ def clear_topics(sensor_mac, wait=True):
 
     # clear discovery topics if configured
     if CONFIG["hass_discovery"]:
-        sensor = SENSORS[sensor_mac]
+        sensor = SENSORS.get(sensor_mac, {})
         sensor_type = sensor.get("sensor_type", "unknown")
-        if sensor_type not in _DEVICE_MAPPING:
-            LOGGER.error(f"Unsupported sensor type: f{sensor_type}")
-            return
 
-        entity_types = ["signal_strength", "battery"]
-        if sensor_type in _BINARY_SENSORS:
-            entity_types.add("state")
-        else:
-            entity_types.extend(["temperature", "humidity"])
-
-        if sensor_type == "leak":
-            entity_types.add("probe_state")
-
-        for entity_type in entity_types:
-            component = "binary_sensor" if entity_type in ("state", "probe_state") else "sensor"
-            mqtt_publish(
-                f"{CONFIG['hass_topic_root']}/{component}/wyzesense_{sensor_mac}/{entity_type}/config", None, wait=wait
-            )
-            mqtt_publish(
-                f"{CONFIG['hass_topic_root']}/{component}/wyzesense_{sensor_mac}/{entity_type}", None, wait=wait
-            )
-            mqtt_publish(f"{CONFIG['hass_topic_root']}/{component}/wyzesense_{sensor_mac}", None, wait=wait)
+        # Clear discovery topics from every known schema version, not just
+        # the current one, so a full sensor removal doesn't leave stale
+        # entities behind regardless of which version originally published
+        # the discovery config.
+        mqtt_common.clear_all_discovery_topics(MQTT_CLIENT, CONFIG, LOGGER, sensor_mac, sensor_type, wait=wait)
 
 
 def on_connect(MQTT_CLIENT, userdata, flags, reason_code, properties):
@@ -831,6 +776,12 @@ def on_event(WYZESENSE_DONGLE, event):
         payload = {}
         payload.update(s)
         payload.update(vars(event))
+        # Surfaced as entity attributes (via json_attributes_topic) so a user
+        # can see in HA which discovery schema a device's entities were
+        # published with - useful for spotting devices that haven't picked
+        # up a newer schema for some reason.
+        payload["wyzesense2mqtt_version"] = WYZESENSE2MQTT_VERSION
+        payload["discovery_schema_version"] = DISCOVERY_SCHEMA_VERSION
 
         LOGGER.info(f"{CONFIG['self_topic_root']}/{event.mac}")
         LOGGER.info(payload)
