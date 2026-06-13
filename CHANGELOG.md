@@ -51,5 +51,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Changed the ruff/lint line-length from 200 (an artifact of the old
   flake8 config) to 120, wrapping the handful of long log messages and
   comments that exceeded it.
+- Added an explicit `permissions` block to `pull_request_description.yml`
+  (`contents: read`, `pull-requests: write`), resolving CodeQL's
+  "workflow does not contain permissions" warning. All other workflows
+  already scoped `GITHUB_TOKEN` permissions per job.
 
 [Unreleased]: https://github.com/raetha/wyzesense2mqtt/compare/v3.0.2...HEAD
