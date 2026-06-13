@@ -1,0 +1,14 @@
+target-version = "py313"
+# Matches the GitHub editor width historically used for the flake8 config.
+line-length = 200
+
+[lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "I",      # isort
+    "W",      # pycodestyle warnings
+    "B",      # flake8-bugbear
+    "UP",     # pyupgrade
+    "FURB",   # refurb
+]

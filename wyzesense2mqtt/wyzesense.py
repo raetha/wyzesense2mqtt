@@ -1,12 +1,10 @@
-from builtins import bytes
-from builtins import str
 
-import os
-import time
-import struct
-import threading
 import datetime
 import logging
+import os
+import struct
+import threading
+import time
 
 
 def bytes_to_hex(s):
@@ -64,7 +62,7 @@ def MAKE_CMD(type, cmd):
     return (type << 8) | cmd
 
 
-class Packet(object):
+class Packet:
     _CMD_TIMEOUT = 5
 
     # Sync packets:
@@ -104,7 +102,7 @@ class Packet(object):
     NOTIFY_EVENT_LOG = MAKE_CMD(TYPE_ASYNC, 0x35)
     NOTIFY_SENSOR_ALARM2 = MAKE_CMD(TYPE_ASYNC, 0x55)
 
-    def __init__(self, cmd, payload=bytes()):
+    def __init__(self, cmd, payload=b''):
         self._cmd = cmd
         if self._cmd == self.ASYNC_ACK:
             assert isinstance(payload, int)
@@ -114,9 +112,9 @@ class Packet(object):
 
     def __str__(self):
         if self._cmd == self.ASYNC_ACK:
-            return "Packet: Cmd=%04X, Payload=ACK(%04X)" % (self._cmd, self._payload)
+            return f"Packet: Cmd={self._cmd:04X}, Payload=ACK({self._payload:04X})"
         else:
-            return "Packet: Cmd=%04X, Payload=%s" % (self._cmd, bytes_to_hex(self._payload))
+            return f"Packet: Cmd={self._cmd:04X}, Payload={bytes_to_hex(self._payload)}"
 
     @property
     def Length(self):
@@ -134,7 +132,7 @@ class Packet(object):
         return self._payload
 
     def Send(self, fd):
-        pkt = bytes()
+        pkt = b''
 
         pkt += struct.pack(">HB", 0xAA55, self._cmd >> 8)
         if self._cmd == self.ASYNC_ACK:
@@ -294,7 +292,7 @@ class Packet(object):
         return cls(cls.ASYNC_ACK, cmd)
 
 
-class SensorEvent(object):
+class SensorEvent:
     def __init__(self, event, mac, timestamp, **kwargs):
         self.__dict__.update(kwargs)
 
@@ -414,10 +412,10 @@ class SensorEvent(object):
         return parser(mac, event, sensor_type, timestamp, data)
 
 
-class Dongle(object):
+class Dongle:
     _CMD_TIMEOUT = 2
 
-    class CmdContext(object):
+    class CmdContext:
         def __init__(self, **kwargs):
             for key in kwargs:
                 setattr(self, key, kwargs[key])
@@ -590,7 +588,7 @@ class Dongle(object):
         result = resp.Payload[0]
         LOGGER.debug("Inquiry returns %d", result)
 
-        assert result == 1, "Inquiry failed, result=%d" % result
+        assert result == 1, f"Inquiry failed, result={result}"
 
     def _GetEnr(self, r):
         LOGGER.debug("Start GetEnr...")
@@ -825,7 +823,7 @@ class Dongle(object):
         LOGGER.debug("CmdDelSensor returns %s", bytes_to_hex(resp.Payload))
         assert len(resp.Payload) == 1
         ack_code = resp.Payload[0]
-        assert ack_code == 0xFF, "CmdDelAllSensor: Unexpected ACK code: 0x%02X" % ack_code
+        assert ack_code == 0xFF, f"CmdDelAllSensor: Unexpected ACK code: 0x{ack_code:02X}"
 
     def PlayChime(self, mac, ringid, repeat_cnt, volume):
         self._DoSimpleCommand(Packet.PlayChime(mac, ringid, repeat_cnt, volume))

@@ -1,0 +1,62 @@
+# Continuous integration: lint and sanity-check the Python application.
+
+name: CI
+
+on:
+  push:
+    branches: ["master", "devel"]
+  pull_request:
+    branches: ["master", "devel"]
+
+jobs:
+  # ── Lint with ruff ──────────────────────────────────────────────────────
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Run ruff check
+        run: ruff check wyzesense2mqtt/
+
+  # ── Verify dependencies install and the app imports cleanly ────────────
+  build:
+    name: Install & import check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r wyzesense2mqtt/requirements.txt
+      - name: Byte-compile and syntax-check sources
+        run: python -m compileall -q wyzesense2mqtt/
+
+#  tests:
+#    name: Tests (pytest)
+#    runs-on: ubuntu-latest
+#    permissions:
+#      contents: read
+#    steps:
+#      - uses: actions/checkout@v6
+#      - uses: actions/setup-python@v6
+#        with:
+#          python-version: "3.13"
+#      - name: Install dependencies
+#        run: |
+#          python -m pip install --upgrade pip
+#          pip install -r wyzesense2mqtt/requirements.txt
+#          pip install pytest
+#      - name: Run test suite
+#        run: pytest

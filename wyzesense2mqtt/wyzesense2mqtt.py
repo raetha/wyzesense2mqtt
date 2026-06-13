@@ -9,11 +9,11 @@ import logging.handlers
 import os
 import shutil
 import subprocess
-import yaml
 import time
 
 import paho.mqtt.client as mqtt
 import wyzesense
+import yaml
 from retrying import retry
 
 WYZESENSE2MQTT_VERSION = "3.1"
@@ -130,7 +130,7 @@ def read_yaml_file(filename):
         with open(filename) as yaml_file:
             data = yaml.safe_load(yaml_file)
             return data
-    except IOError as error:
+    except OSError as error:
         if (LOGGER is None):
             print(f"File error: {str(error)}")
         else:
@@ -142,7 +142,7 @@ def write_yaml_file(filename, data):
     try:
         with open(filename, 'w') as yaml_file:
             yaml_file.write(yaml.safe_dump(data))
-    except IOError as error:
+    except OSError as error:
         if (LOGGER is None):
             print(f"File error: {str(error)}")
         else:
@@ -156,7 +156,7 @@ def init_logging():
         print("Copying default logging config file...")
         try:
             shutil.copy2(os.path.join(SAMPLES_PATH, LOGGING_CONFIG_FILE), CONFIG_PATH)
-        except IOError as error:
+        except OSError as error:
             print(f"Unable to copy default logging config file. {str(error)}")
     logging_config = read_yaml_file(os.path.join(CONFIG_PATH, LOGGING_CONFIG_FILE))
 
@@ -164,7 +164,7 @@ def init_logging():
     try:
         if (not os.path.exists(log_path)):
             os.makedirs(log_path)
-    except IOError:
+    except OSError:
         print("Unable to create log folder")
     logging.config.dictConfig(logging_config)
     LOGGER = logging.getLogger("wyzesense2mqtt")
@@ -279,7 +279,7 @@ def init_wyzesense_dongle():
                     f" MAC: {WYZESENSE_DONGLE.MAC},"
                     f" VER: {WYZESENSE_DONGLE.Version},"
                     f" ENR: {WYZESENSE_DONGLE.ENR}]")
-    except IOError as error:
+    except OSError as error:
         LOGGER.error(f"No device found on path {CONFIG['usb_dongle']}: {str(error)}")
 
 

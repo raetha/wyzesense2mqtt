@@ -17,16 +17,15 @@
   bridge_tool_cli.py --device /dev/hidraw0
 
 """
-from __future__ import print_function
 
-from builtins import input
 
+import binascii
+import logging
 import re
 import sys
-import logging
-import binascii
-import wyzesense
 from datetime import datetime
+
+import wyzesense
 
 
 def on_event(ws, e):
@@ -64,7 +63,7 @@ def main(args):
         print(f"\tMAC:{ws.MAC}")
         print(f"\tVER:{ws.Version}")
         print(f"\tENR:{binascii.hexlify(ws.ENR)}")
-    except IOError:
+    except OSError:
         print(f"No device found on path {device}")
         return 2
 
