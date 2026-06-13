@@ -55,5 +55,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`contents: read`, `pull-requests: write`), resolving CodeQL's
   "workflow does not contain permissions" warning. All other workflows
   already scoped `GITHUB_TOKEN` permissions per job.
+- `devel_package.yml` now triggers on `workflow_run` of the CI workflow
+  (rather than directly on `push: devel`), and only runs its publish jobs
+  when that CI run concluded successfully. This prevents a failing
+  lint/build on `devel` from overwriting the `:devel` container image with
+  broken code; it checks out the exact commit (`head_sha`) that CI tested.
 
 [Unreleased]: https://github.com/raetha/wyzesense2mqtt/compare/v3.0.2...HEAD
