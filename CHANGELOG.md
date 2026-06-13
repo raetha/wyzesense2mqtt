@@ -4,7 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [4.0.0] — TBD
+
+### Added
+
+- Migrated Home Assistant MQTT discovery to the device-based format (one
+  config topic per device under `components`), per the HA 2026.6.2 MQTT
+  integration docs. See `docs/HA_MQTT_COMPLIANCE.md`.
+- Added `has_entity_name`, `origin`, and `suggested_display_precision` to
+  discovery payloads; removed the deprecated `platform: mqtt` key.
+- Added a versioned discovery-schema migration system
+  (`mqtt_common.DISCOVERY_SCHEMA_VERSION`, `config/migrations.yaml`) that
+  automatically clears stale discovery topics from older schema versions on
+  upgrade.
+- Discovery payloads are now tagged with `origin.name` and `schema_version`,
+  and sensor data payloads include `wyzesense2mqtt_version` /
+  `discovery_schema_version` as entity attributes.
+- New `wyzesense2mqtt_cli.py` maintenance CLI with a `cleanup-discovery`
+  command for finding/clearing orphaned discovery topics for sensors no
+  longer in `sensors.yaml`.
+- New `mqtt_common.py` module shared between the gateway and CLI tools.
+
+### Fixed
+
+- Fixed a bug in the old `clear_topics()` where `entity_types.add(...)` was
+  called on a `list` (would have raised `AttributeError` for binary-sensor
+  types on sensor removal).
+
+## [3.1.0] — 2026-06-13
 
 ### Maintenance
 
@@ -60,5 +87,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   when that CI run concluded successfully. This prevents a failing
   lint/build on `devel` from overwriting the `:devel` container image with
   broken code; it checks out the exact commit (`head_sha`) that CI tested.
+
 
 [Unreleased]: https://github.com/raetha/wyzesense2mqtt/compare/v3.0.2...HEAD
