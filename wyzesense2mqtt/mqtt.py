@@ -29,10 +29,8 @@ import time
 from collections.abc import Callable
 
 import paho.mqtt.client as mqtt
-from config import get_migration_value, set_migration_value
+from config import get_migration_value, set_migration_value, VERSION as WYZESENSE2MQTT_VERSION
 from sensors import BINARY_SENSOR_TYPES, SENSOR_TYPES
-
-from wyzesense2mqtt import __version__ as WYZESENSE2MQTT_VERSION
 
 # ---------------------------------------------------------------------------
 # Discovery schema version

@@ -16,6 +16,7 @@ import time
 
 import dongle_protocol
 from config import (
+    VERSION as WYZESENSE2MQTT_VERSION,
     config_path,
     find_dongle_device,
     get_migration_value,
@@ -26,8 +27,6 @@ from config import (
 from mqtt import DISCOVERY_SCHEMA_VERSION, MqttGateway
 from retrying import retry
 from sensors import SensorRegistry
-
-from wyzesense2mqtt import __version__ as WYZESENSE2MQTT_VERSION
 
 # ---------------------------------------------------------------------------
 # Bridge
