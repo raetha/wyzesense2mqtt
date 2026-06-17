@@ -16,7 +16,7 @@ import time
 
 import dongle_protocol
 from config import (
-    VERSION as WYZESENSE2MQTT_VERSION,
+    VERSION,
     config_path,
     find_dongle_device,
     get_migration_value,
@@ -372,7 +372,7 @@ class Bridge:
         payload = {}
         payload.update(registry.sensors.get(event.mac, {}))
         payload.update(vars(event))
-        payload["ws2m_version"] = WYZESENSE2MQTT_VERSION
+        payload["ws2m_version"] = VERSION
         payload["ws2m_discovery_schema"] = DISCOVERY_SCHEMA_VERSION
 
         self._gateway.publish(f"{cfg['self_topic_root']}/{event.mac}", payload)

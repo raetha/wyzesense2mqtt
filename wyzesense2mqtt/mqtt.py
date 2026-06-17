@@ -29,7 +29,7 @@ import time
 from collections.abc import Callable
 
 import paho.mqtt.client as mqtt
-from config import get_migration_value, set_migration_value, VERSION as WYZESENSE2MQTT_VERSION
+from config import VERSION, get_migration_value, set_migration_value
 from sensors import BINARY_SENSOR_TYPES, SENSOR_TYPES
 
 # ---------------------------------------------------------------------------
@@ -367,7 +367,7 @@ class MqttGateway:
                 "manufacturer": "Raetha",
                 "model": "Bridge",
                 "name": f"WyzeSense2MQTT Bridge {dongle_mac}",
-                "sw_version": WYZESENSE2MQTT_VERSION,
+                "sw_version": VERSION,
             },
             "device_class": "connectivity",
             "entity_category": "diagnostic",
@@ -376,7 +376,7 @@ class MqttGateway:
             "object_id": "ws2m_bridge_connection_state",
             "origin": {
                 "name": "WyzeSense2MQTT",
-                "sw_version": WYZESENSE2MQTT_VERSION,
+                "sw_version": VERSION,
                 "support_url": "https://github.com/raetha/wyzesense2mqtt",
             },
             "payload_off": "offline",
@@ -436,7 +436,7 @@ class MqttGateway:
             },
             "origin": {
                 "name": "WyzeSense2MQTT",
-                "sw_version": WYZESENSE2MQTT_VERSION,
+                "sw_version": VERSION,
                 "support_url": "https://github.com/raetha/wyzesense2mqtt",
             },
             "schema_version": DISCOVERY_SCHEMA_VERSION,
