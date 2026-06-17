@@ -1,4 +1,4 @@
-FROM docker.io/python:alpine
+FROM docker.io/python:3.12-alpine
 
 LABEL maintainer="Raetha"
 
@@ -10,6 +10,6 @@ RUN apk add --no-cache tzdata \
     && pip3 install --no-cache-dir -r /app/requirements.txt \
     && chmod +x /app/service.sh
 
-VOLUME /app/config /app/logs
+VOLUME /app/config
 
 ENTRYPOINT ["/app/service.sh"]

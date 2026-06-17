@@ -25,8 +25,7 @@ Please submit pull requests against the devel branch.
     - [Linux Systemd](#linux-systemd)
   - [Configuration Files](#configuration-files)
     - [config.yaml](#configyaml)
-    - [logging.yaml](#loggingyaml)
-    - [sensors.yaml](#sensorsyaml)
+      - [sensors.yaml](#sensorsyaml)
   - [Usage](#usage)
     - [Pairing a Sensor](#pairing-a-sensor)
     - [Removing a Sensor](#removing-a-sensor)
@@ -66,16 +65,16 @@ services:
       MQTT_KEEPALIVE: "${MQTT_KEEPALIVE:-60}"
       MQTT_QOS: "${MQTT_QOS:-0}"
       MQTT_RETAIN: "${MQTT_RETAIN:-true}"
-      SELF_TOPIC_ROOT: "${SELF_TOPIC_ROOT:-wyzesense2mqtt}"
+      SELF_TOPIC_ROOT: "${SELF_TOPIC_ROOT:-ws2m}"
       HASS_TOPIC_ROOT: "${HASS_TOPIC_ROOT:-homeassistant}"
       HASS_DISCOVERY: "${HASS_DISCOVERY:-true}"
       PUBLISH_SENSOR_NAME: "${PUBLISH_SENSOR_NAME:-true}"
       USB_DONGLE: "${USB_DONGLE:-auto}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     devices:
       - "${DEV_WYZESENSE:-/dev/hidraw0}:/dev/hidraw0"
     volumes:
       - "${VOL_CONFIG}:/app/config"
-      - "${VOL_LOGS}:/app/logs"
 ```
 ```shell
 ### Example .env ###
@@ -97,21 +96,19 @@ PUBLISH_SENSOR_NAME=true
 USB_DONGLE=auto
 DEV_WYZESENSE=/dev/hidraw0
 VOL_CONFIG=/docker/wyzesense2mqtt/config
-VOL_LOGS=/docker/wyzesense2mqtt/logs
+LOG_LEVEL=INFO
 ```
 3. Create your local volume mounts. Use the same folders you entered in the Docker Compose files created above.
 ```bash
 mkdir /docker/wyzesense2mqtt/config
-mkdir /docker/wyzesense2mqtt/logs
 ```
 4. (Optional, when using Docker environment variables) Create or copy a config.yaml file into the config folder (see example below or copy from repository). The script will automatically create a default config.yaml if one is not found, but it will need to be modified with the correct MQTT details before things will work.
-5. (Optional) Copy a logging.yaml file into the config folder (see example below or copy from repository). The script will automatically use the default logging.yaml if one does not exist. You only need to modify this if more complex logging is required.
-6. (Optional) Pre-populate a sensors.yaml file into the config folder with your existing sensors. This file will automatically be created if it doesn't exist. (see example below or copy from repository)
-7. Start the Docker container
+5. (Optional) Pre-populate a sensors.yaml file into the config folder with your existing sensors. This file will automatically be created if it doesn't exist. (see example below or copy from repository)
+6. Start the Docker container
 ```bash
 docker-compose up -d
 ```
-8. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, though the sensor version will be unknown and the class will default to opening, i.e. a contact sensor. You should manually update these entries.
+7. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, though the sensor version will be unknown and the class will default to opening, i.e. a contact sensor. You should manually update these entries.
 
 ### Linux Systemd
 
@@ -121,56 +118,30 @@ If you would like to use this project outside of docker, please follow the instr
 The gateway uses three config files located in the config directory. Examples of each are below and in the repository.
 
 ### config.yaml
-This is the main configuration file. Aside from MQTT host, username, and password, the defaults should work for most people. A working configuration will be created automatically if ENV values are available for at least mqtt_host, mqtt_username, and mqtt_password. So it does not need to be created in advance.
+This is the main configuration file. Aside from MQTT host, username, and password, the defaults should work for most people. A working configuration will be created automatically if ENV values are available for at least `mqtt_host`. So it does not need to be created in advance. Use `log_level` to control verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`); default is `INFO`. Logs go to stdout and are captured by `docker logs` or `journalctl` automatically.
 ```yaml
 mqtt_host: <host>
 mqtt_port: 1883
 mqtt_username: <user>
 mqtt_password: <password>
-mqtt_client_id: wyzesense2mqtt
+mqtt_client_id: ws2m
 mqtt_clean_session: false
 mqtt_keepalive: 60
 mqtt_qos: 0
 mqtt_retain: true
-self_topic_root: wyzesense2mqtt
+self_topic_root: ws2m
 hass_topic_root: homeassistant
 hass_discovery: true
 publish_sensor_name: true
 usb_dongle: auto
+log_level: INFO
 ``` 
 
-### logging.yaml
-This file contains a yaml dictionary for the logging.config module. Python docs at [logging configuration](https://docs.python.org/3/library/logging.config.html)
-```yaml
-version: 1
-formatters:
-  simple:
-    format: '%(message)s'
-  verbose:
-    datefmt: '%Y-%m-%d %H:%M:%S'
-    format: '%(asctime)s %(levelname)-8s %(name)-15s %(message)s'
-handlers:
-  console:
-    class: logging.StreamHandler
-    formatter: simple
-    level: DEBUG
-  file:
-    backupCount: 7
-    class: logging.handlers.TimedRotatingFileHandler
-    encoding: utf-8
-    filename: logs/wyzesense2mqtt.log
-    formatter: verbose
-    level: INFO
-    when: midnight
-root:
-  handlers:
-    - file
-    - console
-  level: DEBUG
-```
 
 ### sensors.yaml
-This file will store basic information about each sensor paired to the Wyse Sense Bridge. The entries can be modified to set the class type and sensor name as it will show in Home Assistant. Class types can be automatically filled for `opening`, `motion`, and `moisture`, depending on the type of sensor. Since this file can be automatically generated, Python may automatically quote the MACs or not depending on if they are fully numeric. Sensors that were previously linked and automatically added will default to class `opening` and will not have a "sw_version" set. For the original version 1 devices, the sw_version should be 19. For the newer version 2 devices, the sw_version should be 23. This will be automatically have the correct settings for devices added via a scan. A custom timeout for device availability can also be added per device by setting the "timeout" setting, in seconds. For version 1 devices, the default timeout is 8 hours and for version 2 device, the default timeout is 4 hours.
+This file stores per-sensor configuration for each sensor paired to the Wyze Sense Bridge. Entries can be modified to set the sensor name and class as they will appear in Home Assistant. The `class` field maps to an HA binary_sensor device class (`opening`, `door`, `window`, `motion`, `moisture`, etc.). A per-sensor availability timeout can be set via `timeout` (in seconds); the default is 28800 s (8 h) for v1 sensors and 14400 s (4 h) for v2 sensors.
+
+Sensors added via the `scan` MQTT command will populate this file automatically with the correct `sensor_type` and `sw_version`. Sensors that were previously paired and auto-discovered will default to `class: opening` and will not have `sw_version` set. For v1 devices `sw_version` is typically `19`; for v2 devices it is typically `23`.
 ```yaml
 'AAAAAAAA':
   class: door
@@ -202,44 +173,62 @@ This file will store basic information about each sensor paired to the Wyse Sens
 
 ## Usage
 ### Pairing a Sensor
-At this time only a single sensor can be properly paired at once. So please repeat steps below for each sensor.
-1. Publish a blank message to the MQTT topic "self_topic_root/scan" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/scan" if you haven't changed the configuration. This can be performed via Home Assistant or any MQTT client.
-2. Use the pin tool that came with your Wyze Sense sensors to press the reset switch on the side of the sensor to pair. Hold in until the red led blinks.
+At this time only a single sensor can be properly paired at once. Please repeat the steps below for each sensor.
+1. Publish a blank message to the MQTT topic `<self_topic_root>/scan` (default: `wyzesense2mqtt/scan`). This can be done via Home Assistant or any MQTT client.
+2. Use the pin tool that came with your Wyze Sense sensors to press the reset switch on the side of the sensor. Hold until the red LED blinks.
 
 ### Removing a Sensor
-1. Publish a message containing the MAC to be removed to the MQTT topic "self_topic_root/remove" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/remove" if you haven't changed the configuration. The payload should look like "AABBCCDD". This can be performed via Home Assistant or any MQTT client.
+1. Publish the sensor MAC address as the payload to the MQTT topic `<self_topic_root>/remove` (default: `wyzesense2mqtt/remove`). The payload should be the 8-character MAC, e.g. `AABBCCDD`. This can be done via Home Assistant or any MQTT client.
 
 ### Reload Sensors
-If you've changed your sensors.yaml file while the gateway is running, you can trigger a reload of the sensors.yaml file without restarting the gateway or Docker container.
-1. Publish a blank message to the MQTT topic "self_topic_root/reload" where self_topic_root is the value from the configuration file. The default MQTT topic would be "wyzesense2mqtt/reload" if you haven't changed the configuration. This can be performed via Home Assistant or any MQTT client.
+If you have modified `sensors.yaml` while the gateway is running, you can trigger a reload without restarting the service or Docker container.
+1. Publish a blank message to the MQTT topic `<self_topic_root>/reload` (default: `wyzesense2mqtt/reload`).
 
 ### Command Line Tools
 
 #### Bridge Tool
-The bridge_tool_cli.py script can be used to interact with your bridge to perform a few simple functions. Make sure to specify the correct device for your environment.
+`cli/bridge_tool.py` provides direct USB dongle access for pairing, unpairing, listing sensors, and low-level diagnostics. It does **not** require the bridge service or an MQTT broker to be running. Run it from inside the container (`docker exec -it wyzesense2mqtt sh`) or directly on the host.
+
 ```bash
-python3 bridge_tool_cli.py --device /dev/hidraw0
+# List paired sensors
+python3 -m cli.bridge_tool --device /dev/hidraw0 list
+
+# Pair a new sensor (waits up to 60 s)
+python3 -m cli.bridge_tool --device /dev/hidraw0 pair
+
+# Unpair a sensor
+python3 -m cli.bridge_tool --device /dev/hidraw0 unpair AABBCCDD
+
+# Remove sensors with corrupt/null MACs (common after battery failure)
+python3 -m cli.bridge_tool --device /dev/hidraw0 fix
+
+# Monitor live sensor events
+python3 -m cli.bridge_tool --device /dev/hidraw0 monitor
+
+# Show help / all available commands
+python3 -m cli.bridge_tool --help
 ```
-Once run it will present a menu of its functions:
-* L - List paired sensors
-* P - Pair new sensors
-* U <mac> - Unpair sensor (e.g. "U AABBCCDD")
-* F - Fix invalid sensors (Removes sensors with invalid MACs, common problem with broken sensors or low batteries)
 
 #### Maintenance CLI
-The wyzesense2mqtt_cli.py script is a standalone tool for maintaining the gateway's MQTT/Home Assistant discovery topics. It talks to the MQTT broker only and does not require the USB dongle. It is not the running gateway (`wyzesense2mqtt.py`) and should be run separately, e.g. via `docker exec` into a running container.
+`cli/maintenance.py` is a standalone tool for operating on the MQTT broker. It does not touch the USB dongle and does not require the bridge service to be running. Run it via `docker exec` into a running container, or on the host if the broker is reachable.
 
-`cleanup-discovery` scans for Home Assistant discovery topics belonging to sensors that are no longer in `sensors.yaml` (e.g. removed by editing the config files directly rather than via the [Removing a Sensor](#removing-a-sensor) MQTT topic) and reports them. By default this is a dry run; pass `--apply` to actually clear the orphaned retained topics.
+`cleanup-discovery` scans for Home Assistant discovery topics belonging to sensors that are no longer in `sensors.yaml` (e.g. removed by editing config files directly rather than via the [Removing a Sensor](#removing-a-sensor) MQTT command) and reports them. By default this is a dry run; pass `--apply` to actually clear the orphaned retained topics.
+
 ```bash
-python3 wyzesense2mqtt_cli.py cleanup-discovery
-python3 wyzesense2mqtt_cli.py cleanup-discovery --apply
+# Dry run — show what would be cleared
+python3 -m cli.maintenance cleanup-discovery
+
+# Actually clear orphaned topics
+python3 -m cli.maintenance cleanup-discovery --apply
+
+# Increase listen time if broker is slow to replay retained messages (default: 5 s)
+python3 -m cli.maintenance cleanup-discovery --listen-seconds 15
 ```
-If your broker is slow to replay retained messages, increase the wait with `--listen-seconds` (default 5).
 
 See [docs/HA_MQTT_COMPLIANCE.md](docs/HA_MQTT_COMPLIANCE.md) for details on the MQTT discovery format used and how schema migrations/cleanup work.
 
 ## Home Assistant
-Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add a device for each sensor, along with entities for state, battery, and signal strength (plus temperature/humidity for climate and leak sensors). By default these entities will have a device_class of "opening" for contact sensors, "motion" for motion sensors, and "moisture" for leak sensors, and the device will be named "WyzeSense \<MAC\>". To adjust the device_class to "door" or "window", and set a custom device name, update the `sensors.yaml` configuration file and replace the defaults, then restart WyzeSense2MQTT (or trigger a [reload](#reload-sensors)). For a comprehensive list of device classes that Home Assistant recognizes, see the [binary_sensor documentation](https://www.home-assistant.io/integrations/binary_sensor/).
+Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add a device for each sensor, along with entities for state, battery, and signal strength (plus temperature/humidity for climate and leak sensors). By default these entities will have a `device_class` of `opening` for contact sensors, `motion` for motion sensors, and `moisture` for leak sensors, and the device will be named `WyzeSense <MAC>`. To adjust the `device_class` to `door` or `window` and set a custom device name, update the `sensors.yaml` configuration file and trigger a [reload](#reload-sensors).
 
 Discovery uses Home Assistant's device-based MQTT discovery format (one config topic per device, covering all of its entities). See [docs/HA_MQTT_COMPLIANCE.md](docs/HA_MQTT_COMPLIANCE.md) for the HA version this was last verified against and notes on the discovery schema and migrations.
 

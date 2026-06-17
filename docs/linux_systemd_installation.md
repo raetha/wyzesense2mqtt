@@ -1,46 +1,75 @@
 # Linux Systemd Installation
 
-The gateway can also be run as a systemd service for those not wanting to use Docker. Requires Python 3.6 or newer. You may need to do all commands as root, depending on filesystem permissions. This is NOT actively tested, please submit an issue or PR if you experience problems.
+The gateway can be run as a systemd service for those not wanting to use Docker.
+Requires Python 3.12 or newer.  You may need to run commands as root depending
+on filesystem permissions.
+
+> **Note:** This installation method is not actively tested.  Docker is the
+> recommended and supported deployment method for 4.0 and later.  Please submit
+> an issue or PR if you encounter problems with systemd installation.
+
+## Steps
+
 1. Plug the Wyze Sense Bridge into a USB port on the Linux host.
-2. Pull down a copy of the repository
+
+2. Pull down a copy of the repository:
 ```bash
 cd /tmp
 git clone https://github.com/raetha/wyzesense2mqtt.git
 ```
-3. Create local application folders (Select a location that works for you, example uses /opt/wyzesense2mqtt)
+
+3. Create local application folder (adjust path to suit):
 ```bash
 mv /tmp/wyzesense2mqtt/wyzesense2mqtt /opt/wyzesense2mqtt
 rm -rf /tmp/wyzesense2mqtt
 cd /opt/wyzesense2mqtt
 mkdir config
-mkdir logs
 ```
-4. Prepare config.yaml file. You must set MQTT host parameters! Username and password can be blank if unused. (see example below)
+
+4. Create a `config/config.yaml` file.  You must set at minimum `mqtt_host`.
+   All other settings have working defaults:
 ```bash
-cp samples/config.yaml config/config.yaml
-vim config/config.yaml
+cat > config/config.yaml << 'YAML'
+mqtt_host: <your-broker>
+mqtt_username: <user>
+mqtt_password: <password>
+log_level: INFO
+YAML
 ```
-5. Modify logging.yaml file if desired (optional)
+
+5. Install dependencies:
 ```bash
-cp samples/logging.yaml config/logging.yaml
-vim config/logging.yaml
+pip3 install -r requirements.txt
 ```
-6. If desired, pre-populate a sensors.yaml file with your existing sensors. This file will automatically be created if it doesn't exist. (see example below) (optional)
+
+6. Configure and start the systemd service:
 ```bash
-cp samples/sensors.yaml config/sensors.yaml
-vim config/sensors.yaml
-```
-7. Install dependencies
-```bash
-sudo pip3 install -r requirements.txt
-```
-8. Configure the service
-```bash
-vim wyzesense2mqtt.service # Only modify if not using default application path
+# Edit only if your install path differs from /opt/wyzesense2mqtt
+vim wyzesense2mqtt.service
 sudo cp wyzesense2mqtt.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl start wyzesense2mqtt
 sudo systemctl status wyzesense2mqtt
-sudo systemctl enable wyzesense2mqtt # Enable start on reboot
+sudo systemctl enable wyzesense2mqtt   # start on boot
 ```
-9. Pair sensors following the instructions at [Paring a Sensor](/readme.md#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, though the sensor version will be unknown and the class will default to opening, i.e. a contact sensor. You should manually update these entries.
+
+7. View logs via journalctl (logs go to stdout, captured by systemd automatically):
+```bash
+journalctl -u wyzesense2mqtt -f
+```
+
+8. Pair sensors following the instructions in [README.md](../README.md#pairing-a-sensor).
+
+## Notable changes from 3.x
+
+- **No `logs/` directory** — logs now go to stdout only, captured by journalctl.
+  If you previously had a `config/logging.yaml` file it is no longer read;
+  delete it to avoid confusion.  Use `log_level` in `config.yaml` to control
+  verbosity.
+- **No sample files** — `config.yaml` is no longer copied from a samples
+  directory.  Create it directly as shown above or let the bridge create a
+  default on first run (requires `mqtt_host` to be set via environment variable
+  or the file).
+- **Python 3.12+ required** — 4.0 uses `X | Y` union type hint syntax
+  (PEP 604) and other features not available in earlier versions. Python 3.12
+  is actively supported until October 2028.

@@ -1,8 +1,8 @@
 # Home Assistant MQTT Discovery Compliance Notes
 
 This file tracks the Home Assistant / MQTT integration version against which
-the discovery payloads in `wyzesense2mqtt.py` have been reviewed and
-verified, so future changes have a baseline to diff against.
+the discovery payloads in `mqtt.py` have been reviewed and verified, so
+future changes have a baseline to diff against.
 
 ## Last verified
 
@@ -46,7 +46,7 @@ shared by all components.
   device discovery payloads, matching what was already done for the bridge.
 - Added `suggested_display_precision` to numeric sensors (temperature,
   humidity, signal strength, battery) for cleaner default display in the UI.
-- `clear_topics()` now clears discovery config topics from every known
+- `clear_sensor_topics()` now clears discovery config topics from every known
   schema version (not just the current one) when a sensor is fully removed.
 - Fixed a latent bug in the old `clear_topics()` where `entity_types.add(...)`
   was called on a `list` (should be `.append`/`.extend`) — this previously
@@ -75,21 +75,19 @@ an old `discovery_schema_version` after an upgrade.
 
 ### `cleanup-discovery` CLI
 
-The versioned migration in `init_sensors()` only handles sensors still
+The versioned migration in `Bridge._init_sensors()` only handles sensors still
 present in `sensors.yaml`. If a sensor was removed by hand (edited out of
 `sensors.yaml`/`state.yaml` after a failed unpair, rather than via the
 `remove` MQTT topic), its discovery topic(s) can be orphaned indefinitely.
 
-This is implemented in **`wyzesense2mqtt_cli.py`** (not the main
-`wyzesense2mqtt.py` server, which should not be invoked directly by users).
-Shared MQTT/config/discovery-schema code lives in **`mqtt_common.py`**, used
-by both:
+This is implemented in **`cli/maintenance.py`** (not the main bridge process,
+which should be invoked via `__main__.py` or `service.sh`):
 
 ```
-python3 wyzesense2mqtt_cli.py cleanup-discovery [--apply] [--listen-seconds N]
+python3 -m cli.maintenance cleanup-discovery [--apply] [--listen-seconds N]
 ```
 
-This subscribes to all known discovery wildcards - both the current
+This subscribes to all known discovery wildcards — both the current
 device-based format and the legacy per-entity format, since they live under
 different topic paths:
 
@@ -113,42 +111,45 @@ a tool like MQTT Explorer uses under the hood). It then:
 If retained messages don't arrive within `--listen-seconds`, increase it —
 broker replay speed can vary.
 
-
+### Discovery schema migration (automatic on upgrade)
 
 Because retained MQTT messages don't disappear just because the code that
 published them changed, switching discovery formats can otherwise leave
 stale/duplicate entities in HA until the old retained configs are cleared.
 
 To handle this (now and for any future discovery format change), there's a
-small versioned migration system:
+small versioned migration system in `mqtt.py`:
 
 - `DISCOVERY_SCHEMA_VERSION` (currently `2`) identifies the shape of
   discovery payloads this version of wyzesense2mqtt publishes.
 - `_DISCOVERY_CLEANERS` maps each schema version to a function that clears
   the retained topics that version published.
 - `config/migrations.yaml` records the schema version last seen on disk.
-- On startup, `init_sensors()` compares the recorded version to
+- On startup, `Bridge._init_sensors()` compares the recorded version to
   `DISCOVERY_SCHEMA_VERSION`. If older, it runs every cleaner for the
   versions in between (once per known sensor), then updates
   `migrations.yaml`. This is a one-time pass per upgrade — already-migrated
   installs do nothing extra on subsequent restarts.
-- `clear_topics()` (used when a sensor is fully removed/unpaired) runs
-  *every* cleaner regardless of recorded version, so a full removal never
-  leaves stale entities behind.
+- `MqttGateway.clear_sensor_topics()` (used when a sensor is fully
+  removed/unpaired) runs *every* cleaner regardless of recorded version, so
+  a full removal never leaves stale entities behind.
 
 ### Reusing this for a future discovery format change
 
 If a future HA/MQTT change means the topic structure needs to change again:
 
-1. Add a new `_clear_discovery_topics_v3(sensor_mac, sensor_type, wait=True)`
-   function that clears whatever topics **v2** (the current format)
-   published — i.e. the cleaner for version *N* always clears what version
-   *N* itself published, so it can be run when migrating *away* from that
-   version.
-2. Add `3: _clear_discovery_topics_v3` to `_DISCOVERY_CLEANERS`.
-3. Update `send_discovery_topics()` to publish the new v3 format.
-4. Bump `DISCOVERY_SCHEMA_VERSION = 3`.
-5. Update this doc's "Last verified" section.
+1. Add a `_clear_v3_discovery_topics(client, config, logger, mac, type, wait)`
+   function in `mqtt.py` that clears whatever topics **v2** (the current
+   format) published — i.e. the cleaner for version *N* always clears what
+   version *N* itself published, so it can be run when migrating *away* from
+   that version.
+2. Add `3: _clear_v3_discovery_topics` to `_DISCOVERY_CLEANERS`.
+3. Update `MqttGateway.publish_sensor_discovery()` to publish the new v3
+   format.
+4. Add a builder function to `_COMPONENT_BUILDERS` if the component structure
+   changes.
+5. Bump `DISCOVERY_SCHEMA_VERSION = 3`.
+6. Update this doc's "Last verified" section.
 
 Existing installs will then automatically clear their v2 (and, if still
 pending, v1) topics on first startup with the new code, exactly as the v1→v2
