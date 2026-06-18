@@ -19,10 +19,8 @@ from config import (
     VERSION,
     config_path,
     find_dongle_device,
-    get_migration_value,
     load_config,
     save_config,
-    set_migration_value,
 )
 from mqtt import DISCOVERY_SCHEMA_VERSION, MqttGateway
 from retrying import retry
@@ -171,21 +169,6 @@ class Bridge:
     def _init_bridge_discovery(self) -> None:
         if not self._config["hass_discovery"]:
             return
-
-        # Clear the 3.x bridge discovery topic on first 4.0 startup.
-        # In 3.x the topic path was:
-        #   homeassistant/binary_sensor/wyzesense_bridge_<mac>/connection_state/config
-        # It is now:
-        #   homeassistant/binary_sensor/ws2m_bridge_<mac>/connection_state/config
-        recorded = get_migration_value("bridge_identity_version") or 1
-        if recorded < 2:
-            hass_root = self._config["hass_topic_root"]
-            mac = self._dongle.mac
-            old_topic = f"{hass_root}/binary_sensor/wyzesense_bridge_{mac}/connection_state/config"
-            self._logger.info(f"Clearing 3.x bridge discovery topic: {old_topic}")
-            self._gateway.publish(old_topic, None)
-            set_migration_value("bridge_identity_version", 2)
-
         self._gateway.publish_bridge_discovery(
             self._dongle.mac,
             self._dongle.version,
@@ -217,7 +200,7 @@ class Bridge:
             self._logger.error("Timed out fetching sensor list from dongle")
             registry.ensure_all_have_state()
 
-        # Discovery schema migration (runs once per schema bump)
+        # Discovery schema migration (runs once per schema bump, covers sensors + bridge)
         if self._config["hass_discovery"]:
             recorded = self._gateway.get_discovery_schema_version()
             if recorded < DISCOVERY_SCHEMA_VERSION:
@@ -225,7 +208,7 @@ class Bridge:
                 for mac in list(registry.state):
                     if registry.is_valid_mac(mac):
                         sensor_type = registry.sensors.get(mac, {}).get("sensor_type", "unknown")
-                        self._gateway.migrate_discovery_topics(mac, sensor_type, recorded, wait=wait)
+                        self._gateway.migrate_discovery_topics(mac, sensor_type, self._dongle.mac, recorded, wait=wait)
                 self._gateway.set_discovery_schema_version(DISCOVERY_SCHEMA_VERSION)
 
         # Publish discovery for all known sensors

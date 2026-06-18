@@ -7,20 +7,43 @@ MqttGateway wraps the paho-mqtt client and owns:
   - HA MQTT discovery payload construction (device-based format, HA ≥ 2024.4)
   - Discovery schema migration (clearing stale retained topics on upgrade)
 
-The discovery payload builders are organised as per-sensor-type component
-factories so that adding a new sensor type only requires adding one entry
-to _COMPONENT_BUILDERS and a corresponding entry in sensors.SENSOR_TYPES.
+Sensor component architecture
+------------------------------
+Each sensor type maps to a *component builder* function that returns a fresh
+dict of ``{ entity_key: component_payload_dict }``.  Two additional builders
+are appended to every sensor regardless of type:
+
+  _build_diagnostic_components()               — signal_strength, battery
+  _build_sensor_action_components(mac, topic)  — remove button
+
+Builders always return *new* dicts so the inject loop can safely mutate the
+component payloads (stamping in unique_id, has_entity_name, value_template)
+without corrupting any shared module-level state.
+
+Adding a new universal sensor entity is a one-line addition to
+_build_diagnostic_components() or _build_sensor_action_components().
+Adding a new bridge entity means editing _build_bridge_components().
+Adding a new sensor type means adding a builder and registering it in
+_COMPONENT_BUILDERS.
 
 Discovery schema versioning
----------------------------
-DISCOVERY_SCHEMA_VERSION identifies the shape of the payloads this version
-publishes.  Bump it any time the topic structure or payload shape changes,
-and add a cleaner to _DISCOVERY_CLEANERS for the version being replaced.
+----------------------------
+DISCOVERY_SCHEMA_VERSION is a single project-wide constant that covers both
+sensor and bridge discovery payloads.  Bump it whenever *any* topic structure
+or payload shape changes, and add the corresponding cleanup to
+``migrate_to_v<N>`` in the _MIGRATION_STEPS list below.
 
-  v1 – legacy per-entity topics:
-       homeassistant/<component>/wyzesense_<mac>/<entity>/config
-  v2 – current device-based topic:
-       homeassistant/device/wyzesense_<mac>/config
+Schema history
+  v1 — legacy per-entity sensor topics + 3.x bridge topic:
+         homeassistant/<platform>/wyzesense_<mac>/<entity>/config
+         homeassistant/binary_sensor/wyzesense_bridge_<mac>/connection_state/config
+  v2 — current device-based topics for both sensors and bridge:
+         homeassistant/device/wyzesense_<mac>/config
+         homeassistant/device/ws2m_bridge_<mac>/config
+
+The single ``discovery_schema_version`` key in migrations.yaml tracks where
+each installation is up to.  Bridge and sensor topics are migrated together in
+one pass, removing the need for a separate ``bridge_identity_version`` key.
 """
 
 import json
@@ -35,9 +58,9 @@ from sensors import BINARY_SENSOR_TYPES, SENSOR_TYPES
 # ---------------------------------------------------------------------------
 # Discovery schema version
 #
-# Identifies the shape of the MQTT discovery payloads this version publishes.
-# Bump this whenever the topic structure or payload shape changes, and add a
-# cleaner to _DISCOVERY_CLEANERS for the version being retired.
+# Single project-wide constant covering sensor and bridge payloads together.
+# Bump this whenever any topic structure or payload shape changes, and add a
+# corresponding migrate_to_vN entry to _MIGRATION_STEPS below.
 # ---------------------------------------------------------------------------
 
 DISCOVERY_SCHEMA_VERSION = 2
@@ -47,17 +70,23 @@ DISCOVERY_SCHEMA_VERSION = 2
 # Per-sensor-type HA MQTT discovery component builders
 #
 # Each builder receives (sensor_mac, sensor_config, mac_topic) and returns
-# a dict of  { entity_key: component_payload_dict }.
-# Common fields (unique_id, has_entity_name, value_template) are added by
-# the caller after all builders have run.
+# a *fresh* dict of { entity_key: component_payload_dict }.
+# Common fields (unique_id, has_entity_name, value_template) are injected by
+# publish_sensor_discovery after all builders have run.
 # ---------------------------------------------------------------------------
 
 
-def _build_binary_sensor_components(sensor_mac: str, sensor: dict, mac_topic: str) -> dict:
-    """Components for contact, motion, and similar binary sensors."""
+def _build_state_sensor_components(sensor_mac: str, sensor: dict, mac_topic: str) -> dict:
+    """Components for sensors that report a single on/off state (contact, motion, PIR).
+
+    Motion and contact sensors share the same HA component shape — one
+    binary_sensor entity whose device_class and payload labels come from
+    SENSOR_TYPES.  Use this builder for any sensor_type that maps to a
+    single boolean reading with no additional entities.
+    """
     sensor_type = sensor.get("sensor_type", "unknown")
     type_meta = SENSOR_TYPES.get(sensor_type, SENSOR_TYPES["unknown"])
-    components = {
+    return {
         "state": {
             "platform": "binary_sensor",
             "name": None,
@@ -67,13 +96,12 @@ def _build_binary_sensor_components(sensor_mac: str, sensor: dict, mac_topic: st
             "json_attributes_topic": mac_topic,
         }
     }
-    return components
 
 
 def _build_leak_sensor_components(sensor_mac: str, sensor: dict, mac_topic: str) -> dict:
     """Components for the Wyze leak sensor (binary state + probe + climate readings)."""
     type_meta = SENSOR_TYPES["leak"]
-    components = {
+    return {
         "state": {
             "platform": "binary_sensor",
             "name": None,
@@ -109,7 +137,6 @@ def _build_leak_sensor_components(sensor_mac: str, sensor: dict, mac_topic: str)
             "json_attributes_topic": mac_topic,
         },
     }
-    return components
 
 
 def _build_climate_sensor_components(sensor_mac: str, sensor: dict, mac_topic: str) -> dict:
@@ -137,53 +164,156 @@ def _build_climate_sensor_components(sensor_mac: str, sensor: dict, mac_topic: s
 
 
 # Map sensor_type → component builder.
-# Binary sensors that share the same component shape use _build_binary_sensor_components.
+# Sensors that report a single on/off state share _build_state_sensor_components.
 _COMPONENT_BUILDERS: dict[str, Callable] = {
-    "motion": _build_binary_sensor_components,
-    "motionv2": _build_binary_sensor_components,
-    "switch": _build_binary_sensor_components,
-    "switchv2": _build_binary_sensor_components,
+    "motion": _build_state_sensor_components,
+    "motionv2": _build_state_sensor_components,
+    "switch": _build_state_sensor_components,
+    "switchv2": _build_state_sensor_components,
     "leak": _build_leak_sensor_components,
     "climate": _build_climate_sensor_components,
 }
 
-# Diagnostic entities appended to every sensor's component list
-_DIAGNOSTIC_COMPONENTS: dict[str, dict] = {
-    "signal_strength": {
-        "platform": "sensor",
-        "name": None,
-        "device_class": "signal_strength",
-        "state_class": "measurement",
-        "unit_of_measurement": "dBm",
-        "suggested_display_precision": 0,
-        "entity_category": "diagnostic",
-    },
-    "battery": {
-        "platform": "sensor",
-        "name": None,
-        "device_class": "battery",
-        "state_class": "measurement",
-        "unit_of_measurement": "%",
-        "suggested_display_precision": 0,
-        "entity_category": "diagnostic",
-    },
-}
+
+def _build_diagnostic_components() -> dict:
+    """Diagnostic entities appended to every sensor's component list.
+
+    Returns a fresh dict on every call so the inject loop can safely mutate
+    the component payloads without corrupting shared module-level state.
+    To add a new universal diagnostic entity, add an entry here.
+    """
+    return {
+        "signal_strength": {
+            "platform": "sensor",
+            "name": None,
+            "device_class": "signal_strength",
+            "state_class": "measurement",
+            "unit_of_measurement": "dBm",
+            "suggested_display_precision": 0,
+            "entity_category": "diagnostic",
+            "enabled_by_default": False,
+        },
+        "battery": {
+            "platform": "sensor",
+            "name": None,
+            "device_class": "battery",
+            "state_class": "measurement",
+            "unit_of_measurement": "%",
+            "suggested_display_precision": 0,
+            "entity_category": "diagnostic",
+        },
+    }
+
+
+def _build_sensor_action_components(sensor_mac: str, remove_topic: str) -> dict:
+    """Per-sensor action buttons appended to every sensor's component list.
+
+    Returns a fresh dict on every call.  The remove button publishes the
+    sensor's MAC as the payload, which the bridge handles via its
+    ``ws2m/remove`` subscription.
+    To add a new universal sensor action, add an entry here.
+    """
+    return {
+        "remove": {
+            "platform": "button",
+            "name": "Remove sensor",
+            "entity_category": "config",
+            "device_class": "restart",
+            "command_topic": remove_topic,
+            "payload_press": sensor_mac,
+        },
+    }
+
+
+# Platform types that expose a state value — value_template is injected only for these
+_STATE_PLATFORMS: frozenset[str] = frozenset({"sensor", "binary_sensor"})
 
 
 # ---------------------------------------------------------------------------
-# Discovery topic cleaners (one per schema version being retired)
+# Bridge component builder
 # ---------------------------------------------------------------------------
 
 
-def _clear_v1_discovery_topics(
+def _build_bridge_components(self_root: str, dongle_mac: str) -> dict:
+    """Components for the bridge device.
+
+    Returns a fresh dict on every call.  To add a new bridge entity,
+    add an entry here — no other code needs to change.
+    """
+    return {
+        "connection_state": {
+            "platform": "binary_sensor",
+            "name": "Connection state",
+            "device_class": "connectivity",
+            "entity_category": "diagnostic",
+            "payload_on": "online",
+            "payload_off": "offline",
+            "state_topic": f"{self_root}/bridge_{dongle_mac}/status",
+            "unique_id": f"ws2m_bridge_{dongle_mac}_connection_state",
+        },
+        "scan": {
+            "platform": "button",
+            "name": "Scan for sensor",
+            "entity_category": "config",
+            "command_topic": f"{self_root}/scan",
+            "payload_press": "scan",
+            "unique_id": f"ws2m_bridge_{dongle_mac}_scan",
+        },
+        "reload": {
+            "platform": "button",
+            "name": "Reload config",
+            "entity_category": "config",
+            "command_topic": f"{self_root}/reload",
+            "payload_press": "reload",
+            "unique_id": f"ws2m_bridge_{dongle_mac}_reload",
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Discovery schema migration
+#
+# Each entry in _MIGRATION_STEPS is a callable:
+#   migrate_to_vN(client, config, logger, sensor_mac, sensor_type, wait)
+#
+# The function clears *all* stale retained topics that were published by
+# version N-1 — for both sensors and the bridge.  Sensor-specific cleanup
+# receives the sensor MAC and type; bridge-specific cleanup uses only config.
+#
+# Adding a migration for a future version N:
+#   1. Write def _migrate_to_vN(...)
+#   2. Append it to _MIGRATION_STEPS
+#   3. Bump DISCOVERY_SCHEMA_VERSION to N
+#
+# _MIGRATION_STEPS is indexed from 0; step at index i clears v(i+1) topics,
+# i.e. step 0 clears v1 topics (the migration from v1 → v2).
+# ---------------------------------------------------------------------------
+
+
+def _migrate_to_v2(
     client: mqtt.Client,
     config: dict,
     logger: logging.Logger,
     sensor_mac: str,
     sensor_type: str,
+    dongle_mac: str,
     wait: bool = True,
 ) -> None:
-    """Clear legacy per-entity discovery config topics (schema v1)."""
+    """Clear all v1 retained topics for one sensor and (once) the bridge.
+
+    v1 sensor topics — legacy per-entity format:
+      homeassistant/<platform>/wyzesense_<mac>/<entity>/config
+
+    v1 bridge topic — 3.x identity:
+      homeassistant/binary_sensor/wyzesense_bridge_<mac>/connection_state/config
+
+    The bridge topic is keyed on dongle_mac, not sensor_mac, so it is cleared
+    here on every sensor's migration pass (publishing None to a topic that is
+    already empty is a safe no-op).
+    """
+    hass_root = config["hass_topic_root"]
+
+    # --- v1 sensor per-entity topics ---
     entity_types = ["signal_strength", "battery"]
     if sensor_type in BINARY_SENSOR_TYPES:
         entity_types.append("state")
@@ -193,47 +323,25 @@ def _clear_v1_discovery_topics(
     else:
         entity_types.extend(["temperature", "humidity"])
 
-    hass_root = config["hass_topic_root"]
     for entity_type in entity_types:
-        component = "binary_sensor" if entity_type in ("state", "probe_state") else "sensor"
-        _publish(
-            client,
-            config,
-            logger,
-            f"{hass_root}/{component}/wyzesense_{sensor_mac}/{entity_type}/config",
-            None,
-            wait=wait,
-        )
+        platform = "binary_sensor" if entity_type in ("state", "probe_state") else "sensor"
+        topic = f"{hass_root}/{platform}/wyzesense_{sensor_mac}/{entity_type}/config"
+        _publish(client, config, logger, topic, None, wait=wait)
+
+    # --- v1 bridge topic (3.x identity) ---
+    bridge_topic = f"{hass_root}/binary_sensor/wyzesense_bridge_{dongle_mac}/connection_state/config"
+    _publish(client, config, logger, bridge_topic, None, wait=wait)
 
 
-def _clear_v2_discovery_topics(
-    client: mqtt.Client,
-    config: dict,
-    logger: logging.Logger,
-    sensor_mac: str,
-    sensor_type: str,
-    wait: bool = True,
-) -> None:
-    """Clear current device-based discovery config topic (schema v2)."""
-    _publish(
-        client,
-        config,
-        logger,
-        f"{config['hass_topic_root']}/device/wyzesense_{sensor_mac}/config",
-        None,
-        wait=wait,
-    )
-
-
-# Map: version being migrated *away from* → its cleaner
-_DISCOVERY_CLEANERS: dict[int, Callable] = {
-    1: _clear_v1_discovery_topics,
-    2: _clear_v2_discovery_topics,
-}
+# List of migration step functions, one per schema version transition.
+# Index 0 = migration to v2 (clears v1 topics), index 1 = migration to v3, etc.
+_MIGRATION_STEPS: list[Callable] = [
+    _migrate_to_v2,
+]
 
 
 # ---------------------------------------------------------------------------
-# Low-level publish helper (module-level so discovery cleaners can call it
+# Low-level publish helper (module-level so migration steps can call it
 # directly without needing a MqttGateway instance)
 # ---------------------------------------------------------------------------
 
@@ -268,6 +376,46 @@ def _publish(
     elif logger:
         logger.warning(f"MQTT publish error on {topic!r}: {mqtt.error_string(info.rc)}")
     return info
+
+
+# ---------------------------------------------------------------------------
+# Module-level sensor discovery cleanup helper
+#
+# Used by cli/maintenance.py which operates without a MqttGateway instance.
+# ---------------------------------------------------------------------------
+
+
+def clear_sensor_discovery_topics(
+    client: mqtt.Client,
+    config: dict,
+    logger: logging.Logger | None,
+    sensor_mac: str,
+    sensor_type: str,
+    wait: bool = True,
+) -> None:
+    """Clear the sensor's discovery topic from every known schema version.
+
+    Covers all versions so it is safe to call regardless of which schema
+    version originally published the sensor's config topics.
+    """
+    hass_root = config["hass_topic_root"]
+
+    # v1 per-entity sensor topics
+    entity_types = ["signal_strength", "battery"]
+    if sensor_type in BINARY_SENSOR_TYPES:
+        entity_types.append("state")
+        if sensor_type == "leak":
+            entity_types.append("probe_state")
+            entity_types.extend(["temperature", "humidity"])
+    else:
+        entity_types.extend(["temperature", "humidity"])
+    for entity_type in entity_types:
+        platform = "binary_sensor" if entity_type in ("state", "probe_state") else "sensor"
+        topic = f"{hass_root}/{platform}/wyzesense_{sensor_mac}/{entity_type}/config"
+        _publish(client, config, logger, topic, None, wait=wait)
+
+    # v2 device-based sensor topic
+    _publish(client, config, logger, f"{hass_root}/device/wyzesense_{sensor_mac}/config", None, wait=wait)
 
 
 # ---------------------------------------------------------------------------
@@ -352,15 +500,24 @@ class MqttGateway:
         return _publish(self._client, self._config, self._logger, topic, payload, is_json=is_json, wait=wait)
 
     # ------------------------------------------------------------------
-    # Bridge-level discovery
+    # Bridge discovery
     # ------------------------------------------------------------------
 
     def publish_bridge_discovery(self, dongle_mac: str, dongle_version: str, wait: bool = True) -> None:
-        """Publish the HA discovery config for the bridge connection-state entity."""
+        """Publish the HA device-based discovery config for the bridge.
+
+        Publishes a single retained topic:
+          homeassistant/device/ws2m_bridge_<mac>/config
+
+        The payload's ``components`` block is built by _build_bridge_components().
+        To add a new bridge entity, edit that function — no other code changes.
+        """
         cfg = self._config
-        state_topic = f"{cfg['self_topic_root']}/bridge_{dongle_mac}/status"
+        components = _build_bridge_components(cfg["self_topic_root"], dongle_mac)
+        for component in components.values():
+            component["has_entity_name"] = True
+
         payload = {
-            "default_entity_id": "binary_sensor.ws2m_bridge_connection_state",
             "device": {
                 "hw_version": dongle_version,
                 "identifiers": [f"ws2m_bridge_{dongle_mac}", dongle_mac],
@@ -369,24 +526,17 @@ class MqttGateway:
                 "name": f"WyzeSense2MQTT Bridge {dongle_mac}",
                 "sw_version": VERSION,
             },
-            "device_class": "connectivity",
-            "entity_category": "diagnostic",
-            "has_entity_name": True,
-            "name": "Connection state",
-            "object_id": "ws2m_bridge_connection_state",
             "origin": {
                 "name": "WyzeSense2MQTT",
                 "sw_version": VERSION,
                 "support_url": "https://github.com/raetha/wyzesense2mqtt",
             },
-            "payload_off": "offline",
-            "payload_on": "online",
+            "components": components,
             "qos": cfg["mqtt_qos"],
-            "state_topic": state_topic,
-            "unique_id": f"ws2m_bridge_{dongle_mac}_connection_state",
         }
-        topic = f"{cfg['hass_topic_root']}/binary_sensor/ws2m_bridge_{dongle_mac}/connection_state/config"
+        topic = f"{cfg['hass_topic_root']}/device/ws2m_bridge_{dongle_mac}/config"
         self.publish(topic, payload, wait=wait)
+        self._logger.debug(f"Published bridge discovery → {topic}")
 
     # ------------------------------------------------------------------
     # Sensor discovery
@@ -404,6 +554,15 @@ class MqttGateway:
 
         Uses the v2 device-based format:
           homeassistant/device/wyzesense_<mac>/config
+
+        The payload's ``components`` block is assembled from three sources:
+          1. The sensor-type-specific builder from _COMPONENT_BUILDERS
+          2. _build_diagnostic_components() — universal diagnostic entities
+          3. _build_sensor_action_components() — universal action buttons
+
+        All builders return fresh dicts, so the inject loop below can safely
+        stamp common fields (unique_id, has_entity_name, value_template) into
+        the component payloads without risk of mutating shared module state.
         """
         cfg = self._config
         sensor_type = sensor.get("sensor_type", "unknown")
@@ -414,14 +573,21 @@ class MqttGateway:
             return
 
         mac_topic = f"{cfg['self_topic_root']}/{sensor_mac}"
-        components: dict = builder(sensor_mac, sensor, mac_topic)
-        components.update(_DIAGNOSTIC_COMPONENTS)
+        remove_topic = f"{cfg['self_topic_root']}/remove"
 
-        # Inject common per-component fields
+        # Merge all component sources — all return fresh dicts, safe to mutate below
+        components: dict = builder(sensor_mac, sensor, mac_topic)
+        components.update(_build_diagnostic_components())
+        components.update(_build_sensor_action_components(sensor_mac, remove_topic))
+
+        # Inject common per-component fields.
+        # value_template is only meaningful for state-bearing platforms;
+        # skip it for action-only platforms such as button.
         for entity_key, component in components.items():
             component["unique_id"] = f"wyzesense_{sensor_mac}_{entity_key}"
             component["has_entity_name"] = True
-            component["value_template"] = f"{{{{ value_json.{entity_key} }}}}"
+            if component.get("platform") in _STATE_PLATFORMS:
+                component["value_template"] = f"{{{{ value_json.{entity_key} }}}}"
 
         type_meta = SENSOR_TYPES.get(sensor_type, SENSOR_TYPES["unknown"])
         device_payload = {
@@ -474,16 +640,15 @@ class MqttGateway:
         self.publish(f"{cfg['self_topic_root']}/{sensor_mac}", None, wait=wait)
 
         if cfg["hass_discovery"]:
-            self.clear_all_discovery_topics(sensor_mac, sensor_type, wait=wait)
+            self.clear_all_sensor_discovery_topics(sensor_mac, sensor_type, wait=wait)
 
-    def clear_all_discovery_topics(self, sensor_mac: str, sensor_type: str, wait: bool = True) -> None:
-        """Clear discovery topics from every known schema version for *sensor_mac*.
+    def clear_all_sensor_discovery_topics(self, sensor_mac: str, sensor_type: str, wait: bool = True) -> None:
+        """Clear the sensor's discovery topic from every known schema version.
 
         Safe to call regardless of which version originally published the config;
-        used for full sensor removal so no stale entities remain.
+        used for full sensor removal so no stale entities remain in HA.
         """
-        for cleaner in _DISCOVERY_CLEANERS.values():
-            cleaner(self._client, self._config, self._logger, sensor_mac, sensor_type, wait=wait)
+        clear_sensor_discovery_topics(self._client, self._config, self._logger, sensor_mac, sensor_type, wait=wait)
 
     # ------------------------------------------------------------------
     # Discovery schema migration
@@ -501,14 +666,20 @@ class MqttGateway:
         self,
         sensor_mac: str,
         sensor_type: str,
+        dongle_mac: str,
         from_version: int,
         wait: bool = True,
     ) -> None:
-        """Clear retained topics for every schema version between *from_version*
-        (inclusive) and DISCOVERY_SCHEMA_VERSION (exclusive).
+        """Clear stale retained topics for all schema versions from *from_version* to current.
+
+        Each migration step handles both sensor and bridge topics for that version
+        transition, so bridge and sensor discovery are always migrated together in
+        a single pass driven by bridge.py's _init_sensors loop.
         """
-        for version in range(from_version, DISCOVERY_SCHEMA_VERSION):
-            cleaner = _DISCOVERY_CLEANERS.get(version)
-            if cleaner:
-                self._logger.debug(f"Clearing v{version} discovery topics for {sensor_mac}")
-                cleaner(self._client, self._config, self._logger, sensor_mac, sensor_type, wait=wait)
+        for step_index in range(from_version - 1, DISCOVERY_SCHEMA_VERSION - 1):
+            if step_index < len(_MIGRATION_STEPS):
+                target_version = step_index + 2
+                self._logger.debug(f"Clearing v{target_version - 1} discovery topics for {sensor_mac}")
+                _MIGRATION_STEPS[step_index](
+                    self._client, self._config, self._logger, sensor_mac, sensor_type, dongle_mac, wait=wait
+                )

@@ -40,7 +40,7 @@ not available in earlier versions.  The Docker image now uses
 
 ### Added
 
-- **Test suite** (`tests/`) — 194 unit and integration tests covering
+- **Test suite** (`tests/`) — 198 unit and integration tests covering
   `config.py`, `sensors.py`, `mqtt.py`, `dongle_protocol.py`, and
   `bridge.py` event/availability/command logic.  Hardware smoke tests
   for the USB dongle behind a `pytest -m dongle` marker.  A synthetic
@@ -74,8 +74,13 @@ not available in earlier versions.  The Docker image now uses
     tracking, dongle auto-detection.
   - `sensors.py` — `SensorRegistry` class; unified `SENSOR_TYPES`
     registry (replaces three separate lookup tables).
-  - `mqtt.py` — `MqttGateway` class; per-sensor-type discovery component
-    builders; discovery migration helpers.
+  - `mqtt.py` — `MqttGateway` class; per-sensor-type and bridge discovery
+    component builders (factory functions returning fresh dicts, safe
+    for concurrent sensor publishes); unified `DISCOVERY_SCHEMA_VERSION`
+    covering both sensor and bridge topics with a single migration key
+    (`discovery_schema_version`) and a single migration pass per schema
+    bump; bridge now uses the same device-based format as sensors
+    (`homeassistant/device/ws2m_bridge_<mac>/config`).
   - `dongle_protocol.py` — renamed from `wyzesense.py`; fully
     snake_cased (`Open` → `open_dongle`, `Dongle.List` → `Dongle.list`,
     etc.); non-ASCII MAC bytes now decoded via latin-1 fallback instead

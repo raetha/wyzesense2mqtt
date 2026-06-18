@@ -28,7 +28,7 @@ sys.path.insert(0, __file__.rsplit("/cli", 1)[0])
 
 import paho.mqtt.client as mqtt
 from config import SENSORS_CONFIG_FILE, config_path, load_config, read_yaml
-from mqtt import _DISCOVERY_CLEANERS, _publish
+from mqtt import _publish, clear_sensor_discovery_topics
 
 LOGGER = logging.getLogger("ws2m.maintenance")
 
@@ -173,8 +173,7 @@ def run_cleanup_discovery(apply: bool = False, listen_seconds: int = 5) -> None:
     for mac in orphaned_macs:
         # Also clear any sibling topics from other schema versions not
         # directly returned by the wildcard scan
-        for cleaner in _DISCOVERY_CLEANERS.values():
-            cleaner(client, config, LOGGER, mac, "unknown", wait=False)
+        clear_sensor_discovery_topics(client, config, LOGGER, mac, "unknown", wait=False)
         _publish(client, config, LOGGER, f"{config['self_topic_root']}/{mac}/status", None, wait=False)
         _publish(client, config, LOGGER, f"{config['self_topic_root']}/{mac}", None, wait=False)
 

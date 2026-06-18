@@ -5,7 +5,7 @@ and discovery schema migration.
 MqttGateway tests use unittest.mock to avoid needing a real broker.
 """
 
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -47,10 +47,10 @@ def _make_gateway(config=None):
 # ---------------------------------------------------------------------------
 
 
-def test_binary_sensor_components_motion():
-    from mqtt import _build_binary_sensor_components
+def test_state_sensor_components_motion():
+    from mqtt import _build_state_sensor_components
 
-    components = _build_binary_sensor_components("AAAAAAAA", {"sensor_type": "motion"}, "wyzesense2mqtt/AAAAAAAA")
+    components = _build_state_sensor_components("AAAAAAAA", {"sensor_type": "motion"}, "wyzesense2mqtt/AAAAAAAA")
     assert "state" in components
     state = components["state"]
     assert state["platform"] == "binary_sensor"
@@ -59,20 +59,20 @@ def test_binary_sensor_components_motion():
     assert state["payload_off"] == "inactive"
 
 
-def test_binary_sensor_components_contact():
-    from mqtt import _build_binary_sensor_components
+def test_state_sensor_components_contact():
+    from mqtt import _build_state_sensor_components
 
-    components = _build_binary_sensor_components("AAAAAAAA", {"sensor_type": "switch"}, "wyzesense2mqtt/AAAAAAAA")
+    components = _build_state_sensor_components("AAAAAAAA", {"sensor_type": "switch"}, "wyzesense2mqtt/AAAAAAAA")
     state = components["state"]
     assert state["device_class"] == "opening"
     assert state["payload_on"] == "open"
     assert state["payload_off"] == "closed"
 
 
-def test_binary_sensor_components_contact_v2():
-    from mqtt import _build_binary_sensor_components
+def test_state_sensor_components_contact_v2():
+    from mqtt import _build_state_sensor_components
 
-    components = _build_binary_sensor_components("AAAAAAAA", {"sensor_type": "switchv2"}, "wyzesense2mqtt/AAAAAAAA")
+    components = _build_state_sensor_components("AAAAAAAA", {"sensor_type": "switchv2"}, "wyzesense2mqtt/AAAAAAAA")
     assert components["state"]["device_class"] == "opening"
 
 
@@ -102,14 +102,48 @@ def test_climate_sensor_components_structure():
     assert components["humidity"]["device_class"] == "humidity"
 
 
-def test_diagnostic_components_present():
-    from mqtt import _DIAGNOSTIC_COMPONENTS
+def test_signal_strength_disabled_by_default():
+    """signal_strength should be disabled by default (consistent with other HA integrations)."""
+    from mqtt import _build_diagnostic_components
 
-    assert "signal_strength" in _DIAGNOSTIC_COMPONENTS
-    assert "battery" in _DIAGNOSTIC_COMPONENTS
-    assert _DIAGNOSTIC_COMPONENTS["signal_strength"]["device_class"] == "signal_strength"
-    assert _DIAGNOSTIC_COMPONENTS["battery"]["device_class"] == "battery"
-    assert _DIAGNOSTIC_COMPONENTS["signal_strength"]["entity_category"] == "diagnostic"
+    components = _build_diagnostic_components()
+    assert components["signal_strength"].get("enabled_by_default") is False
+    # battery should remain enabled (users typically want low-battery warnings)
+    assert "enabled_by_default" not in components["battery"]
+
+
+def test_diagnostic_components_present():
+    """_build_diagnostic_components returns fresh dicts with the expected keys."""
+    from mqtt import _build_diagnostic_components
+
+    components = _build_diagnostic_components()
+    assert "signal_strength" in components
+    assert "battery" in components
+    assert components["signal_strength"]["device_class"] == "signal_strength"
+    assert components["battery"]["device_class"] == "battery"
+    assert components["signal_strength"]["entity_category"] == "diagnostic"
+
+
+def test_diagnostic_components_returns_fresh_dicts():
+    """_build_diagnostic_components must return a new dict on each call (no shared state)."""
+    from mqtt import _build_diagnostic_components
+
+    first = _build_diagnostic_components()
+    second = _build_diagnostic_components()
+    first["battery"]["unique_id"] = "wyzesense_AABBCCDD_battery"
+    assert "unique_id" not in second["battery"]
+
+
+def test_sensor_action_components_returns_fresh_dicts():
+    """_build_sensor_action_components must return a new dict on each call (no shared state)."""
+    from mqtt import _build_sensor_action_components
+
+    first = _build_sensor_action_components("AABBCCDD", "ws2m/remove")
+    second = _build_sensor_action_components("EEFFGGHH", "ws2m/remove")
+    assert first["remove"]["payload_press"] == "AABBCCDD"
+    assert second["remove"]["payload_press"] == "EEFFGGHH"
+    first["remove"]["unique_id"] = "injected"
+    assert "unique_id" not in second["remove"]
 
 
 def test_all_sensor_types_have_builders():
@@ -133,7 +167,6 @@ def test_publish_sensor_discovery_motion(tmp_config_dir):
     gw.publish_sensor_discovery("AAAAAAAA", sensor, "DONGLE01", sensor_online=True)
 
     assert gw._client.publish.called
-    # Extract the discovery topic call
     calls = gw._client.publish.call_args_list
     topics = [c.args[0] for c in calls]
     assert any("homeassistant/device/wyzesense_AAAAAAAA/config" in t for t in topics)
@@ -147,7 +180,6 @@ def test_publish_sensor_discovery_payload_structure(tmp_config_dir):
     sensor = {"sensor_type": "motion", "name": "Hall Motion", "sw_version": "19"}
     gw.publish_sensor_discovery("AAAAAAAA", sensor, "DONGLE01", sensor_online=True)
 
-    # Find the discovery config publish call
     for c in gw._client.publish.call_args_list:
         topic = c.args[0]
         if "device/wyzesense_AAAAAAAA/config" in topic:
@@ -189,9 +221,7 @@ def test_publish_sensor_discovery_unknown_type_does_not_publish(tmp_config_dir, 
     with caplog.at_level(logging.ERROR):
         gw.publish_sensor_discovery("AAAAAAAA", sensor, "DONGLE01", sensor_online=True)
 
-    # Should log an error but not crash
     assert any("No discovery component builder" in r.message for r in caplog.records)
-    # Should not have published a discovery config topic
     config_calls = [c for c in gw._client.publish.call_args_list if "device/wyzesense_AAAAAAAA/config" in c.args[0]]
     assert not config_calls
 
@@ -212,11 +242,58 @@ def test_publish_sensor_discovery_offline_sensor(tmp_config_dir):
 
     gw.publish_sensor_discovery("AAAAAAAA", sensor, "DONGLE01", sensor_online=False)
 
-    # Find the status publish
     for c in gw._client.publish.call_args_list:
         if "AAAAAAAA/status" in c.args[0]:
             assert c.kwargs["payload"] == "offline"
             break
+
+
+# ---------------------------------------------------------------------------
+# Sensor action components (remove button)
+# ---------------------------------------------------------------------------
+
+
+def test_sensor_discovery_includes_remove_button(tmp_config_dir):
+    """Sensor discovery payload must include a remove button component."""
+    import json
+
+    gw, cfg = _make_gateway()
+    sensor = {"sensor_type": "motion", "name": "Hall Motion"}
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, "DONGLE01", sensor_online=True)
+
+    for c in gw._client.publish.call_args_list:
+        if "device/wyzesense_AAAAAAAA/config" in c.args[0]:
+            payload = json.loads(c.kwargs["payload"])
+            components = payload["components"]
+            assert "remove" in components, "Expected 'remove' button component in sensor discovery"
+            remove = components["remove"]
+            assert remove["platform"] == "button"
+            assert remove["command_topic"].endswith("/remove")
+            assert remove["payload_press"] == "AAAAAAAA"
+            assert remove["entity_category"] == "config"
+            break
+    else:
+        pytest.fail("Discovery config publish call not found")
+
+
+def test_sensor_discovery_button_has_no_value_template(tmp_config_dir):
+    """Button components must not have value_template injected (no state topic)."""
+    import json
+
+    gw, cfg = _make_gateway()
+    sensor = {"sensor_type": "switch", "name": "Front Door"}
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, "DONGLE01", sensor_online=True)
+
+    for c in gw._client.publish.call_args_list:
+        if "device/wyzesense_AAAAAAAA/config" in c.args[0]:
+            payload = json.loads(c.kwargs["payload"])
+            remove = payload["components"]["remove"]
+            assert "value_template" not in remove, "Button component must not have value_template"
+            assert "value_template" in payload["components"]["state"]
+            assert "value_template" in payload["components"]["signal_strength"]
+            break
+    else:
+        pytest.fail("Discovery config publish call not found")
 
 
 # ---------------------------------------------------------------------------
@@ -228,33 +305,43 @@ def test_clear_sensor_topics_publishes_none_payloads(tmp_config_dir):
     gw, cfg = _make_gateway()
     gw.clear_sensor_topics("AAAAAAAA", "switch")
 
-    # All published payloads should be None (clearing retained messages)
     for c in gw._client.publish.call_args_list:
         payload = c.args[1] if len(c.args) > 1 else c.kwargs.get("payload")
         assert payload is None, f"Expected None payload for topic clear, got {payload!r}"
 
 
 # ---------------------------------------------------------------------------
-# Discovery schema migration
+# Discovery schema migration — unified single key
 # ---------------------------------------------------------------------------
 
 
-def test_migrate_discovery_clears_v1_topics(tmp_config_dir):
+def test_migrate_discovery_clears_v1_sensor_topics(tmp_config_dir):
+    """v1→v2 migration must clear legacy per-entity sensor topics."""
     gw, cfg = _make_gateway()
 
-    gw.migrate_discovery_topics("AAAAAAAA", "switch", from_version=1)
+    gw.migrate_discovery_topics("AAAAAAAA", "switch", "DONGLE01", from_version=1)
 
     topics = [c.args[0] for c in gw._client.publish.call_args_list]
-    # v1 per-entity topics should be cleared
     assert any("binary_sensor/wyzesense_AAAAAAAA" in t for t in topics)
+    for c in gw._client.publish.call_args_list:
+        assert c.kwargs["payload"] is None
+
+
+def test_migrate_discovery_clears_v1_bridge_topic(tmp_config_dir):
+    """v1→v2 migration must also clear the 3.x bridge discovery topic."""
+    gw, cfg = _make_gateway()
+
+    gw.migrate_discovery_topics("AAAAAAAA", "switch", "DONGLE01", from_version=1)
+
+    topics = [c.args[0] for c in gw._client.publish.call_args_list]
+    assert any("wyzesense_bridge_DONGLE01" in t for t in topics)
 
 
 def test_migrate_discovery_noop_when_already_current(tmp_config_dir):
     from mqtt import DISCOVERY_SCHEMA_VERSION
 
     gw, cfg = _make_gateway()
-    # from_version == DISCOVERY_SCHEMA_VERSION means nothing to migrate
-    gw.migrate_discovery_topics("AAAAAAAA", "switch", from_version=DISCOVERY_SCHEMA_VERSION)
+    gw.migrate_discovery_topics("AAAAAAAA", "switch", "DONGLE01", from_version=DISCOVERY_SCHEMA_VERSION)
 
     assert not gw._client.publish.called
 
@@ -273,11 +360,12 @@ def test_get_discovery_schema_version_defaults_to_1(tmp_config_dir):
 
 
 # ---------------------------------------------------------------------------
-# Bridge discovery
+# Bridge discovery — device-based format
 # ---------------------------------------------------------------------------
 
 
 def test_publish_bridge_discovery(tmp_config_dir):
+    """Bridge discovery uses the device-based format with a single retained topic."""
     import json
 
     gw, cfg = _make_gateway()
@@ -286,74 +374,89 @@ def test_publish_bridge_discovery(tmp_config_dir):
     assert gw._client.publish.called
     calls = gw._client.publish.call_args_list
     assert len(calls) == 1
+    topic = calls[0].args[0]
+    assert topic == "homeassistant/device/ws2m_bridge_DONGLE01/config"
+
     payload = json.loads(calls[0].kwargs["payload"])
     assert payload["device"]["name"] == "WyzeSense2MQTT Bridge DONGLE01"
-    assert payload["device_class"] == "connectivity"
+    assert payload["device"]["hw_version"] == "v1.2.3"
     assert payload["origin"]["name"] == "WyzeSense2MQTT"
 
+    components = payload["components"]
+    assert "connection_state" in components
+    assert "scan" in components
+    assert "reload" in components
+
+    conn = components["connection_state"]
+    assert conn["platform"] == "binary_sensor"
+    assert conn["device_class"] == "connectivity"
+    assert conn["entity_category"] == "diagnostic"
+    assert conn["has_entity_name"] is True
+    assert "state_topic" in conn
+
+    scan = components["scan"]
+    assert scan["platform"] == "button"
+    assert scan["entity_category"] == "config"
+    assert scan["command_topic"].endswith("/scan")
+    assert scan["payload_press"] == "scan"
+    assert scan["has_entity_name"] is True
+
+    reload_ = components["reload"]
+    assert reload_["platform"] == "button"
+    assert reload_["entity_category"] == "config"
+    assert reload_["command_topic"].endswith("/reload")
+    assert reload_["payload_press"] == "reload"
+    assert reload_["has_entity_name"] is True
+
 
 # ---------------------------------------------------------------------------
-# _clear_v1_discovery_topics — branch coverage for leak and climate types
+# clear_sensor_discovery_topics — module-level helper (used by maintenance CLI)
 # ---------------------------------------------------------------------------
 
 
-def test_clear_v1_topics_for_leak_includes_probe_and_climate():
-    """Leak sensor v1 clear should include probe_state, temperature, humidity."""
-    from unittest.mock import MagicMock
-    from mqtt import _clear_v1_discovery_topics
+def test_clear_sensor_discovery_topics_v1_leak(tmp_config_dir):
+    """Module-level helper clears all v1 per-entity topics for a leak sensor."""
+    from mqtt import clear_sensor_discovery_topics
 
     client = MagicMock()
     client.publish.return_value = MagicMock(rc=0, wait_for_publish=MagicMock())
-    config = {
-        "hass_topic_root": "homeassistant",
-        "mqtt_qos": 0,
-        "mqtt_retain": True,
-    }
+    config = {"hass_topic_root": "homeassistant", "mqtt_qos": 0, "mqtt_retain": True}
 
-    _clear_v1_discovery_topics(client, config, None, "DDDDDDDD", "leak")
+    clear_sensor_discovery_topics(client, config, None, "DDDDDDDD", "leak")
 
     topics = [c.args[0] for c in client.publish.call_args_list]
     assert any("probe_state" in t for t in topics)
     assert any("temperature" in t for t in topics)
     assert any("humidity" in t for t in topics)
+    # v2 device topic also cleared
+    assert any("device/wyzesense_DDDDDDDD/config" in t for t in topics)
 
 
-def test_clear_v1_topics_for_climate_includes_temperature_humidity():
-    """Climate sensor (non-binary) v1 clear should include temperature and humidity."""
-    from unittest.mock import MagicMock
-    from mqtt import _clear_v1_discovery_topics
+def test_clear_sensor_discovery_topics_v1_climate(tmp_config_dir):
+    """Climate sensor clear should include temperature and humidity, no binary state."""
+    from mqtt import clear_sensor_discovery_topics
 
     client = MagicMock()
     client.publish.return_value = MagicMock(rc=0, wait_for_publish=MagicMock())
-    config = {
-        "hass_topic_root": "homeassistant",
-        "mqtt_qos": 0,
-        "mqtt_retain": True,
-    }
+    config = {"hass_topic_root": "homeassistant", "mqtt_qos": 0, "mqtt_retain": True}
 
-    _clear_v1_discovery_topics(client, config, None, "CCCCCCCC", "climate")
+    clear_sensor_discovery_topics(client, config, None, "CCCCCCCC", "climate")
 
     topics = [c.args[0] for c in client.publish.call_args_list]
     assert any("temperature" in t for t in topics)
     assert any("humidity" in t for t in topics)
-    # Climate has no binary state entity
     assert not any("/state/" in t for t in topics)
 
 
-def test_clear_v1_topics_for_binary_includes_state():
-    """Binary sensor v1 clear should include the state entity."""
-    from unittest.mock import MagicMock
-    from mqtt import _clear_v1_discovery_topics
+def test_clear_sensor_discovery_topics_v1_binary(tmp_config_dir):
+    """Binary sensor clear must include the state entity."""
+    from mqtt import clear_sensor_discovery_topics
 
     client = MagicMock()
     client.publish.return_value = MagicMock(rc=0, wait_for_publish=MagicMock())
-    config = {
-        "hass_topic_root": "homeassistant",
-        "mqtt_qos": 0,
-        "mqtt_retain": True,
-    }
+    config = {"hass_topic_root": "homeassistant", "mqtt_qos": 0, "mqtt_retain": True}
 
-    _clear_v1_discovery_topics(client, config, None, "AAAAAAAA", "switch")
+    clear_sensor_discovery_topics(client, config, None, "AAAAAAAA", "switch")
 
     topics = [c.args[0] for c in client.publish.call_args_list]
     assert any("/state/" in t for t in topics)
@@ -368,9 +471,8 @@ def test_clear_v1_topics_for_binary_includes_state():
 def test_publish_logs_warning_on_failed_rc():
     """_publish should log a warning when client.publish returns a non-success rc."""
     import logging
-    from unittest.mock import MagicMock, patch
-    from mqtt import _publish
     import paho.mqtt.client as paho_mqtt
+    from mqtt import _publish
 
     client = MagicMock()
     client.publish.return_value = MagicMock(rc=paho_mqtt.MQTT_ERR_NO_CONN)
@@ -402,8 +504,6 @@ def test_gateway_client_property_raises_before_connect():
 
 def test_gateway_connect_sets_callbacks_and_connected_flag():
     """connect() should configure callbacks and wait for connected_flag."""
-    import threading
-    from unittest.mock import MagicMock, patch
     from mqtt import MqttGateway
 
     cfg = {
@@ -417,9 +517,10 @@ def test_gateway_connect_sets_callbacks_and_connected_flag():
     }
 
     mock_client_instance = MagicMock()
-    # Simulate connected_flag becoming True immediately after loop_start
+
     def _set_flag(*a, **kw):
         mock_client_instance.connected_flag = True
+
     mock_client_instance.loop_start.side_effect = _set_flag
     mock_client_instance.connected_flag = False
 
@@ -439,7 +540,6 @@ def test_gateway_connect_sets_callbacks_and_connected_flag():
 
 
 def test_gateway_disconnect_stops_loop_and_disconnects():
-    from unittest.mock import MagicMock
     from mqtt import MqttGateway
 
     gw = MqttGateway({})
@@ -466,7 +566,6 @@ def test_gateway_disconnect_noop_when_not_connected():
 
 def test_is_connected_true_when_flag_set():
     from mqtt import MqttGateway
-    from unittest.mock import MagicMock
 
     gw = MqttGateway({})
     gw._client = MagicMock()
@@ -476,7 +575,6 @@ def test_is_connected_true_when_flag_set():
 
 def test_is_connected_false_when_flag_unset():
     from mqtt import MqttGateway
-    from unittest.mock import MagicMock
 
     gw = MqttGateway({})
     gw._client = MagicMock()
@@ -490,31 +588,6 @@ def test_is_connected_false_when_no_client():
     gw = MqttGateway({})
     gw._client = None
     assert gw.is_connected is False
-
-
-# ---------------------------------------------------------------------------
-# MqttGateway.clear_all_discovery_topics — calls all cleaners
-# ---------------------------------------------------------------------------
-
-
-def test_clear_all_discovery_topics_calls_all_schema_cleaners():
-    """clear_all_discovery_topics should invoke every registered cleaner."""
-    from unittest.mock import MagicMock, patch
-    from mqtt import MqttGateway, _DISCOVERY_CLEANERS
-
-    gw, _ = _make_gateway()
-    called_versions = []
-
-    def _make_mock_cleaner(version):
-        def _cleaner(client, config, logger, mac, sensor_type, wait=True):
-            called_versions.append(version)
-        return _cleaner
-
-    mock_cleaners = {v: _make_mock_cleaner(v) for v in _DISCOVERY_CLEANERS}
-    with patch("mqtt._DISCOVERY_CLEANERS", mock_cleaners):
-        gw.clear_all_discovery_topics("AAAAAAAA", "switch")
-
-    assert set(called_versions) == set(_DISCOVERY_CLEANERS.keys())
 
 
 # ---------------------------------------------------------------------------
@@ -550,7 +623,6 @@ def test_sensor_event_str():
 
 def test_gateway_client_property_returns_client_when_connected():
     from mqtt import MqttGateway
-    from unittest.mock import MagicMock
 
     gw = MqttGateway({})
     mock_client = MagicMock()
