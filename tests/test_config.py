@@ -88,18 +88,16 @@ def test_load_config_fills_defaults(sample_config, tmp_config_dir):
     assert cfg["mqtt_keepalive"] == cfg_module.DEFAULT_CONFIG["mqtt_keepalive"]
 
 
-def test_load_config_env_override(sample_config, tmp_config_dir, monkeypatch):
-    """Environment variables override file values."""
-    monkeypatch.setenv("MQTT_HOST", "envbroker.local")
-    monkeypatch.setenv("MQTT_PORT", "8883")
-    monkeypatch.setenv("MQTT_RETAIN", "false")
+def test_load_config_env_override_prefixed(sample_config, tmp_config_dir, monkeypatch):
+    """WS2M_-prefixed environment variables override file values (preferred form)."""
+    monkeypatch.setenv("WS2M_MQTT_HOST", "envbroker.local")
+    monkeypatch.setenv("WS2M_MQTT_PORT", "8883")
+    monkeypatch.setenv("WS2M_MQTT_RETAIN", "false")
 
     import importlib
-
     import config as cfg_module
-    importlib.reload(cfg_module)  # reload to pick up fresh monkeypatched env
+    importlib.reload(cfg_module)
 
-    # Re-write the config file after reload resets CONFIG_DIR
     cfg_module.CONFIG_DIR = str(tmp_config_dir / "config")
     import yaml
     cfg_path = cfg_module.config_path(cfg_module.MAIN_CONFIG_FILE)
@@ -110,6 +108,47 @@ def test_load_config_env_override(sample_config, tmp_config_dir, monkeypatch):
     assert cfg["mqtt_host"] == "envbroker.local"
     assert cfg["mqtt_port"] == 8883
     assert cfg["mqtt_retain"] is False
+
+
+def test_load_config_env_override_unprefixed_compat(sample_config, tmp_config_dir, monkeypatch):
+    """Unprefixed environment variables are still accepted (backwards compat)."""
+    monkeypatch.setenv("MQTT_HOST", "envbroker.local")
+    monkeypatch.setenv("MQTT_PORT", "8883")
+    monkeypatch.setenv("MQTT_RETAIN", "false")
+
+    import importlib
+    import config as cfg_module
+    importlib.reload(cfg_module)
+
+    cfg_module.CONFIG_DIR = str(tmp_config_dir / "config")
+    import yaml
+    cfg_path = cfg_module.config_path(cfg_module.MAIN_CONFIG_FILE)
+    with open(cfg_path, "w") as f:
+        yaml.safe_dump(sample_config, f)
+
+    cfg, _ = cfg_module.load_config()
+    assert cfg["mqtt_host"] == "envbroker.local"
+    assert cfg["mqtt_port"] == 8883
+    assert cfg["mqtt_retain"] is False
+
+
+def test_load_config_prefixed_wins_over_unprefixed(sample_config, tmp_config_dir, monkeypatch):
+    """WS2M_-prefixed vars take precedence over unprefixed vars for the same key."""
+    monkeypatch.setenv("MQTT_HOST", "unprefixed.local")
+    monkeypatch.setenv("WS2M_MQTT_HOST", "prefixed.local")
+
+    import importlib
+    import config as cfg_module
+    importlib.reload(cfg_module)
+
+    cfg_module.CONFIG_DIR = str(tmp_config_dir / "config")
+    import yaml
+    cfg_path = cfg_module.config_path(cfg_module.MAIN_CONFIG_FILE)
+    with open(cfg_path, "w") as f:
+        yaml.safe_dump(sample_config, f)
+
+    cfg, _ = cfg_module.load_config()
+    assert cfg["mqtt_host"] == "prefixed.local"
 
 
 def test_load_config_no_mqtt_host_returns_none(tmp_config_dir):
@@ -230,8 +269,8 @@ def test_save_config_round_trips(sample_config, tmp_config_dir):
 
 def test_load_config_env_coercion_true_and_none(sample_config, tmp_config_dir, monkeypatch):
     """Env vars of 'true' and 'none' are coerced to bool True and None."""
-    monkeypatch.setenv("MQTT_RETAIN", "true")
-    monkeypatch.setenv("MQTT_PASSWORD", "none")
+    monkeypatch.setenv("WS2M_MQTT_RETAIN", "true")
+    monkeypatch.setenv("WS2M_MQTT_PASSWORD", "none")
 
     import importlib
     import config as cfg_module

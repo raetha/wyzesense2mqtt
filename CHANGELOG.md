@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Breaking changes
 
+**Data directory renamed** — the default data directory inside the container
+has been renamed from `config/` to `data/` (i.e. `/app/config` →
+`/app/data`). On first start, `service.sh` automatically creates a symlink
+`/app/data → /app/config` if an existing `/app/config` bind mount is
+detected, so existing Docker Compose installs continue to work without
+changes. To migrate cleanly, update your volume mount from `/app/config` to
+`/app/data` and remove the symlink. The `WS2M_DATA_DIR` environment variable
+can override the path entirely.
+
+**Environment variable prefix** — all ws2m-specific environment variables
+now use a `WS2M_` prefix (e.g. `MQTT_HOST` → `WS2M_MQTT_HOST`,
+`LOG_LEVEL` → `WS2M_LOG_LEVEL`). Unprefixed names are still accepted in
+4.0 for backwards compatibility but are deprecated and will be removed in
+a future release. Update your `.env` files and Docker Compose environment
+blocks — see the updated examples in `examples/`.
+
 **Logging** — logs now go to stdout only (`docker logs` / `journalctl`).
 The `logs/` directory and `config/logging.yaml` are no longer used.
 Control verbosity with `log_level` in `config.yaml` or the `LOG_LEVEL`
@@ -40,6 +56,13 @@ not available in earlier versions.  The Docker image now uses
 
 ### Added
 
+- **Home Assistant App repository** — WyzeSense2MQTT is available as a
+  Home Assistant App for HAOS and Supervised installs via
+  [raetha/home-assistant-apps](https://github.com/raetha/home-assistant-apps).
+  The standard Docker image now supports the HA App runtime directly —
+  `service.sh` detects `/data/options.json` and loads configuration from
+  it automatically, including Mosquitto broker auto-discovery via the
+  Supervisor services API. See the README for installation instructions.
 - **Test suite** (`tests/`) — 198 unit and integration tests covering
   `config.py`, `sensors.py`, `mqtt.py`, `dongle_protocol.py`, and
   `bridge.py` event/availability/command logic.  Hardware smoke tests

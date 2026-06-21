@@ -19,7 +19,13 @@ VERSION = "4.0.0"
 # Directory / file name constants
 # ---------------------------------------------------------------------------
 
-CONFIG_DIR = "config"
+# WS2M_DATA_DIR overrides the data directory at runtime.
+# Defaults to "data" (relative to the working directory).
+# On first start, service.sh creates a symlink /app/data → /app/config if an
+# existing /app/config bind mount is detected, so Docker Compose installs
+# using the old path continue to work without changes.
+# The HA App sets this to "/data" via service.sh.
+CONFIG_DIR = os.environ.get("WS2M_DATA_DIR", "data")
 
 # File names (relative to CONFIG_DIR unless noted)
 MAIN_CONFIG_FILE = "config.yaml"
@@ -116,7 +122,11 @@ def load_config(logger: logging.Logger | None = None) -> tuple[dict | None, dict
     Resolution order (later entries win):
       1. DEFAULT_CONFIG hardcoded defaults
       2. config/config.yaml (if present)
-      3. Environment variables whose names match a config key (case-insensitive)
+      3. Unprefixed environment variables matching a config key (e.g. MQTT_HOST)
+         — accepted for backwards compatibility, deprecated in 4.0.
+      4. WS2M_-prefixed environment variables (e.g. WS2M_MQTT_HOST) — preferred.
+
+    WS2M_DATA_DIR is handled separately at module level and is not a config key.
 
     Returns:
         (config, config_from_file)  –  config_from_file is None when no file
@@ -134,22 +144,32 @@ def load_config(logger: logging.Logger | None = None) -> tuple[dict | None, dict
         if config_from_file:
             cfg.update(config_from_file)
 
-    # Environment variable overrides (same names as config keys, uppercase or lower)
+    def _coerce(val: str):
+        if val.isnumeric():
+            return int(val)
+        if val.lower() == "true":
+            return True
+        if val.lower() == "false":
+            return False
+        if val.lower() == "none":
+            return None
+        return val
+
+    # Collect unprefixed vars first (backwards compat), then WS2M_-prefixed
+    # (preferred). Prefixed wins when both are present for the same key.
+    unprefixed: dict = {}
+    prefixed: dict = {}
     for env_key, env_val in os.environ.items():
-        key = env_key.lower()
-        if key not in cfg:
-            continue
-        # Coerce string env values to the same type as the default
-        if env_val.isnumeric():
-            cfg[key] = int(env_val)
-        elif env_val.lower() == "true":
-            cfg[key] = True
-        elif env_val.lower() == "false":
-            cfg[key] = False
-        elif env_val.lower() == "none":
-            cfg[key] = None
-        else:
-            cfg[key] = env_val
+        lower = env_key.lower()
+        if lower.startswith("ws2m_") and lower != "ws2m_data_dir":
+            key = lower[len("ws2m_") :]
+            if key in cfg:
+                prefixed[key] = _coerce(env_val)
+        elif lower in cfg:
+            unprefixed[lower] = _coerce(env_val)
+
+    cfg.update(unprefixed)
+    cfg.update(prefixed)
 
     # Validate required fields
     if not cfg.get("mqtt_host"):

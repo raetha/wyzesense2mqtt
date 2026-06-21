@@ -22,6 +22,7 @@ Please submit pull requests against the devel branch.
   - [Table of Contents](#table-of-contents)
   - [Installation](#installation)
     - [Docker](#docker)
+    - [Home Assistant App](#home-assistant-app)
     - [Linux Systemd](#linux-systemd)
   - [Configuration Files](#configuration-files)
     - [config.yaml](#configyaml)
@@ -56,47 +57,47 @@ services:
     stop_signal: SIGINT
     environment:
       TZ: "${TZ:-UTC}"
-      MQTT_HOST: "${MQTT_HOST}"
-      MQTT_PORT: "${MQTT_PORT:-1883}"
-      MQTT_USERNAME: "${MQTT_USERNAME}"
-      MQTT_PASSWORD: "${MQTT_PASSWORD}"
-      MQTT_CLIENT_ID: "${MQTT_CLIENT_ID:-wyzesense2mqtt}"
-      MQTT_CLEAN_SESSION: "${MQTT_CLEAN_SESSION:-false}"
-      MQTT_KEEPALIVE: "${MQTT_KEEPALIVE:-60}"
-      MQTT_QOS: "${MQTT_QOS:-0}"
-      MQTT_RETAIN: "${MQTT_RETAIN:-true}"
-      SELF_TOPIC_ROOT: "${SELF_TOPIC_ROOT:-ws2m}"
-      HASS_TOPIC_ROOT: "${HASS_TOPIC_ROOT:-homeassistant}"
-      HASS_DISCOVERY: "${HASS_DISCOVERY:-true}"
-      PUBLISH_SENSOR_NAME: "${PUBLISH_SENSOR_NAME:-true}"
-      USB_DONGLE: "${USB_DONGLE:-auto}"
-      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      WS2M_MQTT_HOST: "${WS2M_MQTT_HOST}"
+      WS2M_MQTT_PORT: "${WS2M_MQTT_PORT:-1883}"
+      WS2M_MQTT_USERNAME: "${WS2M_MQTT_USERNAME}"
+      WS2M_MQTT_PASSWORD: "${WS2M_MQTT_PASSWORD}"
+      WS2M_MQTT_CLIENT_ID: "${WS2M_MQTT_CLIENT_ID:-ws2m}"
+      WS2M_MQTT_CLEAN_SESSION: "${WS2M_MQTT_CLEAN_SESSION:-false}"
+      WS2M_MQTT_KEEPALIVE: "${WS2M_MQTT_KEEPALIVE:-60}"
+      WS2M_MQTT_QOS: "${WS2M_MQTT_QOS:-0}"
+      WS2M_MQTT_RETAIN: "${WS2M_MQTT_RETAIN:-true}"
+      WS2M_SELF_TOPIC_ROOT: "${WS2M_SELF_TOPIC_ROOT:-ws2m}"
+      WS2M_HASS_TOPIC_ROOT: "${WS2M_HASS_TOPIC_ROOT:-homeassistant}"
+      WS2M_HASS_DISCOVERY: "${WS2M_HASS_DISCOVERY:-true}"
+      WS2M_PUBLISH_SENSOR_NAME: "${WS2M_PUBLISH_SENSOR_NAME:-true}"
+      WS2M_USB_DONGLE: "${WS2M_USB_DONGLE:-auto}"
+      WS2M_LOG_LEVEL: "${WS2M_LOG_LEVEL:-INFO}"
     devices:
       - "${DEV_WYZESENSE:-/dev/hidraw0}:/dev/hidraw0"
     volumes:
-      - "${VOL_CONFIG}:/app/config"
+      - "${VOL_CONFIG}:/app/data"
 ```
 ```shell
 ### Example .env ###
 IMAGE_TAG=latest
 TZ=America/New_York
-MQTT_HOST=
-MQTT_PORT=1883
-MQTT_USERNAME=
-MQTT_PASSWORD=
-MQTT_CLIENT_ID=wyzesense2mqtt
-MQTT_CLEAN_SESSION=false
-MQTT_KEEPALIVE=60
-MQTT_QOS=0
-MQTT_RETAIN=true
-SELF_TOPIC_ROOT=wyzesense2mqtt
-HASS_TOPIC_ROOT=homeassistant
-HASS_DISCOVERY=true
-PUBLISH_SENSOR_NAME=true
-USB_DONGLE=auto
+WS2M_MQTT_HOST=
+WS2M_MQTT_PORT=1883
+WS2M_MQTT_USERNAME=
+WS2M_MQTT_PASSWORD=
+WS2M_MQTT_CLIENT_ID=ws2m
+WS2M_MQTT_CLEAN_SESSION=false
+WS2M_MQTT_KEEPALIVE=60
+WS2M_MQTT_QOS=0
+WS2M_MQTT_RETAIN=true
+WS2M_SELF_TOPIC_ROOT=ws2m
+WS2M_HASS_TOPIC_ROOT=homeassistant
+WS2M_HASS_DISCOVERY=true
+WS2M_PUBLISH_SENSOR_NAME=true
+WS2M_USB_DONGLE=auto
+WS2M_LOG_LEVEL=INFO
 DEV_WYZESENSE=/dev/hidraw0
 VOL_CONFIG=/docker/wyzesense2mqtt/config
-LOG_LEVEL=INFO
 ```
 3. Create your local volume mounts. Use the same folders you entered in the Docker Compose files created above.
 ```bash
@@ -109,6 +110,22 @@ mkdir /docker/wyzesense2mqtt/config
 docker-compose up -d
 ```
 7. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, though the sensor version will be unknown and the class will default to opening, i.e. a contact sensor. You should manually update these entries.
+
+### Home Assistant App
+
+WyzeSense2MQTT is available as a Home Assistant App for HAOS and Supervised
+installs via a dedicated app repository. The app auto-discovers the Mosquitto
+broker app so no MQTT configuration is needed in most cases.
+
+[![Add to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fraetha%2Fhome-assistant-apps)
+
+Or add the repository URL manually in **Settings → Apps → App Store → ⋮ → Repositories**:
+```
+https://github.com/raetha/home-assistant-apps
+```
+
+See the [home-assistant-apps repository](https://github.com/raetha/home-assistant-apps)
+for full installation and configuration documentation.
 
 ### Linux Systemd
 

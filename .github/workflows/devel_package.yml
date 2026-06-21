@@ -22,25 +22,18 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      # https://github.com/docker/setup-qemu-action
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 
-      # Set up BuildKit Docker container builder to be able to build multi-platform images and export cache
-      # https://github.com/docker/setup-buildx-action
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      # Extract metadata (tags, labels) for Docker
-      # https://github.com/docker/metadata-action
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
 
-      # Login against a Docker registry
-      # https://github.com/docker/login-action
       - name: Log into registry
         uses: docker/login-action@v4
         with:
@@ -48,10 +41,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Build and push Docker image with Buildx
-      # https://github.com/docker/build-push-action
       - name: Build and push Docker image
-        id: build-and-push
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -62,6 +52,7 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
   docker-io:
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
@@ -75,35 +66,25 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      # https://github.com/docker/setup-qemu-action
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 
-      # Set up BuildKit Docker container builder to be able to build multi-platform images and export cache
-      # https://github.com/docker/setup-buildx-action
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      # Extract metadata (tags, labels) for Docker
-      # https://github.com/docker/metadata-action
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ github.repository }}
 
-      # Login against a Docker registry
-      # https://github.com/docker/login-action
       - name: Log into registry
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Build and push Docker image with Buildx
-      # https://github.com/docker/build-push-action
       - name: Build and push Docker image
-        id: build-and-push
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -114,3 +95,31 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  notify-ha-apps:
+    name: Notify HA Apps repo
+    needs: [ghcr-io, docker-io]
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Extract version from config.py
+        id: version
+        run: |
+          VERSION=$(grep '^VERSION' wyzesense2mqtt/config.py | sed 's/.*"\(.*\)"/\1/')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch sync to home-assistant-apps
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.HA_APPS_PAT }}
+          repository: raetha/home-assistant-apps
+          event-type: ws2m-devel
+          client-payload: '{"version": "${{ steps.version.outputs.version }}"}'
