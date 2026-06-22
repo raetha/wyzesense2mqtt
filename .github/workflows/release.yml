@@ -13,7 +13,7 @@ jobs:
       contents: write   # needed to create releases
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Extract changelog for this release
         id: changelog
@@ -46,7 +46,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # https://github.com/docker/setup-qemu-action
       - name: Set up QEMU
@@ -98,7 +98,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # https://github.com/docker/setup-qemu-action
       - name: Set up QEMU

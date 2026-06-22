@@ -11,7 +11,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     
     # https://github.com/octue/generate-pull-request-description
     # Use the lines below in the PR description to trigger
