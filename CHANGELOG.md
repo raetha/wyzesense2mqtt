@@ -56,6 +56,35 @@ not available in earlier versions.  The Docker image now uses
 
 ### Added
 
+- **Wyze Sense Keypad v2 (WSKP1) support** — full bridge support for the
+  HMS keypad.  Publishes arm/disarm mode, motion, and PIN events to MQTT.
+  Creates an `alarm_control_panel` entity and a `motion` binary sensor in
+  HA via discovery.  PIN validation against a configurable list in
+  `sensors.yaml`.  Sends `CMD_SEND_KEYPAD_EVENT` to update the keypad
+  display/LEDs when HA or Alarmo pushes a new alarm state.  See
+  [docs/keypad.md](docs/keypad.md) for full setup instructions including
+  Alarmo integration and entry/exit delay handling.
+- **Wyze Video Doorbell V1 Chime (WCHIME1) partial support** — wires up
+  `CMD_PLAY_CHIME` (protocol support originally added by HclX) to HA
+  discovery.  Creates a `button` entity (play), and `number` entities for
+  ring tone (0–255), volume (1–9), and repeat count (1–9).  Number values
+  are adjustable from the HA device page and persisted to `sensors.yaml`
+  automatically.  Ring tone IDs and their sounds are undocumented; see
+  [docs/contributing_protocol.md](docs/contributing_protocol.md) for how
+  to explore and report ring ID mappings.
+- **`docs/keypad.md`** — setup guide for the Wyze Sense Keypad covering
+  MQTT topics, HA discovery entities, PIN configuration, Alarmo
+  integration (entry/exit delays, code validation), and manual HA
+  automation examples.
+- **`docs/contributing_protocol.md`** — guide for contributors wanting
+  to capture HID traffic, add support for new packet types, or help
+  identify unknowns (e.g. keypad display feedback behaviour, chime ring
+  tone IDs).  Covers `capture_hid.py`, `bridge_tool monitor`, packet
+  framing reference, and what to include in a bug report.
+- **`tools/fuzz_keypad.py`** — systematic protocol fuzzer for exploring
+  unknown dongle commands (Pass 1: cmd_id sweep; Pass 2: payload sweep).
+  Skips known-dangerous commands, probes dongle health between attempts,
+  and logs every packet sent for post-hoc analysis.
 - **Home Assistant App repository** — WyzeSense2MQTT is available as a
   Home Assistant App for HAOS and Supervised installs via
   [raetha/home-assistant-apps](https://github.com/raetha/home-assistant-apps).

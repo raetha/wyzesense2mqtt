@@ -163,6 +163,95 @@ def _build_climate_sensor_components(sensor_mac: str, sensor: dict, mac_topic: s
     }
 
 
+def _build_keypad_components(sensor_mac: str, sensor: dict, mac_topic: str) -> dict:
+    """Components for the Wyze Sense V2 Keypad.
+
+    The keypad publishes three distinct event types to the same MAC topic:
+      keypad_mode       — alarm_control_panel state (disarmed/armed_home/armed_away/triggered)
+      keypad_motion     — PIR motion sensor on the keypad face
+      keypad_pin_*      — PIN entry events (not exposed as HA entities; for automation use only)
+
+    The alarm_control_panel entity uses a separate command topic so that HA /
+    Alarmo can push the current alarm state back to the keypad's MQTT topic,
+    enabling future LED-state feedback if the keypad firmware supports it.
+    """
+    command_topic = f"{mac_topic}/set"
+    return {
+        "alarm_mode": {
+            "platform": "alarm_control_panel",
+            "name": None,
+            "state_topic": mac_topic,
+            "command_topic": command_topic,
+            "value_template": "{{ value_json.alarm_mode }}",
+            "payload_disarm": "disarmed",
+            "payload_arm_home": "armed_home",
+            "payload_arm_away": "armed_away",
+            "payload_trigger": "triggered",
+            "json_attributes_topic": mac_topic,
+        },
+        "motion": {
+            "platform": "binary_sensor",
+            "name": "Motion",
+            "device_class": "motion",
+            "payload_on": "active",
+            "payload_off": "inactive",
+            "json_attributes_topic": mac_topic,
+        },
+    }
+
+
+def _build_chime_components(sensor_mac: str, sensor: dict, mac_topic: str) -> dict:
+    """Components for the Wyze Sense Chime (plug-in RF speaker, Wyze Doorbell V1 accessory).
+
+    The chime is output-only.  ws2m sends CMD_PLAY_CHIME (0x70) when commanded.
+    Three configurable parameters are exposed as HA number entities so the user
+    can adjust them from the device page without editing sensors.yaml directly.
+    ws2m persists changes back to sensors.yaml when values are updated via MQTT.
+
+    ring_id valid values and tone mapping are undocumented; the full range 0–255
+    is allowed.  See docs/contributing_protocol.md for how to explore ring IDs.
+    """
+    return {
+        "play": {
+            "platform": "button",
+            "name": None,
+            "command_topic": f"{mac_topic}/play",
+            "payload_press": "PLAY",
+            "device_class": "sound",
+        },
+        "ring_id": {
+            "platform": "number",
+            "name": "Ring tone",
+            "state_topic": f"{mac_topic}/ring_id",
+            "command_topic": f"{mac_topic}/ring_id/set",
+            "min": 0,
+            "max": 255,
+            "step": 1,
+            "mode": "box",
+        },
+        "volume": {
+            "platform": "number",
+            "name": "Volume",
+            "state_topic": f"{mac_topic}/volume",
+            "command_topic": f"{mac_topic}/volume/set",
+            "min": 1,
+            "max": 9,
+            "step": 1,
+            "mode": "slider",
+        },
+        "repeat_count": {
+            "platform": "number",
+            "name": "Repeat count",
+            "state_topic": f"{mac_topic}/repeat_count",
+            "command_topic": f"{mac_topic}/repeat_count/set",
+            "min": 1,
+            "max": 9,
+            "step": 1,
+            "mode": "box",
+        },
+    }
+
+
 # Map sensor_type → component builder.
 # Sensors that report a single on/off state share _build_state_sensor_components.
 _COMPONENT_BUILDERS: dict[str, Callable] = {
@@ -172,6 +261,8 @@ _COMPONENT_BUILDERS: dict[str, Callable] = {
     "switchv2": _build_state_sensor_components,
     "leak": _build_leak_sensor_components,
     "climate": _build_climate_sensor_components,
+    "chime": _build_chime_components,
+    "keypad": _build_keypad_components,
 }
 
 
@@ -225,7 +316,12 @@ def _build_sensor_action_components(sensor_mac: str, remove_topic: str) -> dict:
     }
 
 
-# Platform types that expose a state value — value_template is injected only for these
+# Platform types that expose a state value via the shared mac_topic JSON payload —
+# value_template is injected only for these.
+# Excluded platforms manage their own state topics or have no state topic:
+#   alarm_control_panel — value_template set explicitly in _build_keypad_components
+#   button              — command-only, no state topic
+#   number              — each entity has its own dedicated state_topic
 _STATE_PLATFORMS: frozenset[str] = frozenset({"sensor", "binary_sensor"})
 
 
@@ -320,11 +416,24 @@ def _migrate_to_v2(
         if sensor_type == "leak":
             entity_types.append("probe_state")
             entity_types.extend(["temperature", "humidity"])
+    elif sensor_type == "keypad":
+        entity_types.extend(["alarm_mode", "motion"])
+    elif sensor_type == "chime":
+        entity_types.extend(["play", "ring_id", "volume", "repeat_count"])
     else:
         entity_types.extend(["temperature", "humidity"])
 
     for entity_type in entity_types:
-        platform = "binary_sensor" if entity_type in ("state", "probe_state") else "sensor"
+        if entity_type == "alarm_mode":
+            platform = "alarm_control_panel"
+        elif entity_type == "play":
+            platform = "button"
+        elif entity_type in ("ring_id", "volume", "repeat_count"):
+            platform = "number"
+        elif entity_type in ("state", "probe_state", "motion"):
+            platform = "binary_sensor"
+        else:
+            platform = "sensor"
         topic = f"{hass_root}/{platform}/wyzesense_{sensor_mac}/{entity_type}/config"
         _publish(client, config, logger, topic, None, wait=wait)
 
@@ -407,10 +516,23 @@ def clear_sensor_discovery_topics(
         if sensor_type == "leak":
             entity_types.append("probe_state")
             entity_types.extend(["temperature", "humidity"])
+    elif sensor_type == "keypad":
+        entity_types.extend(["alarm_mode", "motion"])
+    elif sensor_type == "chime":
+        entity_types.extend(["play", "ring_id", "volume", "repeat_count"])
     else:
         entity_types.extend(["temperature", "humidity"])
     for entity_type in entity_types:
-        platform = "binary_sensor" if entity_type in ("state", "probe_state") else "sensor"
+        if entity_type == "alarm_mode":
+            platform = "alarm_control_panel"
+        elif entity_type == "play":
+            platform = "button"
+        elif entity_type in ("ring_id", "volume", "repeat_count"):
+            platform = "number"
+        elif entity_type in ("state", "probe_state", "motion"):
+            platform = "binary_sensor"
+        else:
+            platform = "sensor"
         topic = f"{hass_root}/{platform}/wyzesense_{sensor_mac}/{entity_type}/config"
         _publish(client, config, logger, topic, None, wait=wait)
 

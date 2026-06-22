@@ -364,3 +364,27 @@ def test_get_type_meta_all_known_types():
     for sensor_type in SENSOR_TYPES:
         meta = SensorRegistry.get_type_meta(sensor_type)
         assert meta == SENSOR_TYPES[sensor_type]
+
+
+def test_keypad_in_sensor_types():
+    """'keypad' sensor type is registered in SENSOR_TYPES."""
+    from sensors import SENSOR_TYPES, BINARY_SENSOR_TYPES
+
+    assert "keypad" in SENSOR_TYPES
+    meta = SENSOR_TYPES["keypad"]
+    assert meta["hw_version"] == "V2"
+    assert "timeout_hours" in meta
+    # Keypad is NOT a binary sensor — it has no device_class
+    assert "keypad" not in BINARY_SENSOR_TYPES
+
+
+
+def test_chime_in_sensor_types():
+    """'chime' sensor type is registered in SENSOR_TYPES with correct metadata."""
+    from sensors import SENSOR_TYPES, BINARY_SENSOR_TYPES
+
+    assert "chime" in SENSOR_TYPES
+    meta = SENSOR_TYPES["chime"]
+    assert meta["hw_version"] == "V1"
+    assert "timeout_hours" in meta
+    assert "chime" not in BINARY_SENSOR_TYPES

@@ -159,6 +159,11 @@ log_level: INFO
 This file stores per-sensor configuration for each sensor paired to the Wyze Sense Bridge. Entries can be modified to set the sensor name and class as they will appear in Home Assistant. The `class` field maps to an HA binary_sensor device class (`opening`, `door`, `window`, `motion`, `moisture`, etc.). A per-sensor availability timeout can be set via `timeout` (in seconds); the default is 28800 s (8 h) for v1 sensors and 14400 s (4 h) for v2 sensors.
 
 Sensors added via the `scan` MQTT command will populate this file automatically with the correct `sensor_type` and `sw_version`. Sensors that were previously paired and auto-discovered will default to `class: opening` and will not have `sw_version` set. For v1 devices `sw_version` is typically `19`; for v2 devices it is typically `23`.
+
+The **Keypad v2** supports an optional `pins` list for PIN validation. If omitted, all PIN entries are treated as valid. See [docs/keypad.md](docs/keypad.md) for full details.
+
+The **Chime** supports optional `ring_id` (0–255, default 0), `volume` (1–9, default 5), and `repeat_count` (1–9, default 1) keys. These can also be adjusted live from the HA device page — changes are written back to this file automatically.
+
 ```yaml
 'AAAAAAAA':
   class: door
@@ -186,6 +191,18 @@ Sensors added via the `scan` MQTT command will populate this file automatically 
   name: Basement Moisture
   invert_state: true
   sw_version: 19
+'KPADKPAD':
+  name: Front Door Keypad
+  sensor_type: keypad
+  pins:
+    - "1234"
+    - "5678"
+'CHIMEMAC':
+  name: Front Door Chime
+  sensor_type: chime
+  ring_id: 0
+  volume: 5
+  repeat_count: 1
 ```
 
 ## Usage
@@ -247,6 +264,10 @@ See [docs/HA_MQTT_COMPLIANCE.md](docs/HA_MQTT_COMPLIANCE.md) for details on the 
 ## Home Assistant
 Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add a device for each sensor, along with entities for state, battery, and signal strength (plus temperature/humidity for climate and leak sensors). By default these entities will have a `device_class` of `opening` for contact sensors, `motion` for motion sensors, and `moisture` for leak sensors, and the device will be named `WyzeSense <MAC>`. To adjust the `device_class` to `door` or `window` and set a custom device name, update the `sensors.yaml` configuration file and trigger a [reload](#reload-sensors).
 
+The **Keypad v2** (WSKP1) creates an `alarm_control_panel` entity and a `motion` binary sensor. It is designed to be used with [Alarmo](https://github.com/nielsfaber/alarmo) or HA automations — see [docs/keypad.md](docs/keypad.md) for full setup instructions including entry/exit delay handling and PIN configuration.
+
+The **Wyze Video Doorbell V1 Chime** (WCHIME1) creates a `button` entity to trigger playback and `number` entities for ring tone, volume, and repeat count. These settings are adjustable directly from the HA device page and are persisted to `sensors.yaml` automatically.
+
 Discovery uses Home Assistant's device-based MQTT discovery format (one config topic per device, covering all of its entities). See [docs/HA_MQTT_COMPLIANCE.md](docs/HA_MQTT_COMPLIANCE.md) for the HA version this was last verified against and notes on the discovery schema and migrations.
 
 ## Compatible Hardware
@@ -260,7 +281,8 @@ Discovery uses Home Assistant's device-based MQTT discovery format (one config t
     * Motion Sensor v2 (WSMS2)
     * Climate Sensor (WSCS1)
     * Leak Sensor (WSLS1)
-    * Keypad (WSKP1) - Future Possibility (need help)
+    * Keypad v2 (WSKP1) — See [docs/keypad.md](docs/keypad.md) for setup with Home Assistant and Alarmo
+    * Wyze Video Doorbell V1 Chime (WCHIME1) — Partial support; play command and ring tone, volume, and repeat controls are available via HA. Ring tone IDs are undocumented — see [docs/contributing_protocol.md](docs/contributing_protocol.md).
 
 ### Neos Smart Branded
 * Neos Smart Bridge (N-LSP-US1)

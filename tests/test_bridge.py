@@ -360,3 +360,62 @@ def test_on_mqtt_remove_invalid_mac(tmp_config_dir, sample_config):
     bridge._dongle.delete.assert_called_once()
     # but registry delete should NOT be called for an invalid mac
     bridge._registry.delete_sensor.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _mac_from_topic helper
+# ---------------------------------------------------------------------------
+
+
+def test_mac_from_topic_simple_root(tmp_config_dir, sample_config):
+    """Extracts MAC correctly when self_topic_root has no slashes."""
+    from bridge import Bridge
+
+    b = Bridge.__new__(Bridge)
+    b._logger = __import__("logging").getLogger("test")
+    b._config = {**sample_config, "self_topic_root": "ws2m"}
+    assert b._mac_from_topic("ws2m/AABBCCDD/set", "/set") == "AABBCCDD"
+
+
+def test_mac_from_topic_slashed_root(tmp_config_dir, sample_config):
+    """Extracts MAC correctly when self_topic_root contains slashes."""
+    from bridge import Bridge
+
+    b = Bridge.__new__(Bridge)
+    b._logger = __import__("logging").getLogger("test")
+    b._config = {**sample_config, "self_topic_root": "home/ws2m"}
+    assert b._mac_from_topic("home/ws2m/AABBCCDD/set", "/set") == "AABBCCDD"
+
+
+def test_mac_from_topic_wrong_prefix(tmp_config_dir, sample_config, caplog):
+    """Returns None when topic does not start with expected prefix."""
+    from bridge import Bridge
+
+    b = Bridge.__new__(Bridge)
+    b._logger = __import__("logging").getLogger("test")
+    b._config = {**sample_config, "self_topic_root": "ws2m"}
+    result = b._mac_from_topic("other/AABBCCDD/set", "/set")
+    assert result is None
+
+
+def test_mac_from_topic_wrong_suffix(tmp_config_dir, sample_config):
+    """Returns None when topic does not end with expected suffix."""
+    from bridge import Bridge
+
+    b = Bridge.__new__(Bridge)
+    b._logger = __import__("logging").getLogger("test")
+    b._config = {**sample_config, "self_topic_root": "ws2m"}
+    result = b._mac_from_topic("ws2m/AABBCCDD/play", "/set")
+    assert result is None
+
+
+def test_mac_from_topic_extra_segments(tmp_config_dir, sample_config):
+    """Returns None when MAC portion contains extra slashes (not a bare MAC)."""
+    from bridge import Bridge
+
+    b = Bridge.__new__(Bridge)
+    b._logger = __import__("logging").getLogger("test")
+    b._config = {**sample_config, "self_topic_root": "ws2m"}
+    # Would be ambiguous — MAC should be a single segment
+    result = b._mac_from_topic("ws2m/AABBCCDD/extra/set", "/set")
+    assert result is None

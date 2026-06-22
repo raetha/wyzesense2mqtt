@@ -147,3 +147,38 @@ def make_leak_v2_payload(
         0x00, 0x01, signal_strength,
     )
     return header + body
+
+
+def make_keypad_hms_payload(
+    mac: str = "KPADKPAD",
+    sensor_type: int = 0x05,  # SENSOR_TYPE_KEYPAD
+    sub_event: int = 0x02,    # _KEYPAD_EVENT_MODE
+    state_byte: int = 0x01,   # disarmed
+    battery: int = 100,       # raw 0–155 scale
+    signal_strength: int = 40,
+    pin: str = "",
+) -> bytes:
+    """Build a v2 keypad HMS packet payload (NOTIFY_SENSOR_ALARM2 inner bytes).
+
+    Layout:
+      [0]      top-level event byte (unused by keypad; set to 0x00)
+      [1..8]   MAC (8 bytes)
+      [9]      sensor_type (0x05)
+      --- data stripped by from_packet_v2 starts here ---
+      [0]      total payload length byte
+      [1..4]   padding
+      [5]      sub-event type
+      [6]      state byte
+      [7]      raw battery (0–155)
+      [8]      signal strength (positive RSSI)
+      [9..]    PIN digits (for PIN_CONFIRM only)
+    """
+    import struct
+
+    header = struct.pack(">B8sB", 0x00, mac.encode("ascii"), sensor_type)
+    pin_bytes = pin.encode("ascii") if pin else b""
+    total_len = 6 + len(pin_bytes)
+    padding = b"\x00" * 4
+    data = struct.pack(">B", total_len) + padding + struct.pack(">BBB", sub_event, state_byte, battery)
+    data += struct.pack(">B", signal_strength) + pin_bytes
+    return header + data

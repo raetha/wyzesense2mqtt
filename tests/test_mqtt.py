@@ -628,3 +628,150 @@ def test_gateway_client_property_returns_client_when_connected():
     mock_client = MagicMock()
     gw._client = mock_client
     assert gw.client is mock_client
+
+
+# ---------------------------------------------------------------------------
+# Keypad discovery component builder
+# ---------------------------------------------------------------------------
+
+
+def test_build_keypad_components_has_alarm_control_panel():
+    """Keypad builder produces an alarm_control_panel component for alarm_mode."""
+    from mqtt import _build_keypad_components
+
+    result = _build_keypad_components("KPADKPAD", {}, "wyzesense2mqtt/KPADKPAD")
+    assert "alarm_mode" in result
+    assert result["alarm_mode"]["platform"] == "alarm_control_panel"
+    assert "payload_disarm" in result["alarm_mode"]
+    assert "payload_arm_home" in result["alarm_mode"]
+    assert "payload_arm_away" in result["alarm_mode"]
+    assert "command_topic" in result["alarm_mode"]
+
+
+def test_build_keypad_components_has_motion():
+    """Keypad builder produces a binary_sensor component for motion."""
+    from mqtt import _build_keypad_components
+
+    result = _build_keypad_components("KPADKPAD", {}, "wyzesense2mqtt/KPADKPAD")
+    assert "motion" in result
+    assert result["motion"]["platform"] == "binary_sensor"
+    assert result["motion"]["device_class"] == "motion"
+
+
+def test_build_keypad_components_returns_fresh_dicts():
+    """Each call to the keypad builder returns an independent dict."""
+    from mqtt import _build_keypad_components
+
+    r1 = _build_keypad_components("KPADKPAD", {}, "wyzesense2mqtt/KPADKPAD")
+    r2 = _build_keypad_components("KPADKPAD", {}, "wyzesense2mqtt/KPADKPAD")
+    r1["alarm_mode"]["sentinel"] = True
+    assert "sentinel" not in r2["alarm_mode"]
+
+
+def test_keypad_registered_in_component_builders():
+    """'keypad' is present in the _COMPONENT_BUILDERS registry."""
+    from mqtt import _COMPONENT_BUILDERS
+
+    assert "keypad" in _COMPONENT_BUILDERS
+
+
+def test_publish_sensor_discovery_keypad(sample_config, tmp_config_dir):
+    """publish_sensor_discovery does not raise for a keypad sensor."""
+    from unittest.mock import MagicMock, patch
+    from mqtt import MqttGateway
+
+    gw = MqttGateway(sample_config)
+    mock_client = MagicMock()
+    mock_client.publish.return_value = MagicMock(rc=0, wait_for_publish=MagicMock())
+    gw._client = mock_client
+
+    sensor = {"sensor_type": "keypad", "name": "Front Keypad"}
+    gw.publish_sensor_discovery("KPADKPAD", sensor, "DONGLMAC", sensor_online=True)
+
+    assert mock_client.publish.called
+    topic_args = [call.args[0] for call in mock_client.publish.call_args_list]
+    assert any("wyzesense_KPADKPAD" in t for t in topic_args)
+
+
+
+
+# ---------------------------------------------------------------------------
+# Chime discovery component builder
+# ---------------------------------------------------------------------------
+
+
+def test_build_chime_components_has_play_button():
+    """Chime builder produces a button entity for triggering playback."""
+    from mqtt import _build_chime_components
+
+    result = _build_chime_components("CHIMEMAC", {}, "wyzesense2mqtt/CHIMEMAC")
+    assert "play" in result
+    assert result["play"]["platform"] == "button"
+    assert result["play"]["payload_press"] == "PLAY"
+    assert result["play"]["command_topic"].endswith("/play")
+
+
+def test_build_chime_components_has_number_entities():
+    """Chime builder produces number entities for ring_id, volume, repeat_count."""
+    from mqtt import _build_chime_components
+
+    result = _build_chime_components("CHIMEMAC", {}, "wyzesense2mqtt/CHIMEMAC")
+    for key in ("ring_id", "volume", "repeat_count"):
+        assert key in result, f"Missing chime number entity: {key}"
+        assert result[key]["platform"] == "number"
+        assert "state_topic" in result[key]
+        assert "command_topic" in result[key]
+        assert result[key]["command_topic"].endswith(f"/{key}/set")
+
+
+def test_build_chime_ring_id_range():
+    """ring_id number entity spans 0–255."""
+    from mqtt import _build_chime_components
+
+    result = _build_chime_components("CHIMEMAC", {}, "wyzesense2mqtt/CHIMEMAC")
+    assert result["ring_id"]["min"] == 0
+    assert result["ring_id"]["max"] == 255
+
+
+def test_build_chime_volume_range():
+    """volume number entity spans 1–9."""
+    from mqtt import _build_chime_components
+
+    result = _build_chime_components("CHIMEMAC", {}, "wyzesense2mqtt/CHIMEMAC")
+    assert result["volume"]["min"] == 1
+    assert result["volume"]["max"] == 9
+
+
+def test_build_chime_components_returns_fresh_dicts():
+    """Each call to the chime builder returns an independent dict."""
+    from mqtt import _build_chime_components
+
+    r1 = _build_chime_components("CHIMEMAC", {}, "wyzesense2mqtt/CHIMEMAC")
+    r2 = _build_chime_components("CHIMEMAC", {}, "wyzesense2mqtt/CHIMEMAC")
+    r1["ring_id"]["sentinel"] = True
+    assert "sentinel" not in r2["ring_id"]
+
+
+def test_chime_registered_in_component_builders():
+    """'chime' is present in the _COMPONENT_BUILDERS registry."""
+    from mqtt import _COMPONENT_BUILDERS
+
+    assert "chime" in _COMPONENT_BUILDERS
+
+
+def test_publish_sensor_discovery_chime(sample_config, tmp_config_dir):
+    """publish_sensor_discovery creates button and number discovery topics for chime."""
+    from unittest.mock import MagicMock
+    from mqtt import MqttGateway
+
+    gw = MqttGateway(sample_config)
+    mock_client = MagicMock()
+    mock_client.publish.return_value = MagicMock(rc=0, wait_for_publish=MagicMock())
+    gw._client = mock_client
+
+    sensor = {"sensor_type": "chime", "name": "Front Door Chime"}
+    gw.publish_sensor_discovery("CHIMEMAC", sensor, "DONGLMAC", sensor_online=True)
+
+    assert mock_client.publish.called
+    topic_args = [call.args[0] for call in mock_client.publish.call_args_list]
+    assert any("wyzesense_CHIMEMAC" in t for t in topic_args)

@@ -88,6 +88,24 @@ SENSOR_TYPES: dict[str, dict] = {
         "timeout_hours": 4,
         # No binary state fields – climate sensors produce numeric entities only
     },
+    "chime": {
+        "model": "Wyze Sense Chime",
+        "hw_version": "V1",
+        "timeout_hours": 24,
+        # Chime is a plug-in RF speaker unit paired with the Wyze Video Doorbell V1.
+        # It is output-only — ws2m sends CMD_PLAY_CHIME (0x70) to trigger it.
+        # Configurable per-device in sensors.yaml:
+        #   ring_id:      0–255  (tone index; valid values unknown — use fuzz script)
+        #   repeat_count: 1–9   (default 1)
+        #   volume:       1–9   (default 5)
+    },
+    "keypad": {
+        "model": "Wyze Sense V2 Keypad",
+        "hw_version": "V2",
+        "timeout_hours": 4,
+        # No binary state fields — keypad publishes alarm_mode and motion as
+        # separate event types; see _build_keypad_components() in mqtt.py
+    },
     "unknown": {
         "model": "WyzeSense Sensor",
         "hw_version": "unknown",

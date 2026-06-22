@@ -530,3 +530,195 @@ def test_sensor_event_non_ascii_mac_in_alarm():
     # Should not raise; MAC is decoded as latin-1 and falls through to _parse_unknown
     ev = SensorEvent.from_packet(payload)
     assert ev.mac == mac_bytes.decode("latin-1")
+
+
+# ---------------------------------------------------------------------------
+# Keypad HMS event parsing
+# ---------------------------------------------------------------------------
+
+
+def test_keypad_mode_disarmed():
+    """Keypad mode event: state_byte=0x01 → alarm_mode='disarmed'."""
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload = make_keypad_hms_payload(sub_event=0x02, state_byte=0x01, battery=100, signal_strength=40)
+    ev = SensorEvent.from_packet_v2(payload)
+    assert ev.event == "keypad_mode"
+    assert ev.sensor_type == "keypad"
+    assert ev.alarm_mode == "disarmed"
+    assert ev.signal_strength == -40
+
+
+def test_keypad_mode_armed_home():
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload = make_keypad_hms_payload(sub_event=0x02, state_byte=0x02)
+    ev = SensorEvent.from_packet_v2(payload)
+    assert ev.alarm_mode == "armed_home"
+
+
+def test_keypad_mode_armed_away():
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload = make_keypad_hms_payload(sub_event=0x02, state_byte=0x03)
+    ev = SensorEvent.from_packet_v2(payload)
+    assert ev.alarm_mode == "armed_away"
+
+
+def test_keypad_mode_triggered():
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload = make_keypad_hms_payload(sub_event=0x02, state_byte=0x04)
+    ev = SensorEvent.from_packet_v2(payload)
+    assert ev.alarm_mode == "triggered"
+
+
+def test_keypad_mode_inactive_is_unknown():
+    """State byte 0x00 (Inactive/transient) maps to 'unknown'."""
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload = make_keypad_hms_payload(sub_event=0x02, state_byte=0x00)
+    ev = SensorEvent.from_packet_v2(payload)
+    assert ev.alarm_mode == "unknown"
+
+
+def test_keypad_mode_unknown_state():
+    """Unknown state byte is represented as 'unknown:NN' rather than raising."""
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload = make_keypad_hms_payload(sub_event=0x02, state_byte=0xFF)
+    ev = SensorEvent.from_packet_v2(payload)
+    assert ev.alarm_mode.startswith("unknown:")
+
+
+def test_keypad_motion_active():
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload = make_keypad_hms_payload(sub_event=0x0A, state_byte=1)
+    ev = SensorEvent.from_packet_v2(payload)
+    assert ev.event == "keypad_motion"
+    assert ev.motion == "active"
+
+
+def test_keypad_motion_inactive():
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload = make_keypad_hms_payload(sub_event=0x0A, state_byte=0)
+    ev = SensorEvent.from_packet_v2(payload)
+    assert ev.motion == "inactive"
+
+
+def test_keypad_pin_start():
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload = make_keypad_hms_payload(sub_event=0x06)
+    ev = SensorEvent.from_packet_v2(payload)
+    assert ev.event == "keypad_pin_start"
+    assert ev.sensor_type == "keypad"
+    assert not hasattr(ev, "pin")
+
+
+def test_keypad_pin_confirm_with_pin():
+    """PIN confirm event carries PIN digits."""
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload = make_keypad_hms_payload(sub_event=0x08, pin="1234")
+    ev = SensorEvent.from_packet_v2(payload)
+    assert ev.event == "keypad_pin_confirm"
+    assert ev.pin == "1234"
+
+
+def test_keypad_pin_confirm_empty_pin():
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload = make_keypad_hms_payload(sub_event=0x08, pin="")
+    ev = SensorEvent.from_packet_v2(payload)
+    assert ev.event == "keypad_pin_confirm"
+    assert ev.pin == ""
+
+
+def test_keypad_battery_normalised():
+    """Raw battery value 155 → 100%; 78 → ~50%."""
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload_full = make_keypad_hms_payload(sub_event=0x02, state_byte=1, battery=155)
+    ev_full = SensorEvent.from_packet_v2(payload_full)
+    assert ev_full.battery == 100
+
+    payload_half = make_keypad_hms_payload(sub_event=0x02, state_byte=1, battery=78)
+    ev_half = SensorEvent.from_packet_v2(payload_half)
+    assert ev_half.battery == 50
+
+
+def test_keypad_short_payload_returns_unknown():
+    """A payload too short to parse produces an 'unknown:*' event rather than crashing."""
+    import struct
+    from dongle_protocol import SensorEvent, SENSOR_TYPE_KEYPAD
+
+    # Only the 10-byte header, no data bytes at all
+    header = struct.pack(">B8sB", 0x00, b"KPADKPAD", SENSOR_TYPE_KEYPAD)
+    # from_packet_v2 strips 10 bytes, leaving 0 bytes of data
+    ev = SensorEvent.from_packet_v2(header)
+    assert ev.event.startswith("unknown:")
+
+
+def test_keypad_unknown_sub_event():
+    """Unrecognised sub-event byte produces an 'unknown:*' event."""
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload = make_keypad_hms_payload(sub_event=0xFF)
+    ev = SensorEvent.from_packet_v2(payload)
+    assert ev.event.startswith("unknown:")
+
+
+def test_keypad_sensor_type_name():
+    """SENSOR_TYPE_KEYPAD (0x05) maps to 'keypad' in SENSOR_TYPE_NAMES."""
+    from dongle_protocol import SENSOR_TYPE_KEYPAD, SENSOR_TYPE_NAMES
+
+    assert SENSOR_TYPE_NAMES[SENSOR_TYPE_KEYPAD] == "keypad"
+
+
+def test_keypad_alarm_sub_event():
+    """Sub-event 0x0C produces a 'keypad_alarm' event with alarm_raw field."""
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload = make_keypad_hms_payload(sub_event=0x0C, state_byte=0x01)
+    ev = SensorEvent.from_packet_v2(payload)
+    assert ev.event == "keypad_alarm"
+    assert ev.sensor_type == "keypad"
+    assert ev.alarm_raw == 0x01
+
+
+def test_send_keypad_status_packet_builds():
+    """Packet.send_keypad_status builds a CMD_SEND_KEYPAD_EVENT packet."""
+    from dongle_protocol import Packet
+
+    pkt = Packet.send_keypad_status("KPADKPAD", 0x01)
+    raw = pkt._to_bytes() if hasattr(pkt, "_to_bytes") else None
+    # Verify the cmd encodes CMD_SEND_KEYPAD_EVENT (0x53/0x53)
+    assert pkt.cmd == Packet.CMD_SEND_KEYPAD_EVENT
+    # State byte 0x01 (disarmed) should be in the payload
+    assert 0x01 in pkt.payload
+
+
+def test_send_keypad_status_all_states():
+    """send_keypad_status accepts all known state bytes without raising."""
+    from dongle_protocol import Packet
+
+    for state_byte in (0x01, 0x02, 0x03, 0x04, 0x05):
+        pkt = Packet.send_keypad_status("KPADKPAD", state_byte)
+        assert pkt.cmd == Packet.CMD_SEND_KEYPAD_EVENT

@@ -51,6 +51,12 @@ class Bridge:
         self._remove_topic = ""
         self._reload_topic = ""
 
+        # Keypad command topics: mac → topic (populated as keypads are discovered)
+        self._keypad_command_topics: dict[str, str] = {}
+
+        # Chime command topics: mac → set of subscribed topics
+        self._chime_subscribed: set[str] = set()
+
     # ------------------------------------------------------------------
     # Startup sequence
     # ------------------------------------------------------------------
@@ -132,6 +138,17 @@ class Bridge:
                 client.message_callback_add(self._scan_topic, self._on_mqtt_scan)
                 client.message_callback_add(self._remove_topic, self._on_mqtt_remove)
                 client.message_callback_add(self._reload_topic, self._on_mqtt_reload)
+                # Re-subscribe to any keypad command topics (covers reconnect case)
+                for _mac, cmd_topic in list(self._keypad_command_topics.items()):
+                    client.subscribe(cmd_topic, self._config["mqtt_qos"])
+                    client.message_callback_add(cmd_topic, self._on_mqtt_keypad_command)
+                # Re-subscribe to chime number set topics (covers reconnect case)
+                for topic in list(self._chime_subscribed):
+                    client.subscribe(topic, self._config["mqtt_qos"])
+                # Re-register chime callbacks and re-publish number states
+                for mac, sensor in list(self._registry.sensors.items()):
+                    if sensor.get("sensor_type") == "chime":
+                        self._subscribe_chime(mac)
                 client.connected_flag = True
                 host = self._config["mqtt_host"]
                 port = self._config["mqtt_port"]
@@ -151,6 +168,10 @@ class Bridge:
             client.message_callback_remove(self._scan_topic)
             client.message_callback_remove(self._remove_topic)
             client.message_callback_remove(self._reload_topic)
+            for cmd_topic in self._keypad_command_topics.values():
+                client.message_callback_remove(cmd_topic)
+            for topic in self._chime_subscribed:
+                client.message_callback_remove(topic)
             client.connected_flag = False
             self._logger.info(f"Disconnected from MQTT broker (reason: {reason_code})")
 
@@ -216,6 +237,13 @@ class Bridge:
             for mac in list(registry.state):
                 if registry.is_valid_mac(mac):
                     self._publish_sensor_discovery(mac, wait=wait)
+
+        # Subscribe to command topics for any already-configured keypads and chimes
+        for mac, sensor in list(registry.sensors.items()):
+            if sensor.get("sensor_type") == "keypad" and self._gateway and self._gateway.is_connected:
+                self._subscribe_keypad_command(mac)
+            elif sensor.get("sensor_type") == "chime" and self._gateway and self._gateway.is_connected:
+                self._subscribe_chime(mac)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -293,6 +321,193 @@ class Bridge:
         self._registry.save_state()
         self._init_sensors(wait=False)
 
+    def _subscribe_chime(self, mac: str) -> None:
+        """Subscribe to the chime play and number set topics if not already done.
+
+        Also publishes current ring_id / volume / repeat_count values to their
+        respective state topics so HA number entities initialise correctly.
+        """
+        cfg = self._config
+        mac_topic = f"{cfg['self_topic_root']}/{mac}"
+
+        topics = {
+            f"{mac_topic}/play": self._on_mqtt_chime_play,
+            f"{mac_topic}/ring_id/set": self._on_mqtt_chime_number,
+            f"{mac_topic}/volume/set": self._on_mqtt_chime_number,
+            f"{mac_topic}/repeat_count/set": self._on_mqtt_chime_number,
+        }
+
+        for topic, callback in topics.items():
+            if topic not in self._chime_subscribed:
+                self._chime_subscribed.add(topic)
+            self._gateway.client.subscribe(topic, cfg["mqtt_qos"])
+            self._gateway.client.message_callback_add(topic, callback)
+            self._logger.debug(f"Subscribed to chime topic: {topic}")
+
+        self._publish_chime_number_states(mac)
+
+    def _publish_chime_number_states(self, mac: str) -> None:
+        """Publish current ring_id / volume / repeat_count to their HA number state topics."""
+        cfg = self._config
+        sensor_cfg = self._registry.sensors.get(mac, {})
+        mac_topic = f"{cfg['self_topic_root']}/{mac}"
+        self._gateway.publish(f"{mac_topic}/ring_id", str(int(sensor_cfg.get("ring_id", 0))), is_json=False)
+        self._gateway.publish(f"{mac_topic}/volume", str(int(sensor_cfg.get("volume", 5))), is_json=False)
+        self._gateway.publish(f"{mac_topic}/repeat_count", str(int(sensor_cfg.get("repeat_count", 1))), is_json=False)
+
+    def _mac_from_topic(self, topic: str, expected_suffix: str) -> str | None:
+        """Extract the sensor MAC from an MQTT topic by stripping the configured
+        self_topic_root prefix and a known trailing suffix.
+
+        Works correctly even when self_topic_root contains slashes.
+
+        Example:
+            root = "home/ws2m", topic = "home/ws2m/AABBCCDD/set", suffix = "/set"
+            → "AABBCCDD"
+
+        Returns None and logs a warning if the topic does not match the expected pattern.
+        """
+        root = self._config["self_topic_root"]
+        prefix = f"{root}/"
+        if not topic.startswith(prefix):
+            self._logger.warning(f"Topic {topic!r} does not start with expected prefix {prefix!r}")
+            return None
+        remainder = topic[len(prefix) :]  # e.g. "AABBCCDD/set"
+        if not remainder.endswith(expected_suffix):
+            self._logger.warning(f"Topic {topic!r} does not end with expected suffix {expected_suffix!r}")
+            return None
+        mac = remainder[: -len(expected_suffix)]
+        # MAC must be a single path segment — reject if it contains a slash
+        if "/" in mac:
+            self._logger.warning(f"Could not extract MAC from topic {topic!r}: unexpected path structure")
+            return None
+        return mac
+
+    def _on_mqtt_chime_play(self, client, userdata, msg) -> None:
+        """Handle a chime play button press from HA."""
+        mac = self._mac_from_topic(msg.topic, "/play")
+        if mac is None:
+            return
+        sensor_cfg = self._registry.sensors.get(mac, {})
+        ring_id = int(sensor_cfg.get("ring_id", 0))
+        repeat_count = int(sensor_cfg.get("repeat_count", 1))
+        volume = int(sensor_cfg.get("volume", 5))
+        self._logger.info(f"Chime play: {mac} ring_id={ring_id} repeat={repeat_count} vol={volume}")
+        if self._dongle is not None:
+            try:
+                self._dongle.play_chime(mac, ring_id, repeat_count, volume)
+            except Exception as exc:
+                self._logger.warning(f"Failed to play chime {mac}: {exc}")
+
+    def _on_mqtt_chime_number(self, client, userdata, msg) -> None:
+        """Handle a number entity update (ring_id, volume, or repeat_count) from HA.
+
+        Persists the new value to sensors.yaml so it survives restarts, then
+        echoes it back to the state topic so the HA entity reflects the change.
+        """
+        root = self._config["self_topic_root"]
+        prefix = f"{root}/"
+        if not msg.topic.startswith(prefix):
+            self._logger.warning(f"Unexpected chime number topic: {msg.topic!r}")
+            return
+        remainder = msg.topic[len(prefix) :]  # "<mac>/<param>/set"
+        parts = remainder.split("/")
+        if len(parts) != 3 or parts[2] != "set":
+            self._logger.warning(f"Unexpected chime number topic structure: {msg.topic!r}")
+            return
+        mac = parts[0]
+        param = parts[1]  # "ring_id", "volume", or "repeat_count"
+
+        try:
+            raw = msg.payload.decode(errors="replace").strip()
+            value = int(float(raw))  # HA may send "5.0" for integer sliders
+        except (ValueError, TypeError):
+            self._logger.warning(f"Non-numeric chime {param} value: {msg.payload!r}")
+            return
+
+        # Clamp to valid ranges
+        if param == "ring_id":
+            value = max(0, min(255, value))
+        elif param in ("volume", "repeat_count"):
+            value = max(1, min(9, value))
+
+        sensor_cfg = self._registry.sensors.get(mac, {})
+        if sensor_cfg.get(param) == value:
+            return  # no change
+
+        self._logger.info(f"Chime {mac}: {param} → {value}")
+        self._registry.sensors.setdefault(mac, {})[param] = value
+        self._registry.save_sensors()
+
+        # Echo back to state topic
+        cfg = self._config
+        self._gateway.publish(
+            f"{cfg['self_topic_root']}/{mac}/{param}",
+            str(value),
+            is_json=False,
+        )
+
+    def _subscribe_keypad_command(self, mac: str) -> None:
+        """Subscribe to the command topic for a keypad sensor if not already subscribed.
+
+        The command topic receives payloads from HA / Alarmo reflecting the
+        current alarm state (e.g. "disarmed", "armed_away").  ws2m logs these
+        and publishes them back to the keypad's state topic so HA entities
+        stay consistent.  Future keypad firmware updates may use this to drive
+        physical LED feedback.
+        """
+        cfg = self._config
+        cmd_topic = f"{cfg['self_topic_root']}/{mac}/set"
+        if mac not in self._keypad_command_topics:
+            self._keypad_command_topics[mac] = cmd_topic
+            self._gateway.client.subscribe(cmd_topic, cfg["mqtt_qos"])
+            self._gateway.client.message_callback_add(cmd_topic, self._on_mqtt_keypad_command)
+            self._logger.debug(f"Subscribed to keypad command topic: {cmd_topic}")
+
+    def _on_mqtt_keypad_command(self, client, userdata, msg) -> None:
+        """Handle an inbound command from HA / Alarmo on a keypad command topic.
+
+        Publishes the new alarm state back to the keypad's state topic so the
+        alarm_control_panel entity in HA reflects the current state, and sends
+        CMD_SEND_KEYPAD_EVENT to the dongle so the keypad's display and LEDs
+        update accordingly.
+
+        HA/Alarmo payload → dongle state byte mapping (confirmed by PR + AK5nowman/WyzeSense):
+          disarmed    → 0x01
+          armed_home  → 0x02
+          armed_away  → 0x03
+          triggered   → 0x04
+        """
+        # Derive MAC from topic: <self_topic_root>/<mac>/set
+        mac = self._mac_from_topic(msg.topic, "/set")
+        if mac is None:
+            return
+        payload_str = msg.payload.decode(errors="replace").strip()
+        self._logger.info(f"Keypad command received for {mac}: {payload_str!r}")
+
+        # Reflect the commanded state back onto the state topic so HA stays in sync
+        self._gateway.publish(
+            f"{self._config['self_topic_root']}/{mac}",
+            {"alarm_mode": payload_str},
+        )
+
+        # Map HA alarm state string → keypad state byte and push to dongle
+        _HA_MODE_TO_STATE_BYTE: dict[str, int] = {
+            "disarmed": 0x01,
+            "armed_home": 0x02,
+            "armed_away": 0x03,
+            "triggered": 0x04,
+        }
+        state_byte = _HA_MODE_TO_STATE_BYTE.get(payload_str)
+        if state_byte is not None and self._dongle is not None:
+            try:
+                self._dongle.send_keypad_status(mac, state_byte)
+                self._logger.debug(f"Sent keypad status 0x{state_byte:02X} to {mac}")
+            except Exception as exc:
+                self._logger.warning(f"Failed to send keypad status to {mac}: {exc}")
+        elif state_byte is None:
+            self._logger.debug(f"No keypad state byte mapping for {payload_str!r} — display not updated")
+
     # ------------------------------------------------------------------
     # Dongle event handler
     # ------------------------------------------------------------------
@@ -340,6 +555,14 @@ class Bridge:
                     if cfg["hass_discovery"]:
                         self._publish_sensor_discovery(event.mac)
 
+        # Ensure keypad command topic is subscribed whenever we see a keypad event
+        if getattr(event, "sensor_type", None) == "keypad":
+            self._subscribe_keypad_command(event.mac)
+
+        # Ensure chime topics are subscribed whenever we see a chime heartbeat
+        if getattr(event, "sensor_type", None) == "chime":
+            self._subscribe_chime(event.mac)
+
         # Update last_seen and flip online flag if the sensor was previously offline
         registry.state[event.mac]["last_seen"] = event.timestamp
         if not registry.state[event.mac]["online"]:
@@ -347,6 +570,64 @@ class Bridge:
             self._logger.info(f"{event.mac} is back online")
 
         self._gateway.publish(f"{cfg['self_topic_root']}/{event.mac}/status", "online", is_json=False)
+
+        # Route keypad events to the appropriate MQTT payload
+        if event.event == "keypad_mode":
+            self._gateway.publish(
+                f"{cfg['self_topic_root']}/{event.mac}",
+                {
+                    "alarm_mode": event.alarm_mode,
+                    "battery": getattr(event, "battery", None),
+                    "signal_strength": getattr(event, "signal_strength", None),
+                },
+            )
+            return
+
+        if event.event == "keypad_motion":
+            self._gateway.publish(
+                f"{cfg['self_topic_root']}/{event.mac}",
+                {
+                    "motion": event.motion,
+                    "battery": getattr(event, "battery", None),
+                    "signal_strength": getattr(event, "signal_strength", None),
+                },
+            )
+            return
+
+        if event.event == "keypad_pin_start":
+            self._logger.debug(f"Keypad {event.mac}: PIN entry started")
+            # PIN start is informational only — no MQTT publish needed
+            return
+
+        if event.event == "keypad_pin_confirm":
+            # Validate PIN against sensors.yaml if configured; always publish the event
+            sensor_cfg = registry.sensors.get(event.mac, {})
+            configured_pins = sensor_cfg.get("pins", [])
+            if isinstance(configured_pins, str):
+                configured_pins = [configured_pins]
+            pin_valid = not configured_pins or event.pin in configured_pins
+            self._logger.info(f"Keypad {event.mac}: PIN confirmed — valid={pin_valid}")
+            self._gateway.publish(
+                f"{cfg['self_topic_root']}/{event.mac}/pin",
+                {
+                    "pin_valid": pin_valid,
+                    "battery": getattr(event, "battery", None),
+                    "signal_strength": getattr(event, "signal_strength", None),
+                },
+            )
+            return
+
+        if event.event == "keypad_alarm":
+            # Sub-event 0x0C — exact semantics unknown; publish raw value for automations
+            self._gateway.publish(
+                f"{cfg['self_topic_root']}/{event.mac}/alarm",
+                {
+                    "alarm_raw": getattr(event, "alarm_raw", None),
+                    "battery": getattr(event, "battery", None),
+                    "signal_strength": getattr(event, "signal_strength", None),
+                },
+            )
+            return
 
         if event.event not in ("alarm", "status"):
             self._logger.debug(f"Ignoring non-data event type {event.event!r} from {event.mac}")

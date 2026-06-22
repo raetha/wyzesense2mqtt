@@ -70,6 +70,7 @@ def _make_cmd(cmd_type: int, cmd_id: int) -> int:
 SENSOR_TYPE_SWITCH = 0x01
 SENSOR_TYPE_MOTION = 0x02
 SENSOR_TYPE_LEAK = 0x03
+SENSOR_TYPE_KEYPAD = 0x05
 SENSOR_TYPE_CLIMATE = 0x07
 SENSOR_TYPE_CHIME = 0x0C
 SENSOR_TYPE_SWITCH_V2 = 0x0E
@@ -84,6 +85,7 @@ SENSOR_TYPE_NAMES: dict[int, str] = {
     SENSOR_TYPE_LEAK: "leak",
     SENSOR_TYPE_CLIMATE: "climate",
     SENSOR_TYPE_CHIME: "chime",
+    SENSOR_TYPE_KEYPAD: "keypad",
 }
 
 # Map numeric sensor type → (off_state, on_state) string tuple
@@ -100,6 +102,26 @@ _EVENT_HEARTBEAT = 0xA1
 _EVENT_ALARM = 0xA2
 _EVENT_CLIMATE = 0xE8
 _EVENT_LEAK = 0xEA
+
+# Keypad sub-event type bytes (found inside the NOTIFY_SENSOR_ALARM2 HMS payload)
+_KEYPAD_EVENT_MODE = 0x02  # arm/disarm state change request
+_KEYPAD_EVENT_MOTION = 0x0A  # PIR motion sensor
+_KEYPAD_EVENT_PIN_START = 0x06  # user started entering a PIN (no digits yet); keypad may be polling for status
+_KEYPAD_EVENT_PIN_CONFIRM = 0x08  # user finished entering a PIN (digits follow)
+_KEYPAD_EVENT_ALARM = 0x0C  # some kind of alarm event (exact meaning TBD)
+
+# Keypad mode state values — raw byte from event_data[6].
+# Both the PR (drinfernoo) and AK5nowman/WyzeSense agree on this mapping:
+#   PR:        states[raw] = ["unknown","disarmed","armed_home","armed_away","triggered"]
+#   AK5nowman: (WyzeKeyPadState)(raw + 1), where enum is {1=Active,2=Disarmed,3=Home,4=Away,5=Alarm}
+# Both resolve to the same raw→meaning mapping.
+_KEYPAD_MODE_STATES: dict[int, str] = {
+    0x00: "unknown",  # Inactive / transient — no stable alarm panel meaning
+    0x01: "disarmed",
+    0x02: "armed_home",
+    0x03: "armed_away",
+    0x04: "triggered",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +154,14 @@ class Packet:
     CMD_GET_SENSOR_COUNT = _make_cmd(_TYPE_ASYNC, 0x2E)
     CMD_GET_SENSOR_LIST = _make_cmd(_TYPE_ASYNC, 0x30)
     CMD_PLAY_CHIME = _make_cmd(_TYPE_ASYNC, 0x70)
+    # Send the current alarm state to the keypad (drives its display/LEDs).
+    # cmd_type=0x53 (ASYNC), cmd_id=0x53.  Payload layout confirmed from
+    # AK5nowman/WyzeSense C# (KeyPadEventPacket): [0xAA][0x55][0x53][0x0F][0x53]
+    # [0x00]*8 [state_byte] [0x00][cs_hi][cs_lo].  State byte values:
+    #   0x01=disarmed, 0x02=armed_home, 0x03=armed_away, 0x04=inactive(?), 0x05=triggered
+    # NOTE: the outer framing is handled by Packet.send(); only the inner
+    # payload bytes (after cmd_id) are stored here.
+    CMD_SEND_KEYPAD_EVENT = _make_cmd(_TYPE_ASYNC, 0x53)
 
     NOTIFY_SENSOR_ALARM = _make_cmd(_TYPE_ASYNC, 0x19)
     NOTIFY_SENSOR_SCAN = _make_cmd(_TYPE_ASYNC, 0x20)
@@ -297,6 +327,25 @@ class Packet:
         return cls(cls.CMD_PLAY_CHIME, mac.encode("ascii") + bytes([ring_id, repeat_count, volume]))
 
     @classmethod
+    def send_keypad_status(cls, mac: str, state_byte: int) -> "Packet":
+        """Build a packet that pushes the current alarm state to the keypad display.
+
+        Payload layout confirmed from AK5nowman/WyzeSense C# (KeyPadEventPacket).
+        State byte raw values (confirmed by both the PR and AK5nowman):
+          0x01 = disarmed
+          0x02 = armed_home
+          0x03 = armed_away
+          0x04 = triggered/alarm
+        (Raw byte 0x00 = Inactive/transient; not sent as a status update.)
+        """
+        assert isinstance(mac, str) and len(mac) == 8
+        assert isinstance(state_byte, int) and 0x00 <= state_byte <= 0xFF
+        # The C# KeyPadEventPacket encodes these fixed bytes followed by
+        # 8 zero bytes, the state, and a trailing zero.
+        inner = bytes([0xAA, 0x55, 0x53, 0x0F, 0x53]) + b"\x00" * 8 + bytes([state_byte, 0x00])
+        return cls(cls.CMD_SEND_KEYPAD_EVENT, inner)
+
+    @classmethod
     def sync_time_ack(cls) -> "Packet":
         return cls(cls.NOTIFY_SYNC_TIME + 1, struct.pack(">Q", int(time.time() * 1000)))
 
@@ -322,6 +371,9 @@ class SensorEvent:
             # mV of 3 V sensors; double the raw value to normalise.
             if self.sensor_type == SENSOR_TYPE_NAMES.get(SENSOR_TYPE_SWITCH_V2):
                 self.battery = self.battery * 2
+            # Keypad reports raw battery in a 0–155 range; normalise to 0–100 %.
+            elif self.sensor_type == SENSOR_TYPE_NAMES.get(SENSOR_TYPE_KEYPAD):
+                self.battery = int(self.battery / 155 * 100)
             self.battery = min(self.battery, 100)
 
         if "signal_strength" in self.__dict__:
@@ -412,6 +464,98 @@ class SensorEvent:
         )
 
     @classmethod
+    def _parse_keypad(cls, mac: str, event: int, sensor_type: int, timestamp: float, data: bytes) -> "SensorEvent":
+        """Parse an HMS keypad packet payload.
+
+        Packet layout (data bytes after the 10-byte header stripped by from_packet_v2):
+          [0]      total payload length (including this byte)
+          [1..4]   unknown / padding
+          [5]      keypad sub-event type
+          [6]      state or mode value (sub-event dependent)
+          [7]      raw battery level (0–155 scale)
+          [8]      signal strength (positive RSSI; negated by __init__)
+          [9..]    PIN digits (only present for _KEYPAD_EVENT_PIN_CONFIRM,
+                   count = data[0] - 6, ASCII digit bytes)
+        """
+        if len(data) < 9:
+            _logger.warning("Short keypad HMS payload (%d bytes): %s", len(data), bytes_to_hex(data))
+            return cls._parse_unknown(mac, event, sensor_type, timestamp, data)
+
+        sub_event = data[5]
+        state_byte = data[6]
+        battery = data[7]
+        signal_strength = data[8]
+
+        if sub_event == _KEYPAD_EVENT_MODE:
+            mode = _KEYPAD_MODE_STATES.get(state_byte, f"unknown:{state_byte:02X}")
+            return cls(
+                "keypad_mode",
+                mac,
+                timestamp,
+                sensor_type="keypad",
+                battery=battery,
+                signal_strength=signal_strength,
+                alarm_mode=mode,
+            )
+
+        if sub_event == _KEYPAD_EVENT_MOTION:
+            motion = "active" if state_byte else "inactive"
+            return cls(
+                "keypad_motion",
+                mac,
+                timestamp,
+                sensor_type="keypad",
+                battery=battery,
+                signal_strength=signal_strength,
+                motion=motion,
+            )
+
+        if sub_event == _KEYPAD_EVENT_PIN_START:
+            return cls(
+                "keypad_pin_start",
+                mac,
+                timestamp,
+                sensor_type="keypad",
+                battery=battery,
+                signal_strength=signal_strength,
+            )
+
+        if sub_event == _KEYPAD_EVENT_PIN_CONFIRM:
+            # PIN digits follow at data[9..], count = data[0] - 6
+            pin_len = max(0, data[0] - 6)
+            pin_bytes = data[9 : 9 + pin_len]
+            try:
+                pin = pin_bytes.decode("ascii")
+            except UnicodeDecodeError:
+                _logger.warning("Non-ASCII PIN digits in keypad packet: %s", bytes_to_hex(pin_bytes))
+                pin = ""
+            return cls(
+                "keypad_pin_confirm",
+                mac,
+                timestamp,
+                sensor_type="keypad",
+                battery=battery,
+                signal_strength=signal_strength,
+                pin=pin,
+            )
+
+        if sub_event == _KEYPAD_EVENT_ALARM:
+            # Observed in AK5nowman's WyzeSense C# library as "Some sort of alarm event?"
+            # Exact semantics unknown; bridge publishes it for automation use.
+            return cls(
+                "keypad_alarm",
+                mac,
+                timestamp,
+                sensor_type="keypad",
+                battery=battery,
+                signal_strength=signal_strength,
+                alarm_raw=state_byte,
+            )
+
+        _logger.warning("Unknown keypad sub-event 0x%02X: %s", sub_event, bytes_to_hex(data))
+        return cls._parse_unknown(mac, event, sensor_type, timestamp, data)
+
+    @classmethod
     def _parse_unknown(cls, mac: str, event: int, sensor_type: int, timestamp: float, data: bytes) -> "SensorEvent":
         return cls(f"unknown:{event:02X}", mac, timestamp, raw=bytes_to_hex(data))
 
@@ -436,7 +580,13 @@ class SensorEvent:
 
     @classmethod
     def from_packet_v2(cls, data: bytes) -> "SensorEvent":
-        """Parse a v2 leak/climate packet payload."""
+        """Parse a v2 HMS packet payload (NOTIFY_SENSOR_ALARM2).
+
+        Handles leak, climate, and keypad (HMS) packets.  The keypad uses a
+        different internal structure from leak/climate — it has a sub-event
+        type inside the payload rather than a top-level event byte — so it is
+        dispatched separately based on sensor_type rather than event byte.
+        """
         _EVENT_PARSERS = {
             _EVENT_LEAK: cls._parse_leak,
             _EVENT_CLIMATE: cls._parse_climate,
@@ -449,6 +599,12 @@ class SensorEvent:
         except UnicodeDecodeError:
             _logger.warning("Non-ASCII MAC in v2 packet: %s", bytes_to_hex(mac_bytes))
             mac = mac_bytes.decode("latin-1")
+
+        # Keypad packets use sensor_type 0x05 and carry sub-event structure
+        # inside data rather than a meaningful top-level event byte.
+        if sensor_type == SENSOR_TYPE_KEYPAD:
+            return cls._parse_keypad(mac, event, sensor_type, timestamp, data)
+
         parser = _EVENT_PARSERS.get(event, cls._parse_unknown)
         return parser(mac, event, sensor_type, timestamp, data)
 
@@ -820,6 +976,25 @@ class Dongle:
     def play_chime(self, mac: str, ring_id: int, repeat_count: int, volume: int) -> None:
         """Play a chime tone on a paired chime sensor."""
         self._do_simple_command(Packet.play_chime(mac, ring_id, repeat_count, volume))
+
+    def send_keypad_status(self, mac: str, state_byte: int) -> None:
+        """Push the current alarm state to the keypad display/LEDs.
+
+        This sends CMD_SEND_KEYPAD_EVENT (0x53/0x53) to the dongle, which
+        relays it to the paired keypad over RF.  The keypad updates its
+        display and indicator LEDs to reflect the new state.
+
+        State byte values (confirmed by PR + AK5nowman/WyzeSense):
+          0x01 = disarmed
+          0x02 = armed_home
+          0x03 = armed_away
+          0x04 = triggered/alarm
+
+        Note: This command's full effect on the keypad (sounds, LED colours)
+        has not been confirmed with physical hardware.  Feedback welcome —
+        see docs/contributing_protocol.md.
+        """
+        self._do_simple_command(Packet.send_keypad_status(mac, state_byte))
 
     def send_raw(self, data: bytes) -> None:
         """Send a raw packet (for diagnostics / testing)."""
