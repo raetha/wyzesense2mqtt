@@ -42,13 +42,27 @@ in your config.
 `ws2m_version`, `discovery_schema_version` → `ws2m_discovery_schema`.
 Update any HA templates or automations that reference these attributes.
 
-**Bridge HA device identity** — the bridge connection-state device
-identifier changed from `wyzesense2mqtt_bridge_<mac>` to
-`ws2m_bridge_<mac>` for consistency.  On first 4.0 startup the bridge
-automatically clears the old retained discovery topic.  You will still
-see a stale bridge device in HA's device registry; delete it manually
-after upgrading — the new one will already be present.  Individual
-sensor devices (`wyzesense_<mac>`) are unchanged.
+**Bridge HA device identity** — the single `ws2m_bridge_<mac>` device
+has been split into two: a software service device (`ws2m_service_<uuid>`)
+and a hardware dongle device (`ws2m_dongle_<mac>`).  Scan and remove
+buttons move to the dongle device; reload stays on the service device.
+On first 4.0 startup the bridge automatically clears all pre-4.0 retained
+topics in a single migration step (discovery schema v1→v2).
+Delete the stale bridge device from HA's device registry manually after
+upgrading — the new service and dongle devices will already be present.
+Individual sensor devices (`wyzesense_<mac>`) are unchanged.
+
+**Sensor data directory restructured** — per-sensor config and state
+files have moved from `<data>/sensors.yaml` and `<data>/state.yaml` to
+`<data>/dongles/<dongle_mac>/sensors.yaml` and `state.yaml`.  On first
+start, existing flat files are automatically migrated into the correct
+per-dongle directory, so no manual action is needed for single-dongle
+installs.
+
+**Scan and remove MQTT topics are now dongle-scoped** — previously
+`ws2m/scan` and `ws2m/remove`; now `ws2m/dongle_<mac>/scan` and
+`ws2m/dongle_<mac>/remove`.  Update any direct MQTT automations that
+used the old global scan/remove topics.
 
 **Python 3.12+ required** — 4.0 uses `X | Y` union type hint syntax
 not available in earlier versions.  The Docker image now uses
@@ -56,6 +70,27 @@ not available in earlier versions.  The Docker image now uses
 
 ### Added
 
+- **Multi-dongle support** — when `usb_dongle: auto` is set (the
+  default), ws2m detects and connects to all WyzeSense bridge dongles
+  present at startup.  Each dongle gets its own `DongleWorker` (owning
+  an independent `SensorRegistry` and dongle-scoped MQTT topics), while
+  a single `Bridge` orchestrates the shared MQTT connection and publishes
+  a software-level service device to HA.  Explicit device paths
+  (`/dev/hidrawN`) remain supported for single-dongle installs.
+- **HA device hierarchy** — three-level device tree: `ws2m_service_<uuid>`
+  (software) → `ws2m_dongle_<mac>` (hardware) → `wyzesense_<mac>` (sensor).
+  Service and dongle are `via_device` linked so HA shows the full chain.
+- **Stable service UUID** — generated on first run and persisted to
+  `service.yaml`, ensuring each ws2m instance has a unique identity on
+  the MQTT broker even when multiple instances share the same broker.
+- **Sensor availability chain** — each sensor's availability now includes
+  both its own heartbeat topic and its dongle's status topic
+  (`availability_mode: all`), so a sensor goes unavailable if either its
+  specific dongle or the service goes offline.
+- **Legacy data migration** — on first start with 4.0, any existing flat
+  `sensors.yaml` and `state.yaml` at the data root are automatically
+  moved into `dongles/<dongle_mac>/` so single-dongle users are
+  unaffected without manual action.
 - **Wyze Sense Keypad v2 (WSKP1) support** — full bridge support for the
   HMS keypad.  Publishes arm/disarm mode, motion, and PIN events to MQTT.
   Creates an `alarm_control_panel` entity and a `motion` binary sensor in
@@ -170,9 +205,9 @@ Existing `config/config.yaml`, `config/sensors.yaml`, and
 `config/state.yaml` files are fully compatible — no changes required.
 New default keys are silently added on startup.
 
-`config/migrations.yaml` tracks the discovery schema version.  Installs
-with `discovery_schema_version: 2` already recorded will not re-run the
-v1→v2 migration.
+`config/migrations.yaml` tracks the discovery schema version.  4.0.0
+records `discovery_schema_version: 2` after the migration runs.  Installs
+that already have version 2 recorded will not re-run the migration.
 
 ## [3.1.0] — 2026-06-13
 

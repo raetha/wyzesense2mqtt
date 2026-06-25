@@ -27,7 +27,7 @@ import time
 sys.path.insert(0, __file__.rsplit("/cli", 1)[0])
 
 import paho.mqtt.client as mqtt
-from config import SENSORS_CONFIG_FILE, config_path, load_config, read_yaml
+from config import CONFIG_DIR, DONGLES_DIR, SENSORS_CONFIG_FILE, config_path, dongle_data_path, load_config, read_yaml
 from mqtt import _publish, clear_sensor_discovery_topics
 
 LOGGER = logging.getLogger("ws2m.maintenance")
@@ -51,7 +51,7 @@ _DISCOVERY_WILDCARDS = [
 
 
 def _is_our_topic(topic: str, device_id: str, payload: dict) -> str | None:
-    """Return the sensor MAC if this topic looks like ours, otherwise None.
+    """Return the sensor MAC if this topic belongs to a wyzesense sensor, otherwise None.
 
     A topic is ours if:
       - the device_id segment starts with 'wyzesense_' (but not 'wyzesense_bridge_')
@@ -82,7 +82,7 @@ def _is_our_topic(topic: str, device_id: str, payload: dict) -> str | None:
 def run_cleanup_discovery(apply: bool = False, listen_seconds: int = 5) -> None:
     """Find (and optionally clear) orphaned HA MQTT discovery topics.
 
-    Orphaned topics are those whose MAC is no longer present in sensors.yaml –
+    Orphaned topics are those whose MAC is no longer present in any dongle's sensors.yaml –
     i.e. sensors that were removed by hand rather than via the bridge's remove
     command, leaving retained discovery messages on the broker.
     """
@@ -122,12 +122,26 @@ def run_cleanup_discovery(apply: bool = False, listen_seconds: int = 5) -> None:
     LOGGER.info(f"Listening for retained discovery topics for {listen_seconds}s…")
     time.sleep(listen_seconds)
 
-    # Load known sensors from disk
-    sensors_path = config_path(SENSORS_CONFIG_FILE)
-    sensors_config: dict = {}
-    if os.path.isfile(sensors_path):
-        sensors_config = read_yaml(sensors_path, LOGGER) or {}
-    known_macs: set[str] = set(sensors_config.keys())
+    # Load known sensors from all per-dongle subdirectories.
+    # With multi-dongle support, sensors.yaml now lives under
+    # <data>/dongles/<dongle_mac>/sensors.yaml rather than at the data root.
+    # We also check the legacy flat path so this tool works during the
+    # migration window before the bridge has had a chance to move the files.
+    known_macs: set[str] = set()
+
+    dongles_dir = os.path.join(CONFIG_DIR, DONGLES_DIR)
+    if os.path.isdir(dongles_dir):
+        for dongle_mac in os.listdir(dongles_dir):
+            sensors_path = dongle_data_path(dongle_mac, SENSORS_CONFIG_FILE)
+            if os.path.isfile(sensors_path):
+                sensors_config = read_yaml(sensors_path, LOGGER) or {}
+                known_macs.update(sensors_config.keys())
+
+    # Legacy flat path (pre-4.0 layout or mid-migration)
+    legacy_sensors_path = config_path(SENSORS_CONFIG_FILE)
+    if os.path.isfile(legacy_sensors_path):
+        legacy_config = read_yaml(legacy_sensors_path, LOGGER) or {}
+        known_macs.update(legacy_config.keys())
 
     # Identify orphans
     orphans: list[tuple[str, str, dict]] = []
@@ -150,7 +164,7 @@ def run_cleanup_discovery(apply: bool = False, listen_seconds: int = 5) -> None:
         client.disconnect()
         return
 
-    print(f"Found {len(orphans)} orphaned discovery topic(s) not present in sensors.yaml:")
+    print(f"Found {len(orphans)} orphaned discovery topic(s) not present in any dongle sensors.yaml:")
     for topic, mac, payload in orphans:
         device_name = payload.get("device", {}).get("name", "unknown")
         schema_ver = payload.get("schema_version", "v1 (legacy, untagged)")

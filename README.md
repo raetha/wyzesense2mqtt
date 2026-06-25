@@ -104,7 +104,7 @@ VOL_CONFIG=/docker/wyzesense2mqtt/config
 mkdir /docker/wyzesense2mqtt/config
 ```
 4. (Optional, when using Docker environment variables) Create or copy a config.yaml file into the config folder (see example below or copy from repository). The script will automatically create a default config.yaml if one is not found, but it will need to be modified with the correct MQTT details before things will work.
-5. (Optional) Pre-populate a sensors.yaml file into the config folder with your existing sensors. This file will automatically be created if it doesn't exist. (see example below or copy from repository)
+5. (Optional) Pre-populate a sensors.yaml file for your dongle into `<data>/dongles/<dongle_mac>/sensors.yaml`. This file will automatically be created when sensors are first discovered. The dongle MAC is shown in the startup log.
 6. Start the Docker container
 ```bash
 docker-compose up -d
@@ -156,7 +156,7 @@ log_level: INFO
 
 
 ### sensors.yaml
-This file stores per-sensor configuration for each sensor paired to the Wyze Sense Bridge. Entries can be modified to set the sensor name and class as they will appear in Home Assistant. The `class` field maps to an HA binary_sensor device class (`opening`, `door`, `window`, `motion`, `moisture`, etc.). A per-sensor availability timeout can be set via `timeout` (in seconds); the default is 28800 s (8 h) for v1 sensors and 14400 s (4 h) for v2 sensors.
+This file stores per-sensor configuration for each sensor paired to a Wyze Sense Bridge dongle. In 4.0 and later it lives at `<data>/dongles/<dongle_mac>/sensors.yaml` (one file per dongle). Existing flat `sensors.yaml` files at the data root are migrated automatically on first start. Entries can be modified to set the sensor name and class as they will appear in Home Assistant. The `class` field maps to an HA binary_sensor device class (`opening`, `door`, `window`, `motion`, `moisture`, etc.). A per-sensor availability timeout can be set via `timeout` (in seconds); the default is 28800 s (8 h) for v1 sensors and 14400 s (4 h) for v2 sensors.
 
 Sensors added via the `scan` MQTT command will populate this file automatically with the correct `sensor_type` and `sw_version`. Sensors that were previously paired and auto-discovered will default to `class: opening` and will not have `sw_version` set. For v1 devices `sw_version` is typically `19`; for v2 devices it is typically `23`.
 
@@ -208,15 +208,21 @@ The **Chime** supports optional `ring_id` (0–255, default 0), `volume` (1–9,
 ## Usage
 ### Pairing a Sensor
 At this time only a single sensor can be properly paired at once. Please repeat the steps below for each sensor.
-1. Publish a blank message to the MQTT topic `<self_topic_root>/scan` (default: `wyzesense2mqtt/scan`). This can be done via Home Assistant or any MQTT client.
+
+With multi-dongle support, scan is scoped to a specific dongle. If you only have one dongle the MAC is shown in the startup log.
+
+1. Publish a blank message (payload `scan`) to the MQTT topic `<self_topic_root>/dongle_<dongle_mac>/scan` (e.g. `wyzesense2mqtt/dongle_AABBCCDD/scan`). This can be done via Home Assistant or any MQTT client. With HA discovery enabled, a **Scan for sensor** button appears on each dongle's device page.
 2. Use the pin tool that came with your Wyze Sense sensors to press the reset switch on the side of the sensor. Hold until the red LED blinks.
 
 ### Removing a Sensor
-1. Publish the sensor MAC address as the payload to the MQTT topic `<self_topic_root>/remove` (default: `wyzesense2mqtt/remove`). The payload should be the 8-character MAC, e.g. `AABBCCDD`. This can be done via Home Assistant or any MQTT client.
+Remove is also dongle-scoped — the sensor can only be removed from the dongle it is paired with.
+
+1. Publish the sensor MAC address as the payload to the MQTT topic `<self_topic_root>/dongle_<dongle_mac>/remove` (e.g. `wyzesense2mqtt/dongle_AABBCCDD/remove`). The payload should be the 8-character MAC, e.g. `EEFFGGHH`. With HA discovery enabled, a **Remove sensor** button also appears on each sensor's device page.
 
 ### Reload Sensors
-If you have modified `sensors.yaml` while the gateway is running, you can trigger a reload without restarting the service or Docker container.
-1. Publish a blank message to the MQTT topic `<self_topic_root>/reload` (default: `wyzesense2mqtt/reload`).
+If you have modified a `sensors.yaml` while the gateway is running, you can trigger a reload of all dongles without restarting the service or Docker container.
+
+1. Publish a blank message (payload `reload`) to the MQTT topic `<self_topic_root>/reload` (default: `wyzesense2mqtt/reload`). With HA discovery enabled, a **Reload config** button appears on the WyzeSense2MQTT service device page.
 
 ### Command Line Tools
 
@@ -246,7 +252,7 @@ python3 -m cli.bridge_tool --help
 #### Maintenance CLI
 `cli/maintenance.py` is a standalone tool for operating on the MQTT broker. It does not touch the USB dongle and does not require the bridge service to be running. Run it via `docker exec` into a running container, or on the host if the broker is reachable.
 
-`cleanup-discovery` scans for Home Assistant discovery topics belonging to sensors that are no longer in `sensors.yaml` (e.g. removed by editing config files directly rather than via the [Removing a Sensor](#removing-a-sensor) MQTT command) and reports them. By default this is a dry run; pass `--apply` to actually clear the orphaned retained topics.
+`cleanup-discovery` scans for Home Assistant discovery topics belonging to sensors that are no longer in any dongle's `sensors.yaml` (e.g. removed by editing config files directly rather than via the [Removing a Sensor](#removing-a-sensor) MQTT command) and reports them. By default this is a dry run; pass `--apply` to actually clear the orphaned retained topics.
 
 ```bash
 # Dry run — show what would be cleared

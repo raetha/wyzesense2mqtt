@@ -10,6 +10,7 @@ of the codebase never hard-codes paths.
 import logging
 import os
 import subprocess
+import uuid
 
 import yaml
 
@@ -29,9 +30,17 @@ CONFIG_DIR = os.environ.get("WS2M_DATA_DIR", "data")
 
 # File names (relative to CONFIG_DIR unless noted)
 MAIN_CONFIG_FILE = "config.yaml"
+MIGRATIONS_FILE = "migrations.yaml"
+SERVICE_FILE = "service.yaml"
+
+# Per-dongle data lives under <CONFIG_DIR>/dongles/<dongle_mac>/
+DONGLES_DIR = "dongles"
 SENSORS_CONFIG_FILE = "sensors.yaml"
 SENSOR_STATE_FILE = "state.yaml"
-MIGRATIONS_FILE = "migrations.yaml"
+
+# Legacy flat-file names (used only for migration detection)
+_LEGACY_SENSORS_FILE = "sensors.yaml"
+_LEGACY_STATE_FILE = "state.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +69,10 @@ DEFAULT_CONFIG: dict = {
     "hass_discovery": True,
     # Sensor display
     "publish_sensor_name": True,
-    # USB dongle path ('auto' for automatic detection)
+    # USB dongle path:
+    #   "auto"        — detect all connected WyzeSense dongles automatically
+    #                   (multi-dongle supported when "auto" is used)
+    #   "/dev/hidrawN" — use exactly this one device (single-dongle)
     "usb_dongle": "auto",
     # Logging
     "log_level": "INFO",
@@ -75,6 +87,21 @@ DEFAULT_CONFIG: dict = {
 def config_path(*parts: str) -> str:
     """Return a path rooted at CONFIG_DIR."""
     return os.path.join(CONFIG_DIR, *parts)
+
+
+def dongle_data_path(dongle_mac: str, *parts: str) -> str:
+    """Return a path rooted at <CONFIG_DIR>/dongles/<dongle_mac>/."""
+    return os.path.join(CONFIG_DIR, DONGLES_DIR, dongle_mac, *parts)
+
+
+def ensure_dongle_dir(dongle_mac: str) -> str:
+    """Create <CONFIG_DIR>/dongles/<dongle_mac>/ if it does not exist.
+
+    Returns the directory path.
+    """
+    path = dongle_data_path(dongle_mac)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +252,33 @@ def init_logging(log_level: str | None = None) -> logging.Logger:
 
 
 # ---------------------------------------------------------------------------
+# Service identity
+#
+# A stable UUID is generated on first run and persisted to service.yaml.
+# This ensures each ws2m instance has a unique identity on the MQTT broker,
+# which is important when multiple instances share the same broker.
+# ---------------------------------------------------------------------------
+
+
+def load_service_id(logger: logging.Logger | None = None) -> str:
+    """Return the stable service UUID, generating and persisting it if needed."""
+    path = config_path(SERVICE_FILE)
+    if os.path.isfile(path):
+        data = read_yaml(path, logger) or {}
+        service_id = data.get("service_id")
+        if service_id:
+            return str(service_id)
+
+    # Generate a new UUID and persist it
+    service_id = str(uuid.uuid4())
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    write_yaml(path, {"service_id": service_id}, logger)
+    if logger:
+        logger.info(f"Generated new service UUID: {service_id}")
+    return service_id
+
+
+# ---------------------------------------------------------------------------
 # Migration tracking
 #
 # Persists version markers to config/migrations.yaml so one-time startup
@@ -270,6 +324,40 @@ def set_migration_value(key: str, value, logger: logging.Logger | None = None) -
 
 
 # ---------------------------------------------------------------------------
+# Legacy data migration
+#
+# If sensors.yaml / state.yaml exist at the flat CONFIG_DIR level (pre-4.0
+# single-dongle layout), migrate them into the per-dongle directory structure
+# on first start.  Called by Bridge after the dongle MAC is known.
+# ---------------------------------------------------------------------------
+
+
+def migrate_legacy_sensor_files(dongle_mac: str, logger: logging.Logger | None = None) -> bool:
+    """Move legacy flat sensors.yaml / state.yaml into dongles/<mac>/ if needed.
+
+    Returns True if any files were migrated.
+    """
+    import shutil
+
+    migrated = False
+    dongle_dir = ensure_dongle_dir(dongle_mac)
+
+    for filename in (_LEGACY_SENSORS_FILE, _LEGACY_STATE_FILE):
+        legacy_path = config_path(filename)
+        new_path = os.path.join(dongle_dir, filename)
+        if os.path.isfile(legacy_path) and not os.path.isfile(new_path):
+            shutil.move(legacy_path, new_path)
+            msg = f"Migrated {legacy_path} → {new_path}"
+            if logger:
+                logger.info(msg)
+            else:
+                print(msg)
+            migrated = True
+
+    return migrated
+
+
+# ---------------------------------------------------------------------------
 # Dongle device auto-detection
 # ---------------------------------------------------------------------------
 
@@ -280,14 +368,29 @@ def find_dongle_device() -> str | None:
     Matches USB vendor 1a86 (QinHeng Electronics) and product e024, which
     is the identifier used by the Wyze Sense Bridge HID device.
     Returns the first matching /dev/hidraw* path, or None if not found.
+
+    Deprecated: prefer find_all_dongle_devices() for multi-dongle support.
+    Returns the first detected device for backwards compatibility.
     """
+    devices = find_all_dongle_devices()
+    return devices[0] if devices else None
+
+
+def find_all_dongle_devices() -> list[str]:
+    """Scan /sys/class/hidraw for all connected WyzeSense bridge dongles.
+
+    Matches USB vendor 1a86 (QinHeng Electronics) and product e024.
+    Returns a list of /dev/hidraw* paths (may be empty if none found).
+    """
+    devices: list[str] = []
     try:
         device_list = subprocess.check_output(["ls", "-la", "/sys/class/hidraw"]).decode().lower()
         for line in device_list.splitlines():
             if "e024" in line and "1a86" in line:
                 for part in line.split():
                     if "hidraw" in part:
-                        return f"/dev/{part}"
+                        devices.append(f"/dev/{part}")
+                        break
     except (subprocess.CalledProcessError, OSError):
         pass
-    return None
+    return devices

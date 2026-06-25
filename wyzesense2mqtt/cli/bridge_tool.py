@@ -16,6 +16,10 @@ Options:
     --device PATH   Path to the USB HID device, or 'auto' to detect automatically [default: auto]
     --debug         Enable debug logging
     --verbose       Increase log verbosity (combined with --debug)
+
+When 'auto' is used and multiple dongles are detected, an interactive
+prompt lets you select which dongle to use.  The prompt shows the device
+path and any config-derived info (dongle MAC, sensor count) for each.
 """
 
 import argparse
@@ -223,6 +227,80 @@ _COMMANDS = {
 }
 
 
+def _select_dongle(devices: list[str]) -> str | None:
+    """Present an interactive selection when multiple dongles are detected.
+
+    Shows device path and any config-derived info (MAC, sensor count) for each
+    dongle so the user can identify which one to target without needing to know
+    the hidraw path.  Returns the selected device path, or None on cancel.
+    """
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+    # Try to load per-dongle config metadata for each device.
+    # We can't know a dongle's MAC without opening it, but if a dongles/<mac>/
+    # directory exists we can match by listing candidates and showing sensor counts.
+    # For now we show what we have: device path + any known dongle dirs from config.
+    dongle_info: list[dict] = []
+    try:
+        import os as _os
+
+        from config import CONFIG_DIR, DONGLES_DIR
+        from sensors import SensorRegistry
+
+        dongles_dir = _os.path.join(CONFIG_DIR, DONGLES_DIR)
+        known_macs: list[str] = []
+        if _os.path.isdir(dongles_dir):
+            known_macs = sorted(_os.listdir(dongles_dir))
+
+        for i, path in enumerate(devices):
+            info: dict = {"path": path, "index": i + 1}
+            # If only one known dongle MAC exists in config, associate it with
+            # the first device (best-effort — we can't map without opening).
+            # When multiple MACs exist we show them separately.
+            if len(known_macs) == 1 and len(devices) == 1:
+                mac = known_macs[0]
+                reg = SensorRegistry(mac)
+                reg.load_sensors()
+                info["mac"] = mac
+                info["sensor_count"] = len(reg.sensors)
+            elif i < len(known_macs):
+                mac = known_macs[i]
+                reg = SensorRegistry(mac)
+                reg.load_sensors()
+                info["mac"] = mac
+                info["sensor_count"] = len(reg.sensors)
+            dongle_info.append(info)
+    except Exception:
+        dongle_info = [{"path": d, "index": i + 1} for i, d in enumerate(devices)]
+
+    print(f"\nFound {len(devices)} WyzeSense dongle(s):\n")
+    for info in dongle_info:
+        line = f"  [{info['index']}]  {info['path']}"
+        if "mac" in info:
+            line += f"  (MAC: {info['mac']}, {info['sensor_count']} sensor(s) in config)"
+        print(line)
+
+    print()
+    while True:
+        try:
+            raw = input(f"Select dongle [1-{len(devices)}] or 'q' to quit: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        if raw.lower() == "q":
+            return None
+        try:
+            choice = int(raw)
+            if 1 <= choice <= len(devices):
+                return devices[choice - 1]
+        except ValueError:
+            pass
+        print(f"  Please enter a number between 1 and {len(devices)}, or 'q' to quit.")
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -238,14 +316,21 @@ def main() -> int:
 
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         try:
-            from config import find_dongle_device
+            from config import find_all_dongle_devices
 
-            device = find_dongle_device()
+            devices = find_all_dongle_devices()
         except ImportError:
-            device = None
-        if not device:
+            devices = []
+
+        if not devices:
             print("Error: no WyzeSense dongle found automatically. Try --device /dev/hidrawN")
             return 2
+        elif len(devices) == 1:
+            device = devices[0]
+        else:
+            device = _select_dongle(devices)
+            if device is None:
+                return 0
 
     print(f"Opening dongle at {device}…")
     try:

@@ -75,8 +75,8 @@ an old `discovery_schema_version` after an upgrade.
 
 ### `cleanup-discovery` CLI
 
-The versioned migration in `Bridge._init_sensors()` only handles sensors still
-present in `sensors.yaml`. If a sensor was removed by hand (edited out of
+The versioned migration in `DongleWorker._init_sensors()` only handles sensors still
+present in a dongle's `sensors.yaml`. If a sensor was removed by hand (edited out of
 `sensors.yaml`/`state.yaml` after a failed unpair, rather than via the
 `remove` MQTT topic), its discovery topic(s) can be orphaned indefinitely.
 
@@ -91,7 +91,8 @@ This subscribes to all known discovery wildcards — both the current
 device-based format and the legacy per-entity format, since they live under
 different topic paths:
 
-- v2: `homeassistant/device/+/config`
+- v2: `homeassistant/device/+/config`  (covers sensor, service, and dongle devices;
+       the tool filters to `wyzesense_<mac>` device-ids only)
 - v1: `homeassistant/sensor/+/+/config`, `homeassistant/binary_sensor/+/+/config`
 
 then waits (`--listen-seconds`, default 5) for the broker to replay retained
@@ -103,7 +104,7 @@ a tool like MQTT Explorer uses under the hood). It then:
   the payload starts with `wyzesense_<mac>_`. (v1 payloads predate the
   `origin` tag, so identification relies on the topic/unique_id naming
   convention rather than `origin.name`.)
-- Flags any whose MAC isn't in the current `sensors.yaml`.
+- Flags any whose MAC isn't in any dongle's `sensors.yaml`.
 - Without `--apply`, just lists what it found (dry run).
 - With `--apply`, clears the found topic(s) plus any other schema versions'
   topics and state/status topics for that MAC.
@@ -122,10 +123,10 @@ small versioned migration system in `mqtt.py`:
 
 - `DISCOVERY_SCHEMA_VERSION` (currently `2`) identifies the shape of
   discovery payloads this version of wyzesense2mqtt publishes.
-- `_DISCOVERY_CLEANERS` maps each schema version to a function that clears
-  the retained topics that version published.
+- `_MIGRATION_STEPS` is a list of functions, one per schema version transition,
+  each clearing the retained topics published by that version.
 - `config/migrations.yaml` records the schema version last seen on disk.
-- On startup, `Bridge._init_sensors()` compares the recorded version to
+- On startup, `DongleWorker._init_sensors()` compares the recorded version to
   `DISCOVERY_SCHEMA_VERSION`. If older, it runs every cleaner for the
   versions in between (once per known sensor), then updates
   `migrations.yaml`. This is a one-time pass per upgrade — already-migrated

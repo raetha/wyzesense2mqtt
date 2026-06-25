@@ -160,7 +160,7 @@ support:
    `_parse_keypad`, `_parse_leak`, etc.
 4. Register it in the appropriate dispatch table inside `from_packet` or
    `from_packet_v2`.
-5. Handle the new event type in `bridge.py` `_on_dongle_event`.
+5. Handle the new event type in `bridge.py` `DongleWorker._on_dongle_event`.
 6. Add tests in `tests/test_dongle_protocol.py` using synthetic payloads built
    with a `make_*_payload` helper in `tests/conftest.py`.
 

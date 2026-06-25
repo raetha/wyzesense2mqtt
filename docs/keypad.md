@@ -92,8 +92,13 @@ current alarm state back to the keypad's discovery entity. Send one of:
 ### Availability topic
 
 ```
-wyzesense2mqtt/<mac>/status   →  "online" / "offline"
+wyzesense2mqtt/<mac>/status          →  "online" / "offline"   (sensor heartbeat)
+wyzesense2mqtt/dongle_<mac>/status   →  "online" / "offline"   (dongle connectivity)
 ```
+
+The keypad is marked unavailable in HA if either topic goes offline
+(`availability_mode: all`). The dongle topic goes offline if the USB dongle
+disconnects or the bridge stops.
 
 ---
 

@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from conftest import TEST_DONGLE_MAC, TEST_SERVICE_ID
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -84,7 +86,6 @@ def test_leak_sensor_components_structure():
     assert "probe_state" in components
     assert "temperature" in components
     assert "humidity" in components
-
     assert components["state"]["device_class"] == "moisture"
     assert components["probe_state"]["platform"] == "binary_sensor"
     assert components["temperature"]["unit_of_measurement"] == "°C"
@@ -103,17 +104,14 @@ def test_climate_sensor_components_structure():
 
 
 def test_signal_strength_disabled_by_default():
-    """signal_strength should be disabled by default (consistent with other HA integrations)."""
     from mqtt import _build_diagnostic_components
 
     components = _build_diagnostic_components()
     assert components["signal_strength"].get("enabled_by_default") is False
-    # battery should remain enabled (users typically want low-battery warnings)
     assert "enabled_by_default" not in components["battery"]
 
 
 def test_diagnostic_components_present():
-    """_build_diagnostic_components returns fresh dicts with the expected keys."""
     from mqtt import _build_diagnostic_components
 
     components = _build_diagnostic_components()
@@ -125,7 +123,6 @@ def test_diagnostic_components_present():
 
 
 def test_diagnostic_components_returns_fresh_dicts():
-    """_build_diagnostic_components must return a new dict on each call (no shared state)."""
     from mqtt import _build_diagnostic_components
 
     first = _build_diagnostic_components()
@@ -135,11 +132,10 @@ def test_diagnostic_components_returns_fresh_dicts():
 
 
 def test_sensor_action_components_returns_fresh_dicts():
-    """_build_sensor_action_components must return a new dict on each call (no shared state)."""
     from mqtt import _build_sensor_action_components
 
-    first = _build_sensor_action_components("AABBCCDD", "ws2m/remove")
-    second = _build_sensor_action_components("EEFFGGHH", "ws2m/remove")
+    first = _build_sensor_action_components("AABBCCDD", "ws2m/dongle_X/remove")
+    second = _build_sensor_action_components("EEFFGGHH", "ws2m/dongle_X/remove")
     assert first["remove"]["payload_press"] == "AABBCCDD"
     assert second["remove"]["payload_press"] == "EEFFGGHH"
     first["remove"]["unique_id"] = "injected"
@@ -147,7 +143,6 @@ def test_sensor_action_components_returns_fresh_dicts():
 
 
 def test_all_sensor_types_have_builders():
-    """Every non-unknown sensor type must have a component builder."""
     from mqtt import _COMPONENT_BUILDERS
     from sensors import SENSOR_TYPES
 
@@ -164,7 +159,7 @@ def test_publish_sensor_discovery_motion(tmp_config_dir):
     gw, cfg = _make_gateway()
     sensor = {"sensor_type": "motion", "name": "Hall Motion", "sw_version": "19"}
 
-    gw.publish_sensor_discovery("AAAAAAAA", sensor, "DONGLE01", sensor_online=True)
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
 
     assert gw._client.publish.called
     calls = gw._client.publish.call_args_list
@@ -178,7 +173,7 @@ def test_publish_sensor_discovery_payload_structure(tmp_config_dir):
 
     gw, cfg = _make_gateway()
     sensor = {"sensor_type": "motion", "name": "Hall Motion", "sw_version": "19"}
-    gw.publish_sensor_discovery("AAAAAAAA", sensor, "DONGLE01", sensor_online=True)
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
 
     for c in gw._client.publish.call_args_list:
         topic = c.args[0]
@@ -196,12 +191,50 @@ def test_publish_sensor_discovery_payload_structure(tmp_config_dir):
         pytest.fail("Discovery config publish call not found")
 
 
+def test_publish_sensor_discovery_via_device_is_dongle(tmp_config_dir):
+    """Sensor's via_device must point to the dongle, not the service."""
+    import json
+
+    gw, cfg = _make_gateway()
+    sensor = {"sensor_type": "switch", "name": "Front Door"}
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
+
+    for c in gw._client.publish.call_args_list:
+        if "device/wyzesense_AAAAAAAA/config" in c.args[0]:
+            payload = json.loads(c.kwargs["payload"])
+            assert payload["device"]["via_device"] == f"ws2m_dongle_{TEST_DONGLE_MAC}"
+            break
+    else:
+        pytest.fail("Discovery config publish call not found")
+
+
+def test_publish_sensor_discovery_availability_includes_dongle_status(tmp_config_dir):
+    """Sensor availability must include the dongle status topic."""
+    import json
+
+    gw, cfg = _make_gateway()
+    sensor = {"sensor_type": "switch", "name": "Front Door"}
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
+
+    for c in gw._client.publish.call_args_list:
+        if "device/wyzesense_AAAAAAAA/config" in c.args[0]:
+            payload = json.loads(c.kwargs["payload"])
+            avail_topics = [a["topic"] for a in payload["availability"]]
+            assert any(f"dongle_{TEST_DONGLE_MAC}/status" in t for t in avail_topics), (
+                f"Dongle status not in availability: {avail_topics}"
+            )
+            assert payload["availability_mode"] == "all"
+            break
+    else:
+        pytest.fail("Discovery config publish call not found")
+
+
 def test_publish_sensor_discovery_components_have_unique_ids(tmp_config_dir):
     import json
 
     gw, cfg = _make_gateway()
     sensor = {"sensor_type": "motion", "name": "Hall Motion"}
-    gw.publish_sensor_discovery("AAAAAAAA", sensor, "DONGLE01", sensor_online=True)
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
 
     for c in gw._client.publish.call_args_list:
         if "device/wyzesense_AAAAAAAA/config" in c.args[0]:
@@ -219,7 +252,7 @@ def test_publish_sensor_discovery_unknown_type_does_not_publish(tmp_config_dir, 
     sensor = {"sensor_type": "totally_unknown"}
 
     with caplog.at_level(logging.ERROR):
-        gw.publish_sensor_discovery("AAAAAAAA", sensor, "DONGLE01", sensor_online=True)
+        gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
 
     assert any("No discovery component builder" in r.message for r in caplog.records)
     config_calls = [c for c in gw._client.publish.call_args_list if "device/wyzesense_AAAAAAAA/config" in c.args[0]]
@@ -230,7 +263,7 @@ def test_publish_sensor_discovery_publishes_availability(tmp_config_dir):
     gw, cfg = _make_gateway()
     sensor = {"sensor_type": "switch", "name": "Front Door"}
 
-    gw.publish_sensor_discovery("AAAAAAAA", sensor, "DONGLE01", sensor_online=True)
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
 
     topics = [c.args[0] for c in gw._client.publish.call_args_list]
     assert any("AAAAAAAA/status" in t for t in topics)
@@ -240,7 +273,7 @@ def test_publish_sensor_discovery_offline_sensor(tmp_config_dir):
     gw, cfg = _make_gateway()
     sensor = {"sensor_type": "switch", "name": "Back Door"}
 
-    gw.publish_sensor_discovery("AAAAAAAA", sensor, "DONGLE01", sensor_online=False)
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=False)
 
     for c in gw._client.publish.call_args_list:
         if "AAAAAAAA/status" in c.args[0]:
@@ -254,12 +287,12 @@ def test_publish_sensor_discovery_offline_sensor(tmp_config_dir):
 
 
 def test_sensor_discovery_includes_remove_button(tmp_config_dir):
-    """Sensor discovery payload must include a remove button component."""
+    """Sensor discovery payload must include a remove button on the dongle-scoped topic."""
     import json
 
     gw, cfg = _make_gateway()
     sensor = {"sensor_type": "motion", "name": "Hall Motion"}
-    gw.publish_sensor_discovery("AAAAAAAA", sensor, "DONGLE01", sensor_online=True)
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
 
     for c in gw._client.publish.call_args_list:
         if "device/wyzesense_AAAAAAAA/config" in c.args[0]:
@@ -268,7 +301,8 @@ def test_sensor_discovery_includes_remove_button(tmp_config_dir):
             assert "remove" in components, "Expected 'remove' button component in sensor discovery"
             remove = components["remove"]
             assert remove["platform"] == "button"
-            assert remove["command_topic"].endswith("/remove")
+            # Remove button must target the dongle-scoped remove topic
+            assert f"dongle_{TEST_DONGLE_MAC}/remove" in remove["command_topic"]
             assert remove["payload_press"] == "AAAAAAAA"
             assert remove["entity_category"] == "config"
             break
@@ -282,13 +316,13 @@ def test_sensor_discovery_button_has_no_value_template(tmp_config_dir):
 
     gw, cfg = _make_gateway()
     sensor = {"sensor_type": "switch", "name": "Front Door"}
-    gw.publish_sensor_discovery("AAAAAAAA", sensor, "DONGLE01", sensor_online=True)
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
 
     for c in gw._client.publish.call_args_list:
         if "device/wyzesense_AAAAAAAA/config" in c.args[0]:
             payload = json.loads(c.kwargs["payload"])
             remove = payload["components"]["remove"]
-            assert "value_template" not in remove, "Button component must not have value_template"
+            assert "value_template" not in remove
             assert "value_template" in payload["components"]["state"]
             assert "value_template" in payload["components"]["signal_strength"]
             break
@@ -311,15 +345,15 @@ def test_clear_sensor_topics_publishes_none_payloads(tmp_config_dir):
 
 
 # ---------------------------------------------------------------------------
-# Discovery schema migration — unified single key
+# Discovery schema migration — v3 schema
 # ---------------------------------------------------------------------------
 
 
 def test_migrate_discovery_clears_v1_sensor_topics(tmp_config_dir):
-    """v1→v2 migration must clear legacy per-entity sensor topics."""
+    """v1->v2 migration step must clear legacy per-entity sensor topics."""
     gw, cfg = _make_gateway()
 
-    gw.migrate_discovery_topics("AAAAAAAA", "switch", "DONGLE01", from_version=1)
+    gw.migrate_discovery_topics("AAAAAAAA", "switch", TEST_DONGLE_MAC, TEST_SERVICE_ID, from_version=1)
 
     topics = [c.args[0] for c in gw._client.publish.call_args_list]
     assert any("binary_sensor/wyzesense_AAAAAAAA" in t for t in topics)
@@ -328,20 +362,23 @@ def test_migrate_discovery_clears_v1_sensor_topics(tmp_config_dir):
 
 
 def test_migrate_discovery_clears_v1_bridge_topic(tmp_config_dir):
-    """v1→v2 migration must also clear the 3.x bridge discovery topic."""
+    """v1->v2 migration must clear the 3.x wyzesense_bridge_<mac> topic."""
     gw, cfg = _make_gateway()
 
-    gw.migrate_discovery_topics("AAAAAAAA", "switch", "DONGLE01", from_version=1)
+    gw.migrate_discovery_topics("AAAAAAAA", "switch", TEST_DONGLE_MAC, TEST_SERVICE_ID, from_version=1)
 
     topics = [c.args[0] for c in gw._client.publish.call_args_list]
-    assert any("wyzesense_bridge_DONGLE01" in t for t in topics)
+    assert any(f"wyzesense_bridge_{TEST_DONGLE_MAC}" in t for t in topics)
+
 
 
 def test_migrate_discovery_noop_when_already_current(tmp_config_dir):
     from mqtt import DISCOVERY_SCHEMA_VERSION
 
     gw, cfg = _make_gateway()
-    gw.migrate_discovery_topics("AAAAAAAA", "switch", "DONGLE01", from_version=DISCOVERY_SCHEMA_VERSION)
+    gw.migrate_discovery_topics(
+        "AAAAAAAA", "switch", TEST_DONGLE_MAC, TEST_SERVICE_ID, from_version=DISCOVERY_SCHEMA_VERSION
+    )
 
     assert not gw._client.publish.called
 
@@ -360,46 +397,35 @@ def test_get_discovery_schema_version_defaults_to_1(tmp_config_dir):
 
 
 # ---------------------------------------------------------------------------
-# Bridge discovery — device-based format
+# Service discovery
 # ---------------------------------------------------------------------------
 
 
-def test_publish_bridge_discovery(tmp_config_dir):
-    """Bridge discovery uses the device-based format with a single retained topic."""
+def test_publish_service_discovery(tmp_config_dir):
+    """Service discovery uses device-based format with a single retained topic."""
     import json
 
     gw, cfg = _make_gateway()
-    gw.publish_bridge_discovery("DONGLE01", "v1.2.3")
+    gw.publish_service_discovery(TEST_SERVICE_ID)
 
     assert gw._client.publish.called
     calls = gw._client.publish.call_args_list
     assert len(calls) == 1
     topic = calls[0].args[0]
-    assert topic == "homeassistant/device/ws2m_bridge_DONGLE01/config"
+    assert topic == f"homeassistant/device/ws2m_service_{TEST_SERVICE_ID}/config"
 
     payload = json.loads(calls[0].kwargs["payload"])
-    assert payload["device"]["name"] == "WyzeSense2MQTT Bridge DONGLE01"
-    assert payload["device"]["hw_version"] == "v1.2.3"
+    assert payload["device"]["identifiers"] == [f"ws2m_service_{TEST_SERVICE_ID}"]
+    assert payload["device"]["name"] == "WyzeSense2MQTT"
+    assert "sw_version" in payload["device"]
+    assert "hw_version" not in payload["device"]  # hw belongs to the dongle, not the service
     assert payload["origin"]["name"] == "WyzeSense2MQTT"
 
     components = payload["components"]
-    assert "connection_state" in components
-    assert "scan" in components
-    assert "reload" in components
-
-    conn = components["connection_state"]
-    assert conn["platform"] == "binary_sensor"
-    assert conn["device_class"] == "connectivity"
-    assert conn["entity_category"] == "diagnostic"
-    assert conn["has_entity_name"] is True
-    assert "state_topic" in conn
-
-    scan = components["scan"]
-    assert scan["platform"] == "button"
-    assert scan["entity_category"] == "config"
-    assert scan["command_topic"].endswith("/scan")
-    assert scan["payload_press"] == "scan"
-    assert scan["has_entity_name"] is True
+    assert "reload" in components, "Service device must have reload button"
+    # Scan and remove must NOT be on the service device
+    assert "scan" not in components, "Scan belongs to dongle, not service"
+    assert "remove" not in components, "Remove belongs to dongle, not service"
 
     reload_ = components["reload"]
     assert reload_["platform"] == "button"
@@ -409,13 +435,89 @@ def test_publish_bridge_discovery(tmp_config_dir):
     assert reload_["has_entity_name"] is True
 
 
+def test_publish_service_discovery_unique_ids(tmp_config_dir):
+    """Service device entities must have unique_ids prefixed with ws2m_service_<uuid>."""
+    import json
+
+    gw, cfg = _make_gateway()
+    gw.publish_service_discovery(TEST_SERVICE_ID)
+
+    payload = json.loads(gw._client.publish.call_args_list[0].kwargs["payload"])
+    for key, component in payload["components"].items():
+        assert "unique_id" in component, f"Component {key!r} missing unique_id"
+        assert component["unique_id"].startswith(f"ws2m_service_{TEST_SERVICE_ID}_")
+
+
+# ---------------------------------------------------------------------------
+# Dongle discovery
+# ---------------------------------------------------------------------------
+
+
+def test_publish_dongle_discovery(tmp_config_dir):
+    """Dongle discovery uses device-based format; device is child of service."""
+    import json
+
+    gw, cfg = _make_gateway()
+    gw.publish_dongle_discovery(TEST_DONGLE_MAC, "v1.2.3", TEST_SERVICE_ID)
+
+    assert gw._client.publish.called
+    calls = gw._client.publish.call_args_list
+    assert len(calls) == 1
+    topic = calls[0].args[0]
+    assert topic == f"homeassistant/device/ws2m_dongle_{TEST_DONGLE_MAC}/config"
+
+    payload = json.loads(calls[0].kwargs["payload"])
+    assert payload["device"]["hw_version"] == "v1.2.3"
+    assert payload["device"]["via_device"] == f"ws2m_service_{TEST_SERVICE_ID}"
+    assert payload["device"]["name"] == f"WyzeSense Dongle {TEST_DONGLE_MAC}"
+    assert payload["origin"]["name"] == "WyzeSense2MQTT"
+
+    components = payload["components"]
+    assert "connection_state" in components
+    assert "scan" in components
+    assert "remove" in components
+    # Reload must NOT be on the dongle — it's a service-level entity
+    assert "reload" not in components, "Reload belongs to service, not dongle"
+
+    conn = components["connection_state"]
+    assert conn["platform"] == "binary_sensor"
+    assert conn["device_class"] == "connectivity"
+    assert conn["entity_category"] == "diagnostic"
+    assert conn["has_entity_name"] is True
+    assert f"dongle_{TEST_DONGLE_MAC}/status" in conn["state_topic"]
+
+    scan = components["scan"]
+    assert scan["platform"] == "button"
+    assert scan["entity_category"] == "config"
+    assert f"dongle_{TEST_DONGLE_MAC}/scan" in scan["command_topic"]
+    assert scan["payload_press"] == "scan"
+    assert scan["has_entity_name"] is True
+
+    remove = components["remove"]
+    assert remove["platform"] == "button"
+    assert f"dongle_{TEST_DONGLE_MAC}/remove" in remove["command_topic"]
+    assert remove["has_entity_name"] is True
+
+
+def test_publish_dongle_discovery_unique_ids(tmp_config_dir):
+    """Dongle device entities must have unique_ids prefixed with ws2m_dongle_<mac>."""
+    import json
+
+    gw, cfg = _make_gateway()
+    gw.publish_dongle_discovery(TEST_DONGLE_MAC, "v1.2.3", TEST_SERVICE_ID)
+
+    payload = json.loads(gw._client.publish.call_args_list[0].kwargs["payload"])
+    for key, component in payload["components"].items():
+        assert "unique_id" in component, f"Component {key!r} missing unique_id"
+        assert component["unique_id"] == f"ws2m_dongle_{TEST_DONGLE_MAC}_{key}"
+
+
 # ---------------------------------------------------------------------------
 # clear_sensor_discovery_topics — module-level helper (used by maintenance CLI)
 # ---------------------------------------------------------------------------
 
 
 def test_clear_sensor_discovery_topics_v1_leak(tmp_config_dir):
-    """Module-level helper clears all v1 per-entity topics for a leak sensor."""
     from mqtt import clear_sensor_discovery_topics
 
     client = MagicMock()
@@ -428,16 +530,14 @@ def test_clear_sensor_discovery_topics_v1_leak(tmp_config_dir):
     assert any("probe_state" in t for t in topics)
     assert any("temperature" in t for t in topics)
     assert any("humidity" in t for t in topics)
-    # v2 device topic also cleared
     assert any("device/wyzesense_DDDDDDDD/config" in t for t in topics)
 
 
 def test_clear_sensor_discovery_topics_v1_climate(tmp_config_dir):
-    """Climate sensor clear should include temperature and humidity, no binary state."""
     from mqtt import clear_sensor_discovery_topics
 
     client = MagicMock()
-    client.publish.return_value = MagicMock(rc=0, wait_for_publish=MagicMock())
+    client.publish.return_value = MagicMock(rc=0, wait_for_publish=MagicMock()    )
     config = {"hass_topic_root": "homeassistant", "mqtt_qos": 0, "mqtt_retain": True}
 
     clear_sensor_discovery_topics(client, config, None, "CCCCCCCC", "climate")
@@ -449,7 +549,6 @@ def test_clear_sensor_discovery_topics_v1_climate(tmp_config_dir):
 
 
 def test_clear_sensor_discovery_topics_v1_binary(tmp_config_dir):
-    """Binary sensor clear must include the state entity."""
     from mqtt import clear_sensor_discovery_topics
 
     client = MagicMock()
@@ -469,7 +568,6 @@ def test_clear_sensor_discovery_topics_v1_binary(tmp_config_dir):
 
 
 def test_publish_logs_warning_on_failed_rc():
-    """_publish should log a warning when client.publish returns a non-success rc."""
     import logging
     import paho.mqtt.client as paho_mqtt
     from mqtt import _publish
@@ -503,7 +601,6 @@ def test_gateway_client_property_raises_before_connect():
 
 
 def test_gateway_connect_sets_callbacks_and_connected_flag():
-    """connect() should configure callbacks and wait for connected_flag."""
     from mqtt import MqttGateway
 
     cfg = {
@@ -544,9 +641,7 @@ def test_gateway_disconnect_stops_loop_and_disconnects():
 
     gw = MqttGateway({})
     gw._client = MagicMock()
-
     gw.disconnect()
-
     gw._client.loop_stop.assert_called_once()
     gw._client.disconnect.assert_called_once()
 
@@ -636,7 +731,6 @@ def test_gateway_client_property_returns_client_when_connected():
 
 
 def test_build_keypad_components_has_alarm_control_panel():
-    """Keypad builder produces an alarm_control_panel component for alarm_mode."""
     from mqtt import _build_keypad_components
 
     result = _build_keypad_components("KPADKPAD", {}, "wyzesense2mqtt/KPADKPAD")
@@ -649,7 +743,6 @@ def test_build_keypad_components_has_alarm_control_panel():
 
 
 def test_build_keypad_components_has_motion():
-    """Keypad builder produces a binary_sensor component for motion."""
     from mqtt import _build_keypad_components
 
     result = _build_keypad_components("KPADKPAD", {}, "wyzesense2mqtt/KPADKPAD")
@@ -659,7 +752,6 @@ def test_build_keypad_components_has_motion():
 
 
 def test_build_keypad_components_returns_fresh_dicts():
-    """Each call to the keypad builder returns an independent dict."""
     from mqtt import _build_keypad_components
 
     r1 = _build_keypad_components("KPADKPAD", {}, "wyzesense2mqtt/KPADKPAD")
@@ -669,15 +761,12 @@ def test_build_keypad_components_returns_fresh_dicts():
 
 
 def test_keypad_registered_in_component_builders():
-    """'keypad' is present in the _COMPONENT_BUILDERS registry."""
     from mqtt import _COMPONENT_BUILDERS
 
     assert "keypad" in _COMPONENT_BUILDERS
 
 
 def test_publish_sensor_discovery_keypad(sample_config, tmp_config_dir):
-    """publish_sensor_discovery does not raise for a keypad sensor."""
-    from unittest.mock import MagicMock, patch
     from mqtt import MqttGateway
 
     gw = MqttGateway(sample_config)
@@ -686,13 +775,11 @@ def test_publish_sensor_discovery_keypad(sample_config, tmp_config_dir):
     gw._client = mock_client
 
     sensor = {"sensor_type": "keypad", "name": "Front Keypad"}
-    gw.publish_sensor_discovery("KPADKPAD", sensor, "DONGLMAC", sensor_online=True)
+    gw.publish_sensor_discovery("KPADKPAD", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
 
     assert mock_client.publish.called
     topic_args = [call.args[0] for call in mock_client.publish.call_args_list]
     assert any("wyzesense_KPADKPAD" in t for t in topic_args)
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -701,7 +788,6 @@ def test_publish_sensor_discovery_keypad(sample_config, tmp_config_dir):
 
 
 def test_build_chime_components_has_play_button():
-    """Chime builder produces a button entity for triggering playback."""
     from mqtt import _build_chime_components
 
     result = _build_chime_components("CHIMEMAC", {}, "wyzesense2mqtt/CHIMEMAC")
@@ -712,7 +798,6 @@ def test_build_chime_components_has_play_button():
 
 
 def test_build_chime_components_has_number_entities():
-    """Chime builder produces number entities for ring_id, volume, repeat_count."""
     from mqtt import _build_chime_components
 
     result = _build_chime_components("CHIMEMAC", {}, "wyzesense2mqtt/CHIMEMAC")
@@ -725,7 +810,6 @@ def test_build_chime_components_has_number_entities():
 
 
 def test_build_chime_ring_id_range():
-    """ring_id number entity spans 0–255."""
     from mqtt import _build_chime_components
 
     result = _build_chime_components("CHIMEMAC", {}, "wyzesense2mqtt/CHIMEMAC")
@@ -734,7 +818,6 @@ def test_build_chime_ring_id_range():
 
 
 def test_build_chime_volume_range():
-    """volume number entity spans 1–9."""
     from mqtt import _build_chime_components
 
     result = _build_chime_components("CHIMEMAC", {}, "wyzesense2mqtt/CHIMEMAC")
@@ -743,7 +826,6 @@ def test_build_chime_volume_range():
 
 
 def test_build_chime_components_returns_fresh_dicts():
-    """Each call to the chime builder returns an independent dict."""
     from mqtt import _build_chime_components
 
     r1 = _build_chime_components("CHIMEMAC", {}, "wyzesense2mqtt/CHIMEMAC")
@@ -753,15 +835,12 @@ def test_build_chime_components_returns_fresh_dicts():
 
 
 def test_chime_registered_in_component_builders():
-    """'chime' is present in the _COMPONENT_BUILDERS registry."""
     from mqtt import _COMPONENT_BUILDERS
 
     assert "chime" in _COMPONENT_BUILDERS
 
 
 def test_publish_sensor_discovery_chime(sample_config, tmp_config_dir):
-    """publish_sensor_discovery creates button and number discovery topics for chime."""
-    from unittest.mock import MagicMock
     from mqtt import MqttGateway
 
     gw = MqttGateway(sample_config)
@@ -770,7 +849,7 @@ def test_publish_sensor_discovery_chime(sample_config, tmp_config_dir):
     gw._client = mock_client
 
     sensor = {"sensor_type": "chime", "name": "Front Door Chime"}
-    gw.publish_sensor_discovery("CHIMEMAC", sensor, "DONGLMAC", sensor_online=True)
+    gw.publish_sensor_discovery("CHIMEMAC", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
 
     assert mock_client.publish.called
     topic_args = [call.args[0] for call in mock_client.publish.call_args_list]

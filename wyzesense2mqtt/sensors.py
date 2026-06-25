@@ -2,12 +2,14 @@
 Sensor registry for WyzeSense2MQTT.
 
 Owns all in-process and on-disk state for the known sensor fleet:
-  - sensors.yaml  – user-editable per-sensor configuration (name, type, etc.)
-  - state.yaml    – runtime-only state (last_seen, online) persisted across
-                    restarts to smooth over brief outages
+  - dongles/<mac>/sensors.yaml  – user-editable per-sensor configuration
+  - dongles/<mac>/state.yaml    – runtime-only state (last_seen, online)
+
+Each dongle gets its own SensorRegistry instance, pointed at its own
+subdirectory under <CONFIG_DIR>/dongles/<dongle_mac>/.
 
 The SensorRegistry is the single source of truth for sensor data within the
-bridge.  Nothing else should read or write sensors.yaml / state.yaml directly.
+bridge.  Nothing else should read or write these files directly.
 """
 
 import logging
@@ -17,7 +19,8 @@ import time
 from config import (
     SENSOR_STATE_FILE,
     SENSORS_CONFIG_FILE,
-    config_path,
+    dongle_data_path,
+    ensure_dongle_dir,
     read_yaml,
     write_yaml,
 )
@@ -126,17 +129,30 @@ def _default_state_entry() -> dict:
 
 
 class SensorRegistry:
-    """Manages sensor configuration and runtime state.
+    """Manages sensor configuration and runtime state for one dongle.
+
+    Each dongle gets its own SensorRegistry instance, with data stored
+    under <CONFIG_DIR>/dongles/<dongle_mac>/.
 
     Attributes:
-        sensors:  dict[mac, config_dict]   – persisted to sensors.yaml
-        state:    dict[mac, state_dict]    – persisted to state.yaml
+        dongle_mac:  the MAC of the owning dongle (used for path resolution)
+        sensors:     dict[mac, config_dict]  – persisted to sensors.yaml
+        state:       dict[mac, state_dict]   – persisted to state.yaml
     """
 
-    def __init__(self, logger: logging.Logger | None = None):
+    def __init__(self, dongle_mac: str, logger: logging.Logger | None = None):
+        self._dongle_mac = dongle_mac
         self._logger = logger.getChild("sensors") if logger else logging.getLogger("ws2m.sensors")
         self.sensors: dict[str, dict] = {}
         self.state: dict[str, dict] = {}
+
+    @property
+    def dongle_mac(self) -> str:
+        return self._dongle_mac
+
+    def _data_path(self, filename: str) -> str:
+        """Return the full path to a per-dongle data file."""
+        return dongle_data_path(self._dongle_mac, filename)
 
     # ------------------------------------------------------------------
     # Logging helpers
@@ -152,15 +168,15 @@ class SensorRegistry:
 
     def load_sensors(self) -> bool:
         """Load sensors.yaml into self.sensors. Returns True if file existed."""
-        path = config_path(SENSORS_CONFIG_FILE)
+        path = self._data_path(SENSORS_CONFIG_FILE)
         if not os.path.isfile(path):
-            self._log("warning", "No sensors config file found")
+            self._log("warning", f"No sensors config file found for dongle {self._dongle_mac}")
             self.sensors = {}
             return False
 
         data = read_yaml(path, self._logger) or {}
         self.sensors = data
-        self._log("info", f"Loaded {len(self.sensors)} sensor(s) from sensors.yaml")
+        self._log("info", f"Loaded {len(self.sensors)} sensor(s) from {path}")
 
         # Back-fill any missing defaults
         for mac in self.sensors:
@@ -170,7 +186,8 @@ class SensorRegistry:
 
     def save_sensors(self) -> bool:
         """Persist self.sensors to sensors.yaml."""
-        ok = write_yaml(config_path(SENSORS_CONFIG_FILE), self.sensors, self._logger)
+        ensure_dongle_dir(self._dongle_mac)
+        ok = write_yaml(self._data_path(SENSORS_CONFIG_FILE), self.sensors, self._logger)
         if ok:
             self._log("debug", "Saved sensors.yaml")
         return ok
@@ -234,7 +251,7 @@ class SensorRegistry:
 
     def load_state(self) -> bool:
         """Load state.yaml into self.state. Returns True if file existed."""
-        path = config_path(SENSOR_STATE_FILE)
+        path = self._data_path(SENSOR_STATE_FILE)
         if not os.path.isfile(path):
             self.state = {}
             return False
@@ -249,14 +266,15 @@ class SensorRegistry:
             return True
 
         self.state = raw
-        self._log("info", f"Loaded state for {len(self.state)} sensor(s) from state.yaml")
+        self._log("info", f"Loaded state for {len(self.state)} sensor(s) from {path}")
         return True
 
     def save_state(self) -> bool:
         """Persist self.state to state.yaml, with a 'modified' timestamp."""
+        ensure_dongle_dir(self._dongle_mac)
         data = dict(self.state)
         data["modified"] = time.time()
-        ok = write_yaml(config_path(SENSOR_STATE_FILE), data, self._logger)
+        ok = write_yaml(self._data_path(SENSOR_STATE_FILE), data, self._logger)
         if ok:
             self._log("debug", "Saved state.yaml")
         return ok

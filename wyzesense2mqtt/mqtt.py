@@ -22,28 +22,37 @@ without corrupting any shared module-level state.
 
 Adding a new universal sensor entity is a one-line addition to
 _build_diagnostic_components() or _build_sensor_action_components().
-Adding a new bridge entity means editing _build_bridge_components().
+Adding a new dongle entity means editing _build_dongle_components().
+Adding a new service entity means editing _build_service_components().
 Adding a new sensor type means adding a builder and registering it in
 _COMPONENT_BUILDERS.
 
+HA device hierarchy
+--------------------
+  ws2m_service_<uuid>     — software service device (singleton per ws2m instance)
+    └─ ws2m_dongle_<mac>  — physical USB dongle device (one per connected dongle)
+         └─ wyzesense_<mac> — individual Wyze sensor
+
 Discovery schema versioning
 ----------------------------
-DISCOVERY_SCHEMA_VERSION is a single project-wide constant that covers both
-sensor and bridge discovery payloads.  Bump it whenever *any* topic structure
-or payload shape changes, and add the corresponding cleanup to
-``migrate_to_v<N>`` in the _MIGRATION_STEPS list below.
+DISCOVERY_SCHEMA_VERSION is a single project-wide constant that covers all
+discovery payloads.  Bump it whenever *any* topic structure or payload shape
+changes, and add the corresponding cleanup to ``migrate_to_v<N>`` in the
+_MIGRATION_STEPS list below.
 
 Schema history
   v1 — legacy per-entity sensor topics + 3.x bridge topic:
          homeassistant/<platform>/wyzesense_<mac>/<entity>/config
          homeassistant/binary_sensor/wyzesense_bridge_<mac>/connection_state/config
-  v2 — current device-based topics for both sensors and bridge:
-         homeassistant/device/wyzesense_<mac>/config
-         homeassistant/device/ws2m_bridge_<mac>/config
+  v2 — device-based topics; service + dongle split (4.0.0):
+         homeassistant/device/wyzesense_<mac>/config       (sensor)
+         homeassistant/device/ws2m_service_<uuid>/config   (software service)
+         homeassistant/device/ws2m_dongle_<mac>/config     (hardware dongle)
+
 
 The single ``discovery_schema_version`` key in migrations.yaml tracks where
-each installation is up to.  Bridge and sensor topics are migrated together in
-one pass, removing the need for a separate ``bridge_identity_version`` key.
+each installation is up to.  All device and sensor topics are migrated
+together in one pass.
 """
 
 import json
@@ -58,7 +67,7 @@ from sensors import BINARY_SENSOR_TYPES, SENSOR_TYPES
 # ---------------------------------------------------------------------------
 # Discovery schema version
 #
-# Single project-wide constant covering sensor and bridge payloads together.
+# Single project-wide constant covering all device and sensor payloads.
 # Bump this whenever any topic structure or payload shape changes, and add a
 # corresponding migrate_to_vN entry to _MIGRATION_STEPS below.
 # ---------------------------------------------------------------------------
@@ -300,8 +309,8 @@ def _build_sensor_action_components(sensor_mac: str, remove_topic: str) -> dict:
     """Per-sensor action buttons appended to every sensor's component list.
 
     Returns a fresh dict on every call.  The remove button publishes the
-    sensor's MAC as the payload, which the bridge handles via its
-    ``ws2m/remove`` subscription.
+    sensor's MAC as the payload, which the dongle worker handles via its
+    ``ws2m/dongle_<mac>/remove`` subscription.
     To add a new universal sensor action, add an entry here.
     """
     return {
@@ -326,14 +335,42 @@ _STATE_PLATFORMS: frozenset[str] = frozenset({"sensor", "binary_sensor"})
 
 
 # ---------------------------------------------------------------------------
-# Bridge component builder
+# Service component builder
 # ---------------------------------------------------------------------------
 
 
-def _build_bridge_components(self_root: str, dongle_mac: str) -> dict:
-    """Components for the bridge device.
+def _build_service_components(self_root: str) -> dict:
+    """Components for the ws2m software service device (singleton per instance).
 
-    Returns a fresh dict on every call.  To add a new bridge entity,
+    The service device owns the reload button and any other service-level
+    controls that span all connected dongles.
+
+    Returns a fresh dict on every call.  To add a new service-level entity,
+    add an entry here — no other code needs to change.
+    """
+    return {
+        "reload": {
+            "platform": "button",
+            "name": "Reload config",
+            "entity_category": "config",
+            "command_topic": f"{self_root}/reload",
+            "payload_press": "reload",
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Dongle component builder
+# ---------------------------------------------------------------------------
+
+
+def _build_dongle_components(self_root: str, dongle_mac: str) -> dict:
+    """Components for one physical USB dongle device.
+
+    Each dongle gets its own HA device with connection state, scan, and
+    remove buttons scoped to that specific dongle.
+
+    Returns a fresh dict on every call.  To add a new per-dongle entity,
     add an entry here — no other code needs to change.
     """
     return {
@@ -344,24 +381,21 @@ def _build_bridge_components(self_root: str, dongle_mac: str) -> dict:
             "entity_category": "diagnostic",
             "payload_on": "online",
             "payload_off": "offline",
-            "state_topic": f"{self_root}/bridge_{dongle_mac}/status",
-            "unique_id": f"ws2m_bridge_{dongle_mac}_connection_state",
+            "state_topic": f"{self_root}/dongle_{dongle_mac}/status",
         },
         "scan": {
             "platform": "button",
             "name": "Scan for sensor",
             "entity_category": "config",
-            "command_topic": f"{self_root}/scan",
+            "command_topic": f"{self_root}/dongle_{dongle_mac}/scan",
             "payload_press": "scan",
-            "unique_id": f"ws2m_bridge_{dongle_mac}_scan",
         },
-        "reload": {
+        "remove": {
             "platform": "button",
-            "name": "Reload config",
+            "name": "Remove sensor",
             "entity_category": "config",
-            "command_topic": f"{self_root}/reload",
-            "payload_press": "reload",
-            "unique_id": f"ws2m_bridge_{dongle_mac}_reload",
+            "command_topic": f"{self_root}/dongle_{dongle_mac}/remove",
+            "payload_press": "remove",
         },
     }
 
@@ -370,19 +404,17 @@ def _build_bridge_components(self_root: str, dongle_mac: str) -> dict:
 # Discovery schema migration
 #
 # Each entry in _MIGRATION_STEPS is a callable:
-#   migrate_to_vN(client, config, logger, sensor_mac, sensor_type, wait)
+#   migrate_to_vN(client, config, logger, sensor_mac, sensor_type,
+#                 dongle_mac, service_id, wait)
 #
 # The function clears *all* stale retained topics that were published by
-# version N-1 — for both sensors and the bridge.  Sensor-specific cleanup
-# receives the sensor MAC and type; bridge-specific cleanup uses only config.
-#
-# Adding a migration for a future version N:
+# version N-1.  Adding a migration for a future version N:
 #   1. Write def _migrate_to_vN(...)
 #   2. Append it to _MIGRATION_STEPS
 #   3. Bump DISCOVERY_SCHEMA_VERSION to N
 #
-# _MIGRATION_STEPS is indexed from 0; step at index i clears v(i+1) topics,
-# i.e. step 0 clears v1 topics (the migration from v1 → v2).
+# _MIGRATION_STEPS is indexed from 0; step at index i migrates from vi+1 to
+# vi+2.  Currently there is only one step: v1 → v2.
 # ---------------------------------------------------------------------------
 
 
@@ -393,19 +425,16 @@ def _migrate_to_v2(
     sensor_mac: str,
     sensor_type: str,
     dongle_mac: str,
+    service_id: str,
     wait: bool = True,
 ) -> None:
-    """Clear all v1 retained topics for one sensor and (once) the bridge.
+    """Clear all v1 retained topics for one sensor and the v1 bridge device.
 
     v1 sensor topics — legacy per-entity format:
       homeassistant/<platform>/wyzesense_<mac>/<entity>/config
 
     v1 bridge topic — 3.x identity:
       homeassistant/binary_sensor/wyzesense_bridge_<mac>/connection_state/config
-
-    The bridge topic is keyed on dongle_mac, not sensor_mac, so it is cleared
-    here on every sensor's migration pass (publishing None to a topic that is
-    already empty is a safe no-op).
     """
     hass_root = config["hass_topic_root"]
 
@@ -443,7 +472,7 @@ def _migrate_to_v2(
 
 
 # List of migration step functions, one per schema version transition.
-# Index 0 = migration to v2 (clears v1 topics), index 1 = migration to v3, etc.
+# Index 0 = migration to v2 (clears all pre-v2 topics).
 _MIGRATION_STEPS: list[Callable] = [
     _migrate_to_v2,
 ]
@@ -622,30 +651,34 @@ class MqttGateway:
         return _publish(self._client, self._config, self._logger, topic, payload, is_json=is_json, wait=wait)
 
     # ------------------------------------------------------------------
-    # Bridge discovery
+    # Service discovery
     # ------------------------------------------------------------------
 
-    def publish_bridge_discovery(self, dongle_mac: str, dongle_version: str, wait: bool = True) -> None:
-        """Publish the HA device-based discovery config for the bridge.
+    def publish_service_discovery(self, service_id: str, wait: bool = True) -> None:
+        """Publish the HA device-based discovery config for the ws2m service.
 
         Publishes a single retained topic:
-          homeassistant/device/ws2m_bridge_<mac>/config
+          homeassistant/device/ws2m_service_<uuid>/config
 
-        The payload's ``components`` block is built by _build_bridge_components().
-        To add a new bridge entity, edit that function — no other code changes.
+        The service device is a software-only singleton representing this
+        ws2m instance.  It intentionally omits hw_version and connections so
+        that HA classifies it as a software device in the device info panel
+        (HA's heuristic: sw_version present, hw_version and connections absent).
+        To add a new service-level entity, edit _build_service_components().
         """
         cfg = self._config
-        components = _build_bridge_components(cfg["self_topic_root"], dongle_mac)
+        components = _build_service_components(cfg["self_topic_root"])
         for component in components.values():
             component["has_entity_name"] = True
+            uid_key = component.get("command_topic", "").split("/")[-1]
+            component["unique_id"] = f"ws2m_service_{service_id}_{uid_key}"
 
         payload = {
             "device": {
-                "hw_version": dongle_version,
-                "identifiers": [f"ws2m_bridge_{dongle_mac}", dongle_mac],
+                "identifiers": [f"ws2m_service_{service_id}"],
                 "manufacturer": "Raetha",
-                "model": "Bridge",
-                "name": f"WyzeSense2MQTT Bridge {dongle_mac}",
+                "model": "WyzeSense2MQTT Service",
+                "name": "WyzeSense2MQTT",
                 "sw_version": VERSION,
             },
             "origin": {
@@ -656,9 +689,57 @@ class MqttGateway:
             "components": components,
             "qos": cfg["mqtt_qos"],
         }
-        topic = f"{cfg['hass_topic_root']}/device/ws2m_bridge_{dongle_mac}/config"
+        topic = f"{cfg['hass_topic_root']}/device/ws2m_service_{service_id}/config"
         self.publish(topic, payload, wait=wait)
-        self._logger.debug(f"Published bridge discovery → {topic}")
+        self._logger.debug(f"Published service discovery → {topic}")
+
+    # ------------------------------------------------------------------
+    # Dongle discovery
+    # ------------------------------------------------------------------
+
+    def publish_dongle_discovery(
+        self,
+        dongle_mac: str,
+        dongle_version: str,
+        service_id: str,
+        wait: bool = True,
+    ) -> None:
+        """Publish the HA device-based discovery config for one USB dongle.
+
+        Publishes a single retained topic:
+          homeassistant/device/ws2m_dongle_<mac>/config
+
+        The dongle device is a hardware device with hw_version from the
+        dongle firmware.  It is a child of the service device.
+        To add a new per-dongle entity, edit _build_dongle_components().
+        """
+        cfg = self._config
+        components = _build_dongle_components(cfg["self_topic_root"], dongle_mac)
+        for key, component in components.items():
+            component["has_entity_name"] = True
+            component["unique_id"] = f"ws2m_dongle_{dongle_mac}_{key}"
+
+        payload = {
+            "device": {
+                "hw_version": dongle_version,
+                "identifiers": [f"ws2m_dongle_{dongle_mac}", dongle_mac],
+                "manufacturer": "Raetha",
+                "model": "WyzeSense Bridge Dongle",
+                "name": f"WyzeSense Dongle {dongle_mac}",
+                "sw_version": VERSION,
+                "via_device": f"ws2m_service_{service_id}",
+            },
+            "origin": {
+                "name": "WyzeSense2MQTT",
+                "sw_version": VERSION,
+                "support_url": "https://github.com/raetha/wyzesense2mqtt",
+            },
+            "components": components,
+            "qos": cfg["mqtt_qos"],
+        }
+        topic = f"{cfg['hass_topic_root']}/device/ws2m_dongle_{dongle_mac}/config"
+        self.publish(topic, payload, wait=wait)
+        self._logger.debug(f"Published dongle discovery → {topic}")
 
     # ------------------------------------------------------------------
     # Sensor discovery
@@ -669,6 +750,7 @@ class MqttGateway:
         sensor_mac: str,
         sensor: dict,
         dongle_mac: str,
+        service_id: str,
         sensor_online: bool,
         wait: bool = True,
     ) -> None:
@@ -676,6 +758,11 @@ class MqttGateway:
 
         Uses the v2 device-based format:
           homeassistant/device/wyzesense_<mac>/config
+
+        Sensor availability depends on both the dongle and the service:
+          - ws2m/<sensor_mac>/status  — sensor-level heartbeat timeout
+          - ws2m/dongle_<mac>/status  — dongle connectivity
+          - ws2m/service_<uuid>/status — service connectivity (future use)
 
         The payload's ``components`` block is assembled from three sources:
           1. The sensor-type-specific builder from _COMPONENT_BUILDERS
@@ -695,7 +782,7 @@ class MqttGateway:
             return
 
         mac_topic = f"{cfg['self_topic_root']}/{sensor_mac}"
-        remove_topic = f"{cfg['self_topic_root']}/remove"
+        remove_topic = f"{cfg['self_topic_root']}/dongle_{dongle_mac}/remove"
 
         # Merge all component sources — all return fresh dicts, safe to mutate below
         components: dict = builder(sensor_mac, sensor, mac_topic)
@@ -720,7 +807,7 @@ class MqttGateway:
                 "hw_version": sensor.get("hw_version", type_meta.get("hw_version", "unknown")),
                 "name": sensor.get("name", f"WyzeSense {sensor_mac}"),
                 "sw_version": sensor.get("sw_version", "unknown"),
-                "via_device": f"ws2m_bridge_{dongle_mac}",
+                "via_device": f"ws2m_dongle_{dongle_mac}",
             },
             "origin": {
                 "name": "WyzeSense2MQTT",
@@ -732,7 +819,7 @@ class MqttGateway:
             "state_topic": mac_topic,
             "availability": [
                 {"topic": f"{cfg['self_topic_root']}/{sensor_mac}/status"},
-                {"topic": f"{cfg['self_topic_root']}/bridge_{dongle_mac}/status"},
+                {"topic": f"{cfg['self_topic_root']}/dongle_{dongle_mac}/status"},
             ],
             "availability_mode": "all",
             "qos": cfg["mqtt_qos"],
@@ -789,19 +876,26 @@ class MqttGateway:
         sensor_mac: str,
         sensor_type: str,
         dongle_mac: str,
+        service_id: str,
         from_version: int,
         wait: bool = True,
     ) -> None:
         """Clear stale retained topics for all schema versions from *from_version* to current.
 
-        Each migration step handles both sensor and bridge topics for that version
-        transition, so bridge and sensor discovery are always migrated together in
-        a single pass driven by bridge.py's _init_sensors loop.
+        Each migration step handles sensor, dongle, and service topics for that
+        version transition, driven by the DongleWorker's _init_sensors loop.
         """
         for step_index in range(from_version - 1, DISCOVERY_SCHEMA_VERSION - 1):
             if step_index < len(_MIGRATION_STEPS):
                 target_version = step_index + 2
                 self._logger.debug(f"Clearing v{target_version - 1} discovery topics for {sensor_mac}")
                 _MIGRATION_STEPS[step_index](
-                    self._client, self._config, self._logger, sensor_mac, sensor_type, dongle_mac, wait=wait
+                    self._client,
+                    self._config,
+                    self._logger,
+                    sensor_mac,
+                    sensor_type,
+                    dongle_mac,
+                    service_id,
+                    wait=wait,
                 )
