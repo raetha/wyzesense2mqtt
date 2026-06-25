@@ -27,13 +27,13 @@ The keypad sends four distinct event types:
 
 ## MQTT topics
 
-All topics use the configured `self_topic_root` (default `wyzesense2mqtt`).
+All topics use the configured `self_topic_root` (default `ws2m`).
 Replace `<mac>` with the keypad's 8-character MAC address.
 
 ### State topic
 
 ```
-wyzesense2mqtt/<mac>
+ws2m/<mac>
 ```
 
 ws2m publishes JSON here on every mode or motion event. The payload always
@@ -61,7 +61,7 @@ diagnostics.
 ### PIN topic
 
 ```
-wyzesense2mqtt/<mac>/pin
+ws2m/<mac>/pin
 ```
 
 Published on every PIN confirm event. PIN validation against your configured
@@ -82,7 +82,7 @@ on.
 ### Command topic
 
 ```
-wyzesense2mqtt/<mac>/set
+ws2m/<mac>/set
 ```
 
 ws2m subscribes to this topic so that Home Assistant or Alarmo can reflect the
@@ -92,8 +92,8 @@ current alarm state back to the keypad's discovery entity. Send one of:
 ### Availability topic
 
 ```
-wyzesense2mqtt/<mac>/status          →  "online" / "offline"   (sensor heartbeat)
-wyzesense2mqtt/dongle_<mac>/status   →  "online" / "offline"   (dongle connectivity)
+ws2m/<mac>/status          →  "online" / "offline"   (sensor heartbeat)
+ws2m/dongle_<mac>/status   →  "online" / "offline"   (dongle connectivity)
 ```
 
 The keypad is marked unavailable in HA if either topic goes offline
@@ -111,13 +111,29 @@ topic that creates the following entities automatically:
 |---|---|---|
 | Alarm control panel | `alarm_control_panel` | Reflects `alarm_mode`; accepts commands |
 | Motion | `binary_sensor` (motion) | From the keypad's built-in PIR |
+| PIN count | `sensor` | Number of PINs currently configured |
+| Arm PIN capture | `button` | Arms ws2m to capture the next hardware PIN entry |
+| Clear all PINs | `button` | Removes all configured PINs from `sensors.yaml` |
+| Sensor name | `text` | Rename the keypad device in HA |
 | Battery | `sensor` (battery %) | Diagnostic |
 | Signal strength | `sensor` (dBm) | Diagnostic; disabled by default |
 | Remove sensor | `button` | Config button to unpair |
 
 ---
 
-## Configuring PINs (sensors.yaml)
+## Configuring PINs
+
+PINs can be managed from either the Home Assistant device page or by editing `sensors.yaml` directly.
+
+### Managing PINs from Home Assistant (recommended)
+
+Each keypad device in HA has three PIN management entities:
+
+- **PIN count** — a sensor showing how many PINs are currently configured.
+- **Arm PIN capture** — press this button to arm ws2m for capture, then enter the new PIN on the physical keypad within the next keypress cycle. ws2m adds it to the configured list automatically and updates the PIN count.
+- **Clear all PINs** — removes every configured PIN from `sensors.yaml`. After clearing, all PIN entries are treated as valid until new PINs are added.
+
+### Managing PINs via sensors.yaml
 
 Add a `pins` key to the keypad entry in `sensors.yaml`. This controls which
 PINs are considered valid when ws2m publishes `pin_valid` to the PIN topic.
@@ -141,6 +157,8 @@ A single PIN can also be given as a plain string rather than a list:
 pins: "1234"
 ```
 
+> **Note:** PIN digits are stored as strings. Use quoted values (`"1234"`, not `1234`) to avoid YAML treating leading zeros as octal.
+
 ---
 
 ## Using Alarmo (recommended)
@@ -155,8 +173,8 @@ interface.
 
 1. Install Alarmo via HACS (or manually).
 2. Open **Alarmo → Configuration → MQTT**.
-3. Set the **state topic** to `wyzesense2mqtt/<mac>` and the
-   **command topic** to `wyzesense2mqtt/<mac>/set`.
+3. Set the **state topic** to `ws2m/<mac>` and the
+   **command topic** to `ws2m/<mac>/set`.
 4. Set the **state payload** field to use `alarm_mode` from the JSON:
 
    ```
@@ -195,7 +213,7 @@ topics and the HA `mqtt` integration.
 alias: Keypad – Arm Away
 trigger:
   - platform: mqtt
-    topic: wyzesense2mqtt/<mac>
+    topic: ws2m/<mac>
     value_template: "{{ value_json.alarm_mode }}"
     payload: "armed_away"
 condition: []
@@ -214,7 +232,7 @@ matches your `sensors.yaml` list. Use this to trigger disarming:
 alias: Keypad – Disarm on valid PIN
 trigger:
   - platform: mqtt
-    topic: wyzesense2mqtt/<mac>/pin
+    topic: ws2m/<mac>/pin
     value_template: "{{ value_json.pin_valid }}"
     payload: "True"
 condition: []
@@ -294,7 +312,8 @@ send a Reload command or restart the bridge.
 **`pin_valid` is always `false`.**  
 Check that the `pins` list in `sensors.yaml` contains strings, not integers:
 `- "1234"` not `- 1234`. YAML bare numbers will not match the keypad's ASCII
-digit stream.
+digit stream. You can verify the current PIN count from the **PIN count** sensor
+entity on the HA device page.
 
 **Motion events stop arriving.**  
 The keypad PIR has a cooldown period of roughly 60 seconds between `active`

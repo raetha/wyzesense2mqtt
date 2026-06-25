@@ -121,7 +121,7 @@ def test_load_config_env_override_prefixed(sample_config, tmp_config_dir, monkey
     """WS2M_-prefixed environment variables override file values (preferred form)."""
     monkeypatch.setenv("WS2M_MQTT_HOST", "envbroker.local")
     monkeypatch.setenv("WS2M_MQTT_PORT", "8883")
-    monkeypatch.setenv("WS2M_MQTT_RETAIN", "false")
+    monkeypatch.setenv("WS2M_LOG_LEVEL", "DEBUG")
 
     import importlib
     import config as cfg_module
@@ -135,14 +135,14 @@ def test_load_config_env_override_prefixed(sample_config, tmp_config_dir, monkey
     cfg, _ = cfg_module.load_config()
     assert cfg["mqtt_host"] == "envbroker.local"
     assert cfg["mqtt_port"] == 8883
-    assert cfg["mqtt_retain"] is False
+    assert cfg["log_level"] == "DEBUG"
 
 
 def test_load_config_env_override_unprefixed_compat(sample_config, tmp_config_dir, monkeypatch):
     """Unprefixed environment variables are still accepted (backwards compat)."""
     monkeypatch.setenv("MQTT_HOST", "envbroker.local")
     monkeypatch.setenv("MQTT_PORT", "8883")
-    monkeypatch.setenv("MQTT_RETAIN", "false")
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
 
     import importlib
     import config as cfg_module
@@ -156,7 +156,7 @@ def test_load_config_env_override_unprefixed_compat(sample_config, tmp_config_di
     cfg, _ = cfg_module.load_config()
     assert cfg["mqtt_host"] == "envbroker.local"
     assert cfg["mqtt_port"] == 8883
-    assert cfg["mqtt_retain"] is False
+    assert cfg["log_level"] == "DEBUG"
 
 
 def test_load_config_prefixed_wins_over_unprefixed(sample_config, tmp_config_dir, monkeypatch):
@@ -412,7 +412,7 @@ def test_save_config_round_trips(sample_config, tmp_config_dir):
 
 def test_load_config_env_coercion_true_and_none(sample_config, tmp_config_dir, monkeypatch):
     """Env vars of 'true' and 'none' are coerced to bool True and None."""
-    monkeypatch.setenv("WS2M_MQTT_RETAIN", "true")
+    monkeypatch.setenv("WS2M_LOG_LEVEL", "DEBUG")
     monkeypatch.setenv("WS2M_MQTT_PASSWORD", "none")
 
     import importlib
@@ -425,7 +425,7 @@ def test_load_config_env_coercion_true_and_none(sample_config, tmp_config_dir, m
         yaml.safe_dump(sample_config, f)
 
     cfg, _ = cfg_module.load_config()
-    assert cfg["mqtt_retain"] is True
+    assert cfg["log_level"] == "DEBUG"
     assert cfg["mqtt_password"] is None
 
 

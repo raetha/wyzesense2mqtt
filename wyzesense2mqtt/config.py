@@ -49,6 +49,11 @@ _LEGACY_STATE_FILE = "state.yaml"
 # These seed config.yaml on first run and fill in any keys that are absent
 # from an existing file, so new settings get applied automatically on upgrade
 # without requiring user action.
+#
+# Removed keys (kept here as comments for upgrade awareness):
+#   mqtt_qos          — removed; hardcoded per-publish in mqtt.py
+#   mqtt_retain       — removed; hardcoded per-publish in mqtt.py
+#   publish_sensor_name — removed; sensor name is always published via device discovery
 # ---------------------------------------------------------------------------
 
 DEFAULT_CONFIG: dict = {
@@ -60,15 +65,19 @@ DEFAULT_CONFIG: dict = {
     "mqtt_client_id": "ws2m",
     "mqtt_clean_session": False,
     "mqtt_keepalive": 60,
-    "mqtt_qos": 0,
-    "mqtt_retain": True,
-    # MQTT topic roots
+    # MQTT topic root for ws2m data topics.
+    # Change only when running multiple ws2m instances on the same broker.
     "self_topic_root": "ws2m",
+    # Home Assistant MQTT discovery topic root.
+    # HA's default is "homeassistant" and has been stable since 2021.x.
+    # Only change this if you have explicitly reconfigured HA's MQTT
+    # discovery prefix in configuration.yaml (mqtt: discovery_prefix: ...).
     "hass_topic_root": "homeassistant",
-    # Home Assistant integration
+    # Home Assistant integration — disable to suppress all discovery publishes.
+    # When set to False at startup, any previously-published discovery topics
+    # are cleaned up so HA does not retain stale entities.
+    # Can also be set via WS2M_HASS_DISCOVERY env var.
     "hass_discovery": True,
-    # Sensor display
-    "publish_sensor_name": True,
     # USB dongle path:
     #   "auto"        — detect all connected WyzeSense dongles automatically
     #                   (multi-dongle supported when "auto" is used)
@@ -77,6 +86,10 @@ DEFAULT_CONFIG: dict = {
     # Logging
     "log_level": "INFO",
 }
+
+# Keys that were present in 3.x / early 4.0 configs but are no longer used.
+# Silently dropped when loading so they do not accumulate in saved config.yaml.
+_REMOVED_KEYS: frozenset[str] = frozenset(["mqtt_qos", "mqtt_retain", "publish_sensor_name"])
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +182,9 @@ def load_config(logger: logging.Logger | None = None) -> tuple[dict | None, dict
     if os.path.isfile(cfg_path):
         config_from_file = read_yaml(cfg_path, logger)
         if config_from_file:
+            # Drop keys that were removed in 4.0 so they don't persist
+            for key in _REMOVED_KEYS:
+                config_from_file.pop(key, None)
             cfg.update(config_from_file)
 
     def _coerce(val: str):
@@ -211,8 +227,12 @@ def load_config(logger: logging.Logger | None = None) -> tuple[dict | None, dict
 
 
 def save_config(cfg: dict, logger: logging.Logger | None = None) -> bool:
-    """Persist the current config dict to config/config.yaml."""
-    return write_yaml(config_path(MAIN_CONFIG_FILE), cfg, logger)
+    """Persist the current config dict to config/config.yaml.
+
+    Removed keys are stripped before writing so they do not re-accumulate.
+    """
+    clean = {k: v for k, v in cfg.items() if k not in _REMOVED_KEYS}
+    return write_yaml(config_path(MAIN_CONFIG_FILE), clean, logger)
 
 
 def init_logging(log_level: str | None = None) -> logging.Logger:

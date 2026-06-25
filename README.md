@@ -144,19 +144,33 @@ mqtt_password: <password>
 mqtt_client_id: ws2m
 mqtt_clean_session: false
 mqtt_keepalive: 60
-mqtt_qos: 0
-mqtt_retain: true
 self_topic_root: ws2m
 hass_topic_root: homeassistant
 hass_discovery: true
-publish_sensor_name: true
 usb_dongle: auto
 log_level: INFO
-``` 
+```
+
+| Key | Default | Notes |
+|---|---|---|
+| `mqtt_host` | *(required)* | MQTT broker hostname or IP |
+| `mqtt_port` | `1883` | Broker port |
+| `mqtt_username` / `mqtt_password` | *(none)* | Broker credentials |
+| `mqtt_client_id` | `ws2m` | MQTT client identifier |
+| `mqtt_clean_session` | `false` | Persist subscriptions across restarts |
+| `mqtt_keepalive` | `60` | Broker keepalive in seconds |
+| `self_topic_root` | `ws2m` | Topic prefix for all ws2m data topics. Change when running multiple instances on the same broker. |
+| `hass_topic_root` | `homeassistant` | HA MQTT discovery prefix. Only change if you have set `mqtt: discovery_prefix` in HA's `configuration.yaml`. |
+| `hass_discovery` | `true` | Publish HA MQTT discovery config. Disable to suppress all discovery; ws2m cleans up retained topics on startup when false. |
+| `usb_dongle` | `auto` | USB dongle path. `auto` detects all connected dongles; set to `/dev/hidrawN` to pin to a specific device. |
+| `log_level` | `INFO` | Log verbosity. `DEBUG`, `INFO`, `WARNING`, or `ERROR`. Also adjustable live from the HA service device page. |
+
 
 
 ### sensors.yaml
-This file stores per-sensor configuration for each sensor paired to a Wyze Sense Bridge dongle. In 4.0 and later it lives at `<data>/dongles/<dongle_mac>/sensors.yaml` (one file per dongle). Existing flat `sensors.yaml` files at the data root are migrated automatically on first start. Entries can be modified to set the sensor name and class as they will appear in Home Assistant. The `class` field maps to an HA binary_sensor device class (`opening`, `door`, `window`, `motion`, `moisture`, etc.). A per-sensor availability timeout can be set via `timeout` (in seconds); the default is 28800 s (8 h) for v1 sensors and 14400 s (4 h) for v2 sensors.
+This file stores per-sensor configuration for each sensor paired to a Wyze Sense Bridge dongle. In 4.0 and later it lives at `<data>/dongles/<dongle_mac>/sensors.yaml` (one file per dongle). Existing flat `sensors.yaml` files at the data root are migrated automatically on first start. Entries can be modified to set the sensor name, class, and invert_state as they will appear in Home Assistant. The `class` field maps to an HA binary_sensor device class (`opening`, `door`, `window`, `motion`, `moisture`, etc.). Availability timeouts are determined automatically by sensor type (8 h for V1, 4 h for V2, 24 h for chime) and are not user-configurable.
+
+Many sensor settings can also be adjusted live from the Home Assistant device page without editing this file — changes are written back automatically.
 
 Sensors added via the `scan` MQTT command will populate this file automatically with the correct `sensor_type` and `sw_version`. Sensors that were previously paired and auto-discovered will default to `class: opening` and will not have `sw_version` set. For v1 devices `sw_version` is typically `19`; for v2 devices it is typically `23`.
 
@@ -166,31 +180,33 @@ The **Chime** supports optional `ring_id` (0–255, default 0), `volume` (1–9,
 
 ```yaml
 'AAAAAAAA':
-  class: door
   name: Entry Door
-  invert_state: false
-  sw_version: 19
-'BBBBBBBB':
-  class: window
-  name: Office Window
+  sensor_type: switchv2
+  class: door
   invert_state: false
   sw_version: 23
-  timeout: 7200
-'CCCCCCCC':
-  class: opening
-  name: Kitchen Fridge
+'BBBBBBBB':
+  name: Office Window
+  sensor_type: switchv2
+  class: window
   invert_state: false
+  sw_version: 23
+'CCCCCCCC':
+  name: Kitchen Fridge
+  sensor_type: switch
+  class: opening
+  invert_state: true      # contact reads closed when door is open — swap payloads
   sw_version: 19
 'DDDDDDDD':
-  class: motion
   name: Hallway Motion
+  sensor_type: motionv2
+  class: motion
   invert_state: false
-  sw_version: 19
+  sw_version: 23
 'EEEEEEEE':
-  class: moisture
-  name: Basement Moisture
-  invert_state: true
-  sw_version: 19
+  name: Basement Leak
+  sensor_type: leak
+  sw_version: 23
 'KPADKPAD':
   name: Front Door Keypad
   sensor_type: keypad
@@ -211,18 +227,18 @@ At this time only a single sensor can be properly paired at once. Please repeat 
 
 With multi-dongle support, scan is scoped to a specific dongle. If you only have one dongle the MAC is shown in the startup log.
 
-1. Publish a blank message (payload `scan`) to the MQTT topic `<self_topic_root>/dongle_<dongle_mac>/scan` (e.g. `wyzesense2mqtt/dongle_AABBCCDD/scan`). This can be done via Home Assistant or any MQTT client. With HA discovery enabled, a **Scan for sensor** button appears on each dongle's device page.
+1. Publish a blank message (payload `scan`) to the MQTT topic `<self_topic_root>/dongle_<dongle_mac>/scan` (e.g. `ws2m/dongle_AABBCCDD/scan`). This can be done via Home Assistant or any MQTT client. With HA discovery enabled, a **Scan for sensor** button appears on each dongle's device page.
 2. Use the pin tool that came with your Wyze Sense sensors to press the reset switch on the side of the sensor. Hold until the red LED blinks.
 
 ### Removing a Sensor
 Remove is also dongle-scoped — the sensor can only be removed from the dongle it is paired with.
 
-1. Publish the sensor MAC address as the payload to the MQTT topic `<self_topic_root>/dongle_<dongle_mac>/remove` (e.g. `wyzesense2mqtt/dongle_AABBCCDD/remove`). The payload should be the 8-character MAC, e.g. `EEFFGGHH`. With HA discovery enabled, a **Remove sensor** button also appears on each sensor's device page.
+1. Publish the sensor MAC address as the payload to the MQTT topic `<self_topic_root>/dongle_<dongle_mac>/remove` (e.g. `ws2m/dongle_AABBCCDD/remove`). The payload should be the 8-character MAC, e.g. `EEFFGGHH`. With HA discovery enabled, a **Remove sensor** button also appears on each sensor's device page.
 
 ### Reload Sensors
 If you have modified a `sensors.yaml` while the gateway is running, you can trigger a reload of all dongles without restarting the service or Docker container.
 
-1. Publish a blank message (payload `reload`) to the MQTT topic `<self_topic_root>/reload` (default: `wyzesense2mqtt/reload`). With HA discovery enabled, a **Reload config** button appears on the WyzeSense2MQTT service device page.
+1. Publish a blank message (payload `reload`) to the MQTT topic `<self_topic_root>/reload` (default: `ws2m/reload`). With HA discovery enabled, a **Reload config** button appears on the WyzeSense2MQTT service device page.
 
 ### Command Line Tools
 
@@ -268,9 +284,15 @@ python3 -m cli.maintenance cleanup-discovery --listen-seconds 15
 See [docs/HA_MQTT_COMPLIANCE.md](docs/HA_MQTT_COMPLIANCE.md) for details on the MQTT discovery format used and how schema migrations/cleanup work.
 
 ## Home Assistant
-Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add a device for each sensor, along with entities for state, battery, and signal strength (plus temperature/humidity for climate and leak sensors). By default these entities will have a `device_class` of `opening` for contact sensors, `motion` for motion sensors, and `moisture` for leak sensors, and the device will be named `WyzeSense <MAC>`. To adjust the `device_class` to `door` or `window` and set a custom device name, update the `sensors.yaml` configuration file and trigger a [reload](#reload-sensors).
+Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add a device for each sensor, along with entities for state, battery, and signal strength (plus temperature/humidity for climate and leak sensors). By default these entities will have a `device_class` of `opening` for contact sensors, `motion` for motion sensors, and `moisture` for leak sensors, and the device will be named `WyzeSense <MAC>`. The following settings are adjustable live from the HA sensor device page and are written back to `sensors.yaml` automatically:
 
-The **Keypad v2** (WSKP1) creates an `alarm_control_panel` entity and a `motion` binary sensor. It is designed to be used with [Alarmo](https://github.com/nielsfaber/alarmo) or HA automations — see [docs/keypad.md](docs/keypad.md) for full setup instructions including entry/exit delay handling and PIN configuration.
+- **Sensor name** — renames the HA device and updates discovery
+- **Device class** — for contact sensors: `door`, `window`, `opening`, `garage_door`, `lock`; for motion sensors: `motion`, `occupancy`
+- **Invert state** — swaps `payload_on`/`payload_off` in HA discovery, useful for sensors installed in a non-standard orientation (e.g. a contact sensor in a doorbell chime box)
+
+These can also be set directly in `sensors.yaml` and applied via [Reload](#reload-sensors).
+
+The **Keypad v2** (WSKP1) creates an `alarm_control_panel` entity, a `motion` binary sensor, and PIN management entities (`PIN count` sensor, `Arm PIN capture` button, `Clear all PINs` button). To add a PIN: press **Arm PIN capture** in HA, then enter the PIN on the physical keypad — ws2m captures it and adds it to the configured list automatically. See [docs/keypad.md](docs/keypad.md) for full setup instructions including entry/exit delay handling.
 
 The **Wyze Video Doorbell V1 Chime** (WCHIME1) creates a `button` entity to trigger playback and `number` entities for ring tone, volume, and repeat count. These settings are adjustable directly from the HA device page and are persisted to `sensors.yaml` automatically.
 

@@ -10,11 +10,12 @@ MqttGateway wraps the paho-mqtt client and owns:
 Sensor component architecture
 ------------------------------
 Each sensor type maps to a *component builder* function that returns a fresh
-dict of ``{ entity_key: component_payload_dict }``.  Two additional builders
+dict of ``{ entity_key: component_payload_dict }``.  Additional builders
 are appended to every sensor regardless of type:
 
   _build_diagnostic_components()               — signal_strength, battery
   _build_sensor_action_components(mac, topic)  — remove button
+  _build_sensor_config_components(mac, sensor, mac_topic) — name/class/invert
 
 Builders always return *new* dicts so the inject loop can safely mutate the
 component payloads (stamping in unique_id, has_entity_name, value_template)
@@ -49,10 +50,33 @@ Schema history
          homeassistant/device/ws2m_service_<uuid>/config   (software service)
          homeassistant/device/ws2m_dongle_<mac>/config     (hardware dongle)
 
-
 The single ``discovery_schema_version`` key in migrations.yaml tracks where
 each installation is up to.  All device and sensor topics are migrated
 together in one pass.
+
+MQTT QoS and retain policy
+----------------------------
+QoS and retain values are hardcoded per-message type rather than being user-
+configurable.  This matches the behaviour of modern bridges (e.g. Zigbee2MQTT)
+and ensures sensible defaults without burdening users with MQTT semantics.
+
+  Status topics (online/offline):  QoS 1, retain=True
+    — Retained so HA recovers the correct availability state after a restart.
+
+  Discovery topics:                QoS 1, retain=True
+    — Retained so HA re-imports entity config after a restart without waiting
+      for the next bridge publish cycle.
+
+  Data topics (sensor payloads):   QoS 0, retain=False
+    — High-frequency; at-most-once delivery is appropriate.  Not retained so
+      HA does not display stale sensor readings after a long silence.
+
+  Command topics (button/select):  QoS 1, retain=False
+    — At-least-once delivery so commands are not silently dropped, but not
+      retained so commands do not replay on reconnect.
+
+  Number state topics (chime):     QoS 1, retain=True
+    — Retained so number entities recover their current value in HA after restart.
 """
 
 import json
@@ -62,17 +86,37 @@ from collections.abc import Callable
 
 import paho.mqtt.client as mqtt
 from config import VERSION, get_migration_value, set_migration_value
-from sensors import BINARY_SENSOR_TYPES, SENSOR_TYPES
+from sensors import BINARY_SENSOR_TYPES, DEVICE_CLASS_OPTIONS, INVERTIBLE_SENSOR_TYPES, SENSOR_TYPES
 
 # ---------------------------------------------------------------------------
-# Discovery schema version
-#
-# Single project-wide constant covering all device and sensor payloads.
-# Bump this whenever any topic structure or payload shape changes, and add a
-# corresponding migrate_to_vN entry to _MIGRATION_STEPS below.
+# Fixed constants
 # ---------------------------------------------------------------------------
 
+# Discovery schema version — bump when any topic/payload shape changes.
 DISCOVERY_SCHEMA_VERSION = 2
+
+# Valid log level choices exposed via the HA log_level select entity.
+LOG_LEVEL_OPTIONS: list[str] = ["DEBUG", "INFO", "WARNING", "ERROR"]
+
+# ---------------------------------------------------------------------------
+# Per-message QoS / retain constants
+# ---------------------------------------------------------------------------
+#
+# Import these wherever a publish() call needs explicit QoS/retain rather than
+# the defaults.  The MqttGateway.publish() / _publish() helpers default to
+# data-topic settings (QoS 0, retain=False) and callers override as needed.
+
+_QOS_STATUS = 1  # online/offline status
+_QOS_DISCOVERY = 1  # HA discovery config
+_QOS_DATA = 0  # sensor data payloads
+_QOS_COMMAND = 1  # command topics (button, select, text, number set)
+_QOS_NUMBER = 1  # number entity state topics (chime params)
+
+_RETAIN_STATUS = True  # retain status for availability recovery
+_RETAIN_DISCOVERY = True  # retain discovery for HA restart recovery
+_RETAIN_DATA = False  # do not retain sensor data (avoid stale readings)
+_RETAIN_COMMAND = False  # do not retain commands (avoid replay on reconnect)
+_RETAIN_NUMBER = True  # retain number states for HA restart recovery
 
 
 # ---------------------------------------------------------------------------
@@ -92,16 +136,33 @@ def _build_state_sensor_components(sensor_mac: str, sensor: dict, mac_topic: str
     binary_sensor entity whose device_class and payload labels come from
     SENSOR_TYPES.  Use this builder for any sensor_type that maps to a
     single boolean reading with no additional entities.
+
+    invert_state: when True the payload_on/payload_off values are swapped so
+    HA interprets the hardware state in reverse — useful for sensors installed
+    in a non-standard orientation (e.g. a contact sensor inside a doorbell
+    chime box that reads 'closed' when the bell rings).  The raw MQTT payload
+    from the sensor is unchanged; only the HA discovery config differs.
     """
     sensor_type = sensor.get("sensor_type", "unknown")
     type_meta = SENSOR_TYPES.get(sensor_type, SENSOR_TYPES["unknown"])
+
+    # Use per-sensor device_class override if set; fall back to type default.
+    device_class = sensor.get("class", type_meta.get("device_class", "opening"))
+
+    payload_on = type_meta.get("state_on", "open")
+    payload_off = type_meta.get("state_off", "closed")
+
+    # Swap payloads for invert_state.  Only applicable to invertible types.
+    if sensor.get("invert_state") and sensor_type in INVERTIBLE_SENSOR_TYPES:
+        payload_on, payload_off = payload_off, payload_on
+
     return {
         "state": {
             "platform": "binary_sensor",
             "name": None,
-            "device_class": type_meta["device_class"],
-            "payload_on": type_meta["state_on"],
-            "payload_off": type_meta["state_off"],
+            "device_class": device_class,
+            "payload_on": payload_on,
+            "payload_off": payload_off,
             "json_attributes_topic": mac_topic,
         }
     }
@@ -180,11 +241,15 @@ def _build_keypad_components(sensor_mac: str, sensor: dict, mac_topic: str) -> d
       keypad_motion     — PIR motion sensor on the keypad face
       keypad_pin_*      — PIN entry events (not exposed as HA entities; for automation use only)
 
-    The alarm_control_panel entity uses a separate command topic so that HA /
-    Alarmo can push the current alarm state back to the keypad's MQTT topic,
-    enabling future LED-state feedback if the keypad firmware supports it.
+    PIN management entities:
+      pin_count  — sensor showing number of configured PINs (read-only)
+      add_pin    — button that arms ws2m to capture the next hardware PIN entry
+      clear_pins — button that wipes all configured PINs
     """
     command_topic = f"{mac_topic}/set"
+    pin_count = sensor.get("pins", [])
+    if isinstance(pin_count, str):
+        pin_count = [pin_count] if pin_count else []
     return {
         "alarm_mode": {
             "platform": "alarm_control_panel",
@@ -205,6 +270,26 @@ def _build_keypad_components(sensor_mac: str, sensor: dict, mac_topic: str) -> d
             "payload_on": "active",
             "payload_off": "inactive",
             "json_attributes_topic": mac_topic,
+        },
+        "pin_count": {
+            "platform": "sensor",
+            "name": "PIN count",
+            "state_topic": f"{mac_topic}/pin_count",
+            "entity_category": "config",
+        },
+        "add_pin": {
+            "platform": "button",
+            "name": "Arm PIN capture",
+            "entity_category": "config",
+            "command_topic": f"{mac_topic}/add_pin",
+            "payload_press": "arm",
+        },
+        "clear_pins": {
+            "platform": "button",
+            "name": "Clear all PINs",
+            "entity_category": "config",
+            "command_topic": f"{mac_topic}/clear_pins",
+            "payload_press": "clear",
         },
     }
 
@@ -325,12 +410,68 @@ def _build_sensor_action_components(sensor_mac: str, remove_topic: str) -> dict:
     }
 
 
+def _build_sensor_config_components(sensor_mac: str, sensor: dict, mac_topic: str) -> dict:
+    """Configuration entities appended to every sensor's component list.
+
+    Exposes editable sensor settings as HA entities so users can adjust them
+    from the HA device page without editing sensors.yaml.  Changes are published
+    back to ws2m via MQTT command topics and persisted to sensors.yaml.
+
+    Entities:
+      sensor_name   — text entity for the HA device display name
+      device_class  — select entity to choose HA binary_sensor device_class
+                      (only for sensor types that have selectable options)
+      invert_state  — switch entity to reverse payload_on/payload_off in HA
+                      (only for invertible sensor types)
+    """
+    sensor_type = sensor.get("sensor_type", "unknown")
+    components: dict = {
+        "sensor_name": {
+            "platform": "text",
+            "name": "Sensor name",
+            "entity_category": "config",
+            "state_topic": f"{mac_topic}/sensor_name",
+            "command_topic": f"{mac_topic}/sensor_name/set",
+            "max": 64,
+        },
+    }
+
+    # device_class select — only for sensor types with multiple class options
+    if sensor_type in DEVICE_CLASS_OPTIONS:
+        options = DEVICE_CLASS_OPTIONS[sensor_type]
+        components["device_class"] = {
+            "platform": "select",
+            "name": "Device class",
+            "entity_category": "config",
+            "state_topic": f"{mac_topic}/device_class",
+            "command_topic": f"{mac_topic}/device_class/set",
+            "options": options,
+        }
+
+    # invert_state switch — only for invertible sensor types
+    if sensor_type in INVERTIBLE_SENSOR_TYPES:
+        components["invert_state"] = {
+            "platform": "switch",
+            "name": "Invert state",
+            "entity_category": "config",
+            "state_topic": f"{mac_topic}/invert_state",
+            "command_topic": f"{mac_topic}/invert_state/set",
+            "payload_on": "true",
+            "payload_off": "false",
+        }
+
+    return components
+
+
 # Platform types that expose a state value via the shared mac_topic JSON payload —
 # value_template is injected only for these.
 # Excluded platforms manage their own state topics or have no state topic:
 #   alarm_control_panel — value_template set explicitly in _build_keypad_components
 #   button              — command-only, no state topic
 #   number              — each entity has its own dedicated state_topic
+#   select              — own state_topic (sensor config entities)
+#   switch              — own state_topic (invert_state)
+#   text                — own state_topic (sensor_name)
 _STATE_PLATFORMS: frozenset[str] = frozenset({"sensor", "binary_sensor"})
 
 
@@ -342,8 +483,8 @@ _STATE_PLATFORMS: frozenset[str] = frozenset({"sensor", "binary_sensor"})
 def _build_service_components(self_root: str) -> dict:
     """Components for the ws2m software service device (singleton per instance).
 
-    The service device owns the reload button and any other service-level
-    controls that span all connected dongles.
+    The service device owns the reload button, log level select, and any other
+    service-level controls that span all connected dongles.
 
     Returns a fresh dict on every call.  To add a new service-level entity,
     add an entry here — no other code needs to change.
@@ -355,6 +496,14 @@ def _build_service_components(self_root: str) -> dict:
             "entity_category": "config",
             "command_topic": f"{self_root}/reload",
             "payload_press": "reload",
+        },
+        "log_level": {
+            "platform": "select",
+            "name": "Log level",
+            "entity_category": "config",
+            "state_topic": f"{self_root}/log_level",
+            "command_topic": f"{self_root}/log_level/set",
+            "options": LOG_LEVEL_OPTIONS,
         },
     }
 
@@ -404,7 +553,7 @@ def _build_dongle_components(self_root: str, dongle_mac: str) -> dict:
 # Discovery schema migration
 #
 # Each entry in _MIGRATION_STEPS is a callable:
-#   migrate_to_vN(client, config, logger, sensor_mac, sensor_type,
+#   migrate_to_vN(client, cfg, logger, sensor_mac, sensor_type,
 #                 dongle_mac, service_id, wait)
 #
 # The function clears *all* stale retained topics that were published by
@@ -420,7 +569,7 @@ def _build_dongle_components(self_root: str, dongle_mac: str) -> dict:
 
 def _migrate_to_v2(
     client: mqtt.Client,
-    config: dict,
+    cfg: dict,
     logger: logging.Logger,
     sensor_mac: str,
     sensor_type: str,
@@ -436,8 +585,6 @@ def _migrate_to_v2(
     v1 bridge topic — 3.x identity:
       homeassistant/binary_sensor/wyzesense_bridge_<mac>/connection_state/config
     """
-    hass_root = config["hass_topic_root"]
-
     # --- v1 sensor per-entity topics ---
     entity_types = ["signal_strength", "battery"]
     if sensor_type in BINARY_SENSOR_TYPES:
@@ -463,12 +610,12 @@ def _migrate_to_v2(
             platform = "binary_sensor"
         else:
             platform = "sensor"
-        topic = f"{hass_root}/{platform}/wyzesense_{sensor_mac}/{entity_type}/config"
-        _publish(client, config, logger, topic, None, wait=wait)
+        topic = f"{cfg['hass_topic_root']}/{platform}/wyzesense_{sensor_mac}/{entity_type}/config"
+        _publish(client, logger, topic, None, wait=wait)
 
     # --- v1 bridge topic (3.x identity) ---
-    bridge_topic = f"{hass_root}/binary_sensor/wyzesense_bridge_{dongle_mac}/connection_state/config"
-    _publish(client, config, logger, bridge_topic, None, wait=wait)
+    bridge_topic = f"{cfg['hass_topic_root']}/binary_sensor/wyzesense_bridge_{dongle_mac}/connection_state/config"
+    _publish(client, logger, bridge_topic, None, wait=wait)
 
 
 # List of migration step functions, one per schema version transition.
@@ -486,19 +633,24 @@ _MIGRATION_STEPS: list[Callable] = [
 
 def _publish(
     client: mqtt.Client,
-    config: dict,
     logger: logging.Logger | None,
     topic: str,
     payload,
     is_json: bool = True,
     wait: bool = True,
+    qos: int = _QOS_DATA,
+    retain: bool = _RETAIN_DATA,
 ) -> mqtt.MQTTMessageInfo:
     """Publish a single MQTT message.
 
     Pass payload=None to clear a retained topic (publishes an empty payload).
+    Defaults to data-topic settings (QoS 0, retain=False); callers override
+    qos/retain for status, discovery, command, and number topics.
     """
     if payload is None:
         raw_payload = None
+        # Clearing a retained topic requires retain=True
+        retain = True
     elif is_json:
         raw_payload = json.dumps(payload)
     else:
@@ -507,7 +659,7 @@ def _publish(
     if logger:
         logger.debug(f"MQTT publish {topic=} {raw_payload=}")
 
-    info = client.publish(topic, payload=raw_payload, qos=config["mqtt_qos"], retain=config["mqtt_retain"])
+    info = client.publish(topic, payload=raw_payload, qos=qos, retain=retain)
     if info.rc == mqtt.MQTT_ERR_SUCCESS:
         if wait:
             info.wait_for_publish(2)
@@ -525,7 +677,7 @@ def _publish(
 
 def clear_sensor_discovery_topics(
     client: mqtt.Client,
-    config: dict,
+    cfg: dict,
     logger: logging.Logger | None,
     sensor_mac: str,
     sensor_type: str,
@@ -536,8 +688,6 @@ def clear_sensor_discovery_topics(
     Covers all versions so it is safe to call regardless of which schema
     version originally published the sensor's config topics.
     """
-    hass_root = config["hass_topic_root"]
-
     # v1 per-entity sensor topics
     entity_types = ["signal_strength", "battery"]
     if sensor_type in BINARY_SENSOR_TYPES:
@@ -562,11 +712,11 @@ def clear_sensor_discovery_topics(
             platform = "binary_sensor"
         else:
             platform = "sensor"
-        topic = f"{hass_root}/{platform}/wyzesense_{sensor_mac}/{entity_type}/config"
-        _publish(client, config, logger, topic, None, wait=wait)
+        topic = f"{cfg['hass_topic_root']}/{platform}/wyzesense_{sensor_mac}/{entity_type}/config"
+        _publish(client, logger, topic, None, wait=wait)
 
     # v2 device-based sensor topic
-    _publish(client, config, logger, f"{hass_root}/device/wyzesense_{sensor_mac}/config", None, wait=wait)
+    _publish(client, logger, f"{cfg['hass_topic_root']}/device/wyzesense_{sensor_mac}/config", None, wait=wait)
 
 
 # ---------------------------------------------------------------------------
@@ -577,8 +727,8 @@ def clear_sensor_discovery_topics(
 class MqttGateway:
     """Owns the MQTT client connection and all publish/subscribe operations."""
 
-    def __init__(self, config: dict, logger: logging.Logger | None = None):
-        self._config = config
+    def __init__(self, cfg: dict, logger: logging.Logger | None = None):
+        self._config = cfg
         self._logger = logger.getChild("mqtt") if logger else logging.getLogger("ws2m.mqtt")
         self._client: mqtt.Client | None = None
 
@@ -646,15 +796,23 @@ class MqttGateway:
     # Publishing
     # ------------------------------------------------------------------
 
-    def publish(self, topic: str, payload, is_json: bool = True, wait: bool = True) -> mqtt.MQTTMessageInfo:
+    def publish(
+        self,
+        topic: str,
+        payload,
+        is_json: bool = True,
+        wait: bool = True,
+        qos: int = _QOS_DATA,
+        retain: bool = _RETAIN_DATA,
+    ) -> mqtt.MQTTMessageInfo:
         """Publish to *topic*.  Pass payload=None to clear a retained topic."""
-        return _publish(self._client, self._config, self._logger, topic, payload, is_json=is_json, wait=wait)
+        return _publish(self._client, self._logger, topic, payload, is_json=is_json, wait=wait, qos=qos, retain=retain)
 
     # ------------------------------------------------------------------
     # Service discovery
     # ------------------------------------------------------------------
 
-    def publish_service_discovery(self, service_id: str, wait: bool = True) -> None:
+    def publish_service_discovery(self, service_id: str, log_level: str, wait: bool = True) -> None:
         """Publish the HA device-based discovery config for the ws2m service.
 
         Publishes a single retained topic:
@@ -687,11 +845,21 @@ class MqttGateway:
                 "support_url": "https://github.com/raetha/wyzesense2mqtt",
             },
             "components": components,
-            "qos": cfg["mqtt_qos"],
+            "qos": _QOS_DISCOVERY,
         }
         topic = f"{cfg['hass_topic_root']}/device/ws2m_service_{service_id}/config"
-        self.publish(topic, payload, wait=wait)
+        self.publish(topic, payload, wait=wait, qos=_QOS_DISCOVERY, retain=_RETAIN_DISCOVERY)
         self._logger.debug(f"Published service discovery → {topic}")
+
+        # Publish initial log_level state
+        self.publish(
+            f"{cfg['self_topic_root']}/log_level",
+            log_level.upper(),
+            is_json=False,
+            wait=wait,
+            qos=_QOS_NUMBER,
+            retain=_RETAIN_NUMBER,
+        )
 
     # ------------------------------------------------------------------
     # Dongle discovery
@@ -735,10 +903,10 @@ class MqttGateway:
                 "support_url": "https://github.com/raetha/wyzesense2mqtt",
             },
             "components": components,
-            "qos": cfg["mqtt_qos"],
+            "qos": _QOS_DISCOVERY,
         }
         topic = f"{cfg['hass_topic_root']}/device/ws2m_dongle_{dongle_mac}/config"
-        self.publish(topic, payload, wait=wait)
+        self.publish(topic, payload, wait=wait, qos=_QOS_DISCOVERY, retain=_RETAIN_DISCOVERY)
         self._logger.debug(f"Published dongle discovery → {topic}")
 
     # ------------------------------------------------------------------
@@ -762,12 +930,12 @@ class MqttGateway:
         Sensor availability depends on both the dongle and the service:
           - ws2m/<sensor_mac>/status  — sensor-level heartbeat timeout
           - ws2m/dongle_<mac>/status  — dongle connectivity
-          - ws2m/service_<uuid>/status — service connectivity (future use)
 
-        The payload's ``components`` block is assembled from three sources:
+        The payload's ``components`` block is assembled from four sources:
           1. The sensor-type-specific builder from _COMPONENT_BUILDERS
           2. _build_diagnostic_components() — universal diagnostic entities
           3. _build_sensor_action_components() — universal action buttons
+          4. _build_sensor_config_components() — name/class/invert controls
 
         All builders return fresh dicts, so the inject loop below can safely
         stamp common fields (unique_id, has_entity_name, value_template) into
@@ -788,6 +956,7 @@ class MqttGateway:
         components: dict = builder(sensor_mac, sensor, mac_topic)
         components.update(_build_diagnostic_components())
         components.update(_build_sensor_action_components(sensor_mac, remove_topic))
+        components.update(_build_sensor_config_components(sensor_mac, sensor, mac_topic))
 
         # Inject common per-component fields.
         # value_template is only meaningful for state-bearing platforms;
@@ -822,11 +991,11 @@ class MqttGateway:
                 {"topic": f"{cfg['self_topic_root']}/dongle_{dongle_mac}/status"},
             ],
             "availability_mode": "all",
-            "qos": cfg["mqtt_qos"],
+            "qos": _QOS_DISCOVERY,
         }
 
         device_topic = f"{cfg['hass_topic_root']}/device/wyzesense_{sensor_mac}/config"
-        self.publish(device_topic, device_payload, wait=wait)
+        self.publish(device_topic, device_payload, wait=wait, qos=_QOS_DISCOVERY, retain=_RETAIN_DISCOVERY)
         self._logger.debug(f"Published discovery for {sensor_mac} → {device_topic}")
 
         # Publish initial availability
@@ -835,7 +1004,70 @@ class MqttGateway:
             "online" if sensor_online else "offline",
             is_json=False,
             wait=wait,
+            qos=_QOS_STATUS,
+            retain=_RETAIN_STATUS,
         )
+
+        # Publish initial config entity states
+        self._publish_sensor_config_states(sensor_mac, sensor, wait=wait)
+
+    def _publish_sensor_config_states(self, sensor_mac: str, sensor: dict, wait: bool = True) -> None:
+        """Publish current config entity states for a sensor to their state topics.
+
+        Called after discovery and after any config change so HA always shows
+        the current value.
+        """
+        cfg = self._config
+        mac_topic = f"{cfg['self_topic_root']}/{sensor_mac}"
+        sensor_type = sensor.get("sensor_type", "unknown")
+
+        # sensor_name
+        self.publish(
+            f"{mac_topic}/sensor_name",
+            sensor.get("name", f"WyzeSense {sensor_mac}"),
+            is_json=False,
+            wait=wait,
+            qos=_QOS_NUMBER,
+            retain=_RETAIN_NUMBER,
+        )
+
+        # device_class — only if this type has selectable options
+        if sensor_type in DEVICE_CLASS_OPTIONS:
+            current_class = sensor.get("class", SENSOR_TYPES.get(sensor_type, {}).get("device_class", ""))
+            self.publish(
+                f"{mac_topic}/device_class",
+                current_class,
+                is_json=False,
+                wait=wait,
+                qos=_QOS_NUMBER,
+                retain=_RETAIN_NUMBER,
+            )
+
+        # invert_state — only for invertible sensor types
+        if sensor_type in INVERTIBLE_SENSOR_TYPES:
+            invert_val = "true" if sensor.get("invert_state") else "false"
+            self.publish(
+                f"{mac_topic}/invert_state",
+                invert_val,
+                is_json=False,
+                wait=wait,
+                qos=_QOS_NUMBER,
+                retain=_RETAIN_NUMBER,
+            )
+
+        # pin_count — only for keypad
+        if sensor_type == "keypad":
+            pins = sensor.get("pins", [])
+            if isinstance(pins, str):
+                pins = [pins] if pins else []
+            self.publish(
+                f"{mac_topic}/pin_count",
+                str(len(pins)),
+                is_json=False,
+                wait=wait,
+                qos=_QOS_NUMBER,
+                retain=_RETAIN_NUMBER,
+            )
 
     # ------------------------------------------------------------------
     # Sensor topic cleanup
@@ -847,9 +1079,33 @@ class MqttGateway:
         self._logger.info(f"Clearing MQTT topics for {sensor_mac}")
         self.publish(f"{cfg['self_topic_root']}/{sensor_mac}/status", None, wait=wait)
         self.publish(f"{cfg['self_topic_root']}/{sensor_mac}", None, wait=wait)
+        # Clear config entity state topics
+        self._clear_sensor_config_state_topics(sensor_mac, sensor_type, wait=wait)
 
-        if cfg["hass_discovery"]:
-            self.clear_all_sensor_discovery_topics(sensor_mac, sensor_type, wait=wait)
+        self.clear_all_sensor_discovery_topics(sensor_mac, sensor_type, wait=wait)
+
+    def _clear_sensor_config_state_topics(self, sensor_mac: str, sensor_type: str, wait: bool = True) -> None:
+        """Clear retained config entity state topics for a removed sensor."""
+        cfg = self._config
+        mac_topic = f"{cfg['self_topic_root']}/{sensor_mac}"
+        for suffix in ["sensor_name", "device_class", "invert_state", "pin_count"]:
+            self.publish(f"{mac_topic}/{suffix}", None, wait=wait)
+
+    def clear_service_discovery(self, service_id: str, wait: bool = True) -> None:
+        """Clear the retained service device discovery topic."""
+        cfg = self._config
+        topic = f"{cfg['hass_topic_root']}/device/ws2m_service_{service_id}/config"
+        self.publish(topic, None, wait=wait)
+        # Also clear the log_level state topic
+        self.publish(f"{cfg['self_topic_root']}/log_level", None, wait=wait)
+        self._logger.debug(f"Cleared service discovery → {topic}")
+
+    def clear_dongle_discovery(self, dongle_mac: str, wait: bool = True) -> None:
+        """Clear the retained dongle device discovery topic."""
+        cfg = self._config
+        topic = f"{cfg['hass_topic_root']}/device/ws2m_dongle_{dongle_mac}/config"
+        self.publish(topic, None, wait=wait)
+        self._logger.debug(f"Cleared dongle discovery → {topic}")
 
     def clear_all_sensor_discovery_topics(self, sensor_mac: str, sensor_type: str, wait: bool = True) -> None:
         """Clear the sensor's discovery topic from every known schema version.

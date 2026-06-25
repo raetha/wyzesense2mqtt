@@ -36,7 +36,7 @@ from config import (
 #   timeout_hours – hours of silence before a sensor is considered offline
 #
 # Binary sensor entries additionally require:
-#   device_class  – HA binary_sensor device class (e.g. "opening", "motion")
+#   device_class  – default HA binary_sensor device class
 #   state_on      – payload string meaning ON/triggered
 #   state_off     – payload string meaning OFF/clear
 #
@@ -84,6 +84,10 @@ SENSOR_TYPES: dict[str, dict] = {
         "device_class": "moisture",
         "state_on": "wet",
         "state_off": "dry",
+        # invert_state is not applicable to leak sensors — the device_class
+        # (moisture) and payloads (wet/dry) already represent the correct
+        # semantic meaning.  The per-sensor invert_state field is ignored
+        # for leak sensor types.
     },
     "climate": {
         "model": "Wyze Sense V2 Climate Sensor",
@@ -108,6 +112,9 @@ SENSOR_TYPES: dict[str, dict] = {
         "timeout_hours": 4,
         # No binary state fields — keypad publishes alarm_mode and motion as
         # separate event types; see _build_keypad_components() in mqtt.py
+        # Per-device in sensors.yaml:
+        #   pins: list[str]  — valid PIN codes for keypad_pin_confirm validation
+        #                      managed via HA entities (add/clear) or sensors.yaml
     },
     "unknown": {
         "model": "WyzeSense Sensor",
@@ -118,6 +125,22 @@ SENSOR_TYPES: dict[str, dict] = {
 
 # Sensor types whose primary HA entity is a binary_sensor
 BINARY_SENSOR_TYPES: frozenset[str] = frozenset(st for st, meta in SENSOR_TYPES.items() if "device_class" in meta)
+
+# Sensor types that support invert_state (contact and motion sensors only).
+# Leak sensors are excluded: their device_class (moisture) and payloads
+# (wet/dry) already have the correct semantic meaning.
+INVERTIBLE_SENSOR_TYPES: frozenset[str] = frozenset(["motion", "motionv2", "switch", "switchv2"])
+
+# Valid HA device_class values selectable per sensor family.
+# Used to populate the device_class select entity in HA.
+DEVICE_CLASS_OPTIONS: dict[str, list[str]] = {
+    # Contact sensors — opening is the default; door/window are common alternates
+    "switch": ["door", "garage_door", "lock", "opening", "window"],
+    "switchv2": ["door", "garage_door", "lock", "opening", "window"],
+    # Motion sensors — motion is the default; occupancy is a common alternate
+    "motion": ["motion", "occupancy"],
+    "motionv2": ["motion", "occupancy"],
+}
 
 # How far back to look for "fresh" state data on startup (seconds).
 # State older than this is discarded to avoid showing stale availability.
@@ -178,9 +201,13 @@ class SensorRegistry:
         self.sensors = data
         self._log("info", f"Loaded {len(self.sensors)} sensor(s) from {path}")
 
-        # Back-fill any missing defaults
+        # Back-fill defaults and migrate legacy fields
         for mac in self.sensors:
-            self.sensors[mac].setdefault("invert_state", False)
+            entry = self.sensors[mac]
+            entry.setdefault("invert_state", False)
+            # Remove legacy 'timeout' override — availability timeouts are now
+            # type-driven constants in SENSOR_TYPES and are not user-configurable.
+            entry.pop("timeout", None)
 
         return True
 
@@ -241,6 +268,8 @@ class SensorRegistry:
         self.sensors[mac]["sensor_type"] = sensor_type
         type_meta = SENSOR_TYPES.get(sensor_type, {})
         if "device_class" in type_meta:
+            # Only reset class to type default if the user hasn't overridden it
+            # via the HA device_class select entity (i.e. class == old type default).
             self.sensors[mac]["class"] = type_meta["device_class"]
         self.save_sensors()
         return True
@@ -321,14 +350,60 @@ class SensorRegistry:
     def timeout_for(sensor: dict) -> float:
         """Return the availability timeout in seconds for a sensor config dict.
 
-        Checks for a per-sensor override ('timeout' key, in **seconds**) first,
-        then falls back to the sensor-type default (stored as hours in SENSOR_TYPES).
-        The per-sensor key has always been in seconds; no migration is needed.
+        The timeout is determined entirely by sensor type — there is no per-sensor
+        override.  Type defaults are defined in SENSOR_TYPES['timeout_hours'].
         """
         sensor_type = sensor.get("sensor_type", "unknown")
         type_meta = SENSOR_TYPES.get(sensor_type, SENSOR_TYPES["unknown"])
-        default_seconds = type_meta["timeout_hours"] * 3600
-        return sensor.get("timeout", default_seconds)
+        return type_meta["timeout_hours"] * 3600
+
+    # ------------------------------------------------------------------
+    # Keypad PIN management
+    # ------------------------------------------------------------------
+
+    def add_pin(self, mac: str, pin: str) -> bool:
+        """Add a PIN to the sensor's configured pins list.
+
+        Returns True if the PIN was added (False if already present or sensor unknown).
+        """
+        if mac not in self.sensors:
+            return False
+        pins = self.sensors[mac].get("pins", [])
+        if isinstance(pins, str):
+            pins = [pins]
+        if pin in pins:
+            return False
+        pins.append(pin)
+        self.sensors[mac]["pins"] = pins
+        self.save_sensors()
+        self._log("info", f"Added PIN to {mac} (total: {len(pins)})")
+        return True
+
+    def clear_pins(self, mac: str) -> bool:
+        """Remove all PINs from the sensor's configured pins list.
+
+        Returns True if any PINs were cleared.
+        """
+        if mac not in self.sensors:
+            return False
+        pins = self.sensors[mac].get("pins", [])
+        if isinstance(pins, str):
+            pins = [pins]
+        if not pins:
+            return False
+        self.sensors[mac]["pins"] = []
+        self.save_sensors()
+        self._log("info", f"Cleared all PINs from {mac}")
+        return True
+
+    def pin_count(self, mac: str) -> int:
+        """Return the number of configured PINs for a sensor."""
+        if mac not in self.sensors:
+            return 0
+        pins = self.sensors[mac].get("pins", [])
+        if isinstance(pins, str):
+            return 1 if pins else 0
+        return len(pins)
 
     # ------------------------------------------------------------------
     # Reconciliation helpers (called during init_sensors)

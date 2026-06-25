@@ -35,7 +35,9 @@ def _make_worker(tmp_config_dir, sample_config):
     worker._logger = logging.getLogger("test.worker")
     worker._initialized = True
     worker._keypad_command_topics = {}
+    worker._keypad_pin_capture = {}
     worker._chime_subscribed = set()
+    worker._sensor_config_subscribed = set()
     worker._auto_add_warned = set()
     worker._scan_topic = f"{sample_config['self_topic_root']}/dongle_{TEST_DONGLE_MAC}/scan"
     worker._remove_topic = f"{sample_config['self_topic_root']}/dongle_{TEST_DONGLE_MAC}/remove"
@@ -401,3 +403,323 @@ def test_mac_from_topic_extra_segments(tmp_config_dir, sample_config):
     w = _worker_for_mac_test(sample_config, "ws2m")
     result = w._mac_from_topic("ws2m/AABBCCDD/extra/set", "/set")
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Sensor config command handlers
+# ---------------------------------------------------------------------------
+
+
+def test_on_mqtt_sensor_name_updates_registry_and_republishes(tmp_config_dir, sample_config):
+    """_on_mqtt_sensor_name updates name, saves, and triggers re-discovery."""
+    from unittest.mock import MagicMock
+
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._registry.sensors["AAAAAAAA"] = {"sensor_type": "switch", "name": "Old Name", "invert_state": False}
+    worker._registry.state["AAAAAAAA"] = {"online": True, "last_seen": 0}
+
+    msg = MagicMock()
+    msg.topic = f"{sample_config['self_topic_root']}/AAAAAAAA/sensor_name/set"
+    msg.payload = b"New Name"
+    worker._on_mqtt_sensor_name(None, None, msg)
+
+    assert worker._registry.sensors["AAAAAAAA"]["name"] == "New Name"
+    worker._registry.save_sensors.assert_called()
+    worker._gateway.publish_sensor_discovery.assert_called()
+
+
+def test_on_mqtt_sensor_name_ignores_empty_payload(tmp_config_dir, sample_config):
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._registry.sensors["AAAAAAAA"] = {"sensor_type": "switch", "name": "Old Name", "invert_state": False}
+
+    msg = MagicMock()
+    msg.topic = f"{sample_config['self_topic_root']}/AAAAAAAA/sensor_name/set"
+    msg.payload = b"   "
+    worker._on_mqtt_sensor_name(None, None, msg)
+
+    assert worker._registry.sensors["AAAAAAAA"]["name"] == "Old Name"
+
+
+def test_on_mqtt_sensor_name_ignores_unknown_mac(tmp_config_dir, sample_config):
+    worker = _make_worker(tmp_config_dir, sample_config)
+
+    msg = MagicMock()
+    msg.topic = f"{sample_config['self_topic_root']}/UNKNOWN1/sensor_name/set"
+    msg.payload = b"Some Name"
+    worker._on_mqtt_sensor_name(None, None, msg)  # must not raise
+
+
+def test_on_mqtt_device_class_updates_registry(tmp_config_dir, sample_config):
+    """_on_mqtt_device_class updates class and triggers re-discovery."""
+    from unittest.mock import MagicMock
+
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._registry.sensors["AAAAAAAA"] = {"sensor_type": "switch", "class": "opening", "invert_state": False}
+    worker._registry.state["AAAAAAAA"] = {"online": True, "last_seen": 0}
+
+    msg = MagicMock()
+    msg.topic = f"{sample_config['self_topic_root']}/AAAAAAAA/device_class/set"
+    msg.payload = b"door"
+    worker._on_mqtt_device_class(None, None, msg)
+
+    assert worker._registry.sensors["AAAAAAAA"]["class"] == "door"
+    worker._gateway.publish_sensor_discovery.assert_called()
+
+
+def test_on_mqtt_device_class_rejects_invalid_class(tmp_config_dir, sample_config):
+    """_on_mqtt_device_class ignores values not in DEVICE_CLASS_OPTIONS."""
+    from unittest.mock import MagicMock
+
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._registry.sensors["AAAAAAAA"] = {"sensor_type": "switch", "class": "opening", "invert_state": False}
+
+    msg = MagicMock()
+    msg.topic = f"{sample_config['self_topic_root']}/AAAAAAAA/device_class/set"
+    msg.payload = b"totally_invalid"
+    worker._on_mqtt_device_class(None, None, msg)
+
+    assert worker._registry.sensors["AAAAAAAA"]["class"] == "opening"  # unchanged
+    worker._gateway.publish_sensor_discovery.assert_not_called()
+
+
+def test_on_mqtt_device_class_ignores_non_selectable_type(tmp_config_dir, sample_config):
+    """_on_mqtt_device_class does nothing for sensor types without class options."""
+    from unittest.mock import MagicMock
+
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._registry.sensors["AAAAAAAA"] = {"sensor_type": "leak"}
+
+    msg = MagicMock()
+    msg.topic = f"{sample_config['self_topic_root']}/AAAAAAAA/device_class/set"
+    msg.payload = b"moisture"
+    worker._on_mqtt_device_class(None, None, msg)  # must not raise
+
+
+def test_on_mqtt_invert_state_enables_inversion(tmp_config_dir, sample_config):
+    """_on_mqtt_invert_state sets invert_state True and republishes discovery."""
+    from unittest.mock import MagicMock
+
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._registry.sensors["AAAAAAAA"] = {"sensor_type": "switch", "invert_state": False}
+    worker._registry.state["AAAAAAAA"] = {"online": True, "last_seen": 0}
+
+    msg = MagicMock()
+    msg.topic = f"{sample_config['self_topic_root']}/AAAAAAAA/invert_state/set"
+    msg.payload = b"true"
+    worker._on_mqtt_invert_state(None, None, msg)
+
+    assert worker._registry.sensors["AAAAAAAA"]["invert_state"] is True
+    worker._gateway.publish_sensor_discovery.assert_called()
+
+
+def test_on_mqtt_invert_state_disables_inversion(tmp_config_dir, sample_config):
+    from unittest.mock import MagicMock
+
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._registry.sensors["AAAAAAAA"] = {"sensor_type": "switchv2", "invert_state": True}
+    worker._registry.state["AAAAAAAA"] = {"online": True, "last_seen": 0}
+
+    msg = MagicMock()
+    msg.topic = f"{sample_config['self_topic_root']}/AAAAAAAA/invert_state/set"
+    msg.payload = b"false"
+    worker._on_mqtt_invert_state(None, None, msg)
+
+    assert worker._registry.sensors["AAAAAAAA"]["invert_state"] is False
+
+
+def test_on_mqtt_invert_state_ignores_non_invertible_type(tmp_config_dir, sample_config):
+    """_on_mqtt_invert_state does nothing for non-invertible sensor types."""
+    from unittest.mock import MagicMock
+
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._registry.sensors["DDDDDDDD"] = {"sensor_type": "leak", "invert_state": False}
+
+    msg = MagicMock()
+    msg.topic = f"{sample_config['self_topic_root']}/DDDDDDDD/invert_state/set"
+    msg.payload = b"true"
+    worker._on_mqtt_invert_state(None, None, msg)
+
+    assert worker._registry.sensors["DDDDDDDD"]["invert_state"] is False  # unchanged
+
+
+def test_on_mqtt_invert_state_accepts_on_payload(tmp_config_dir, sample_config):
+    """'ON' / '1' / 'yes' are all truthy payloads for invert_state."""
+    from unittest.mock import MagicMock
+
+    for payload in (b"ON", b"1", b"yes"):
+        worker = _make_worker(tmp_config_dir, sample_config)
+        worker._registry.sensors["AAAAAAAA"] = {"sensor_type": "switch", "invert_state": False}
+        worker._registry.state["AAAAAAAA"] = {"online": True, "last_seen": 0}
+        msg = MagicMock()
+        msg.topic = f"{sample_config['self_topic_root']}/AAAAAAAA/invert_state/set"
+        msg.payload = payload
+        worker._on_mqtt_invert_state(None, None, msg)
+        assert worker._registry.sensors["AAAAAAAA"]["invert_state"] is True, f"Failed for {payload}"
+
+
+# ---------------------------------------------------------------------------
+# Keypad PIN management callbacks
+# ---------------------------------------------------------------------------
+
+
+def test_on_mqtt_keypad_add_pin_arms_capture(tmp_config_dir, sample_config):
+    """add_pin button press arms the PIN capture flag for the keypad MAC."""
+    from unittest.mock import MagicMock
+
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._registry.sensors["KPADKPAD"] = {"sensor_type": "keypad", "pins": []}
+
+    msg = MagicMock()
+    msg.topic = f"{sample_config['self_topic_root']}/KPADKPAD/add_pin"
+    msg.payload = b"arm"
+    worker._on_mqtt_keypad_add_pin(None, None, msg)
+
+    assert worker._keypad_pin_capture.get("KPADKPAD") is True
+
+
+def test_on_mqtt_keypad_add_pin_unknown_mac_no_error(tmp_config_dir, sample_config):
+    from unittest.mock import MagicMock
+
+    worker = _make_worker(tmp_config_dir, sample_config)
+    msg = MagicMock()
+    msg.topic = f"{sample_config['self_topic_root']}/UNKNOWN1/add_pin"
+    msg.payload = b"arm"
+    worker._on_mqtt_keypad_add_pin(None, None, msg)  # must not raise
+    assert worker._keypad_pin_capture.get("UNKNOWN1") is None
+
+
+def test_on_mqtt_keypad_clear_pins_clears_registry(tmp_config_dir, sample_config):
+    """clear_pins button press removes all PINs and updates pin_count state."""
+    from unittest.mock import MagicMock
+    from sensors import SensorRegistry
+
+    worker = _make_worker(tmp_config_dir, sample_config)
+    # Use a real SensorRegistry so clear_pins() actually works
+    worker._registry = SensorRegistry(TEST_DONGLE_MAC)
+    worker._registry.sensors["KPADKPAD"] = {"sensor_type": "keypad", "pins": ["1234", "5678"]}
+    worker._registry.state["KPADKPAD"] = {"online": True, "last_seen": 0}
+
+    msg = MagicMock()
+    msg.topic = f"{sample_config['self_topic_root']}/KPADKPAD/clear_pins"
+    msg.payload = b"clear"
+    worker._on_mqtt_keypad_clear_pins(None, None, msg)
+
+    assert worker._registry.sensors["KPADKPAD"]["pins"] == []
+    # pin_count state should have been published
+    publish_topics = [c.args[0] for c in worker._gateway.publish.call_args_list]
+    assert any("/pin_count" in t for t in publish_topics)
+
+
+def test_pin_capture_absorbed_on_pin_confirm_event(tmp_config_dir, sample_config):
+    """When PIN capture is armed, a keypad_pin_confirm event adds the PIN."""
+    from unittest.mock import MagicMock
+    from sensors import SensorRegistry
+
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._registry = SensorRegistry(TEST_DONGLE_MAC)
+    worker._registry.sensors["KPADKPAD"] = {"sensor_type": "keypad", "pins": []}
+    worker._registry.state["KPADKPAD"] = {"online": True, "last_seen": __import__("time").time()}
+
+    # Arm capture
+    worker._keypad_pin_capture["KPADKPAD"] = True
+
+    # Synthesise a pin_confirm event
+    event = MagicMock()
+    event.mac = "KPADKPAD"
+    event.event = "keypad_pin_confirm"
+    event.pin = "9999"
+    event.timestamp = __import__("time").time()
+    event.battery = 90
+    event.signal_strength = -60
+    event.sensor_type = "keypad"
+
+    worker._dongle.mac = TEST_DONGLE_MAC
+    worker._on_dongle_event(worker._dongle, event)
+
+    assert "9999" in worker._registry.sensors["KPADKPAD"]["pins"]
+    # Capture flag consumed
+    assert worker._keypad_pin_capture.get("KPADKPAD") is None
+
+
+def test_pin_capture_not_armed_does_not_add_pin(tmp_config_dir, sample_config):
+    """Without arming capture, a keypad_pin_confirm event validates but does not add the PIN."""
+    from unittest.mock import MagicMock
+    from sensors import SensorRegistry
+
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._registry = SensorRegistry(TEST_DONGLE_MAC)
+    worker._registry.sensors["KPADKPAD"] = {"sensor_type": "keypad", "pins": []}
+    worker._registry.state["KPADKPAD"] = {"online": True, "last_seen": __import__("time").time()}
+
+    event = MagicMock()
+    event.mac = "KPADKPAD"
+    event.event = "keypad_pin_confirm"
+    event.pin = "9999"
+    event.timestamp = __import__("time").time()
+    event.battery = 90
+    event.signal_strength = -60
+    event.sensor_type = "keypad"
+
+    worker._dongle.mac = TEST_DONGLE_MAC
+    worker._on_dongle_event(worker._dongle, event)
+
+    assert worker._registry.sensors["KPADKPAD"]["pins"] == []
+
+
+# ---------------------------------------------------------------------------
+# Config key removal migration
+# ---------------------------------------------------------------------------
+
+
+def test_removed_config_keys_not_written_by_save_config(tmp_config_dir):
+    """save_config never writes removed keys even if they're present in the dict."""
+    import yaml
+    import config as cfg_module
+
+    cfg = {
+        "mqtt_host": "broker.local",
+        "mqtt_port": 1883,
+        "mqtt_username": None,
+        "mqtt_password": None,
+        "mqtt_client_id": "ws2m",
+        "mqtt_clean_session": False,
+        "mqtt_keepalive": 60,
+        "self_topic_root": "ws2m",
+        "hass_topic_root": "homeassistant",
+        "hass_discovery": True,
+        "usb_dongle": "auto",
+        "log_level": "INFO",
+        # Removed keys that must not appear in output:
+        "mqtt_qos": 0,
+        "mqtt_retain": True,
+        "publish_sensor_name": True,
+    }
+    cfg_module.save_config(cfg)
+    path = cfg_module.config_path(cfg_module.MAIN_CONFIG_FILE)
+    written = yaml.safe_load(open(path))
+    for key in ("mqtt_qos", "mqtt_retain", "publish_sensor_name"):
+        assert key not in written, f"Removed key {key!r} was written to config"
+    # hass_topic_root is NOT a removed key — it should be written
+    assert "hass_topic_root" in written
+
+
+def test_load_config_drops_removed_keys_from_file(tmp_config_dir, sample_config):
+    """load_config strips removed keys from config.yaml so they don't re-accumulate."""
+    import yaml
+    import config as cfg_module
+
+    # Inject removed keys into the file
+    path = cfg_module.config_path(cfg_module.MAIN_CONFIG_FILE)
+    data = yaml.safe_load(open(path)) or {}
+    data["mqtt_qos"] = 0
+    data["mqtt_retain"] = True
+    data["publish_sensor_name"] = False
+    with open(path, "w") as f:
+        yaml.safe_dump(data, f)
+
+    cfg, _ = cfg_module.load_config()
+    assert cfg is not None
+    for key in ("mqtt_qos", "mqtt_retain", "publish_sensor_name"):
+        assert key not in cfg, f"Removed key {key!r} survived load_config"
+    # hass_topic_root is NOT a removed key — it should be present in config
+    assert cfg.get("hass_topic_root") == "homeassistant"

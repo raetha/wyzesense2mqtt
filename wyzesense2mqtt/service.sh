@@ -82,12 +82,9 @@ if [ -f "$OPTIONS" ]; then
     export WS2M_MQTT_CLIENT_ID=$(_jq '.mqtt_client_id')
     export WS2M_MQTT_CLEAN_SESSION=$(_jq '.mqtt_clean_session')
     export WS2M_MQTT_KEEPALIVE=$(_jq '.mqtt_keepalive')
-    export WS2M_MQTT_QOS=$(_jq '.mqtt_qos')
-    export WS2M_MQTT_RETAIN=$(_jq '.mqtt_retain')
     export WS2M_SELF_TOPIC_ROOT=$(_jq '.self_topic_root')
     export WS2M_HASS_TOPIC_ROOT=$(_jq '.hass_topic_root')
     export WS2M_HASS_DISCOVERY=$(_jq '.hass_discovery')
-    export WS2M_PUBLISH_SENSOR_NAME=$(_jq '.publish_sensor_name')
     export WS2M_USB_DONGLE=$(_jq '.usb_dongle')
     export WS2M_LOG_LEVEL=$(_jq '.log_level')
 

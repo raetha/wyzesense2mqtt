@@ -93,17 +93,21 @@ def test_timeout_for_defaults(sensor_type, expected_hours):
     assert result == expected_hours * 3600
 
 
-def test_timeout_for_per_sensor_override_in_seconds():
+def test_timeout_for_contact_sensor_type_default():
+    """Contact sensor uses 8h (V1) or 4h (V2) type default; no per-sensor override."""
     from sensors import SensorRegistry
 
-    assert SensorRegistry.timeout_for({"sensor_type": "switch", "timeout": 7200}) == 7200
+    assert SensorRegistry.timeout_for({"sensor_type": "switch"}) == 8 * 3600
+    assert SensorRegistry.timeout_for({"sensor_type": "switchv2"}) == 4 * 3600
 
 
-def test_timeout_for_override_not_affected_by_type_default():
+def test_timeout_for_type_default_ignores_legacy_timeout_key():
+    """A 'timeout' key left in the sensor dict from a previous version is ignored."""
     from sensors import SensorRegistry
 
-    assert SensorRegistry.timeout_for({"sensor_type": "motionv2", "timeout": 3600}) == 3600
-    assert SensorRegistry.timeout_for({"sensor_type": "climate", "timeout": 900}) == 900
+    # The legacy key must not influence the result; type default always wins
+    assert SensorRegistry.timeout_for({"sensor_type": "motionv2", "timeout": 3600}) == 4 * 3600
+    assert SensorRegistry.timeout_for({"sensor_type": "climate", "timeout": 900}) == 4 * 3600
 
 
 def test_timeout_for_unknown_type_uses_unknown_default():
@@ -458,3 +462,248 @@ def test_chime_in_sensor_types():
     assert meta["hw_version"] == "V1"
     assert "timeout_hours" in meta
     assert "chime" not in BINARY_SENSOR_TYPES
+
+
+# ---------------------------------------------------------------------------
+# invert_state — field management
+# ---------------------------------------------------------------------------
+
+
+def test_add_sensor_sets_invert_state_false_by_default(tmp_dongle_dir):
+    from sensors import SensorRegistry
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg.add_sensor("AAAAAAAA", "switch")
+    assert reg.sensors["AAAAAAAA"]["invert_state"] is False
+
+
+def test_load_sensors_backfills_invert_state(tmp_dongle_dir):
+    """Sensors loaded from a file without invert_state get it back-filled to False."""
+    import yaml
+    from sensors import SensorRegistry
+    import config as cfg_module
+
+    path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
+    with open(path, "w") as f:
+        yaml.safe_dump({"AAAAAAAA": {"name": "Test", "sensor_type": "switch"}}, f)
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg.load_sensors()
+    assert "invert_state" in reg.sensors["AAAAAAAA"]
+    assert reg.sensors["AAAAAAAA"]["invert_state"] is False
+
+
+def test_load_sensors_preserves_invert_state_true(tmp_dongle_dir):
+    """A pre-existing invert_state: true in the file is preserved on load."""
+    import yaml
+    from sensors import SensorRegistry
+    import config as cfg_module
+
+    path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
+    with open(path, "w") as f:
+        yaml.safe_dump({"AAAAAAAA": {"name": "Test", "sensor_type": "switch", "invert_state": True}}, f)
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg.load_sensors()
+    assert reg.sensors["AAAAAAAA"]["invert_state"] is True
+
+
+def test_load_sensors_drops_legacy_timeout_key(tmp_dongle_dir):
+    """A 'timeout' key left in a sensors.yaml from a previous version is silently removed."""
+    import yaml
+    from sensors import SensorRegistry
+    import config as cfg_module
+
+    path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
+    with open(path, "w") as f:
+        yaml.safe_dump({"AAAAAAAA": {"name": "Test", "sensor_type": "switch", "timeout": 7200}}, f)
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg.load_sensors()
+    assert "timeout" not in reg.sensors["AAAAAAAA"]
+
+
+# ---------------------------------------------------------------------------
+# DEVICE_CLASS_OPTIONS
+# ---------------------------------------------------------------------------
+
+
+def test_device_class_options_exist_for_contact_types():
+    from sensors import DEVICE_CLASS_OPTIONS
+
+    assert "switch" in DEVICE_CLASS_OPTIONS
+    assert "switchv2" in DEVICE_CLASS_OPTIONS
+    assert "opening" in DEVICE_CLASS_OPTIONS["switch"]
+    assert "door" in DEVICE_CLASS_OPTIONS["switch"]
+
+
+def test_device_class_options_exist_for_motion_types():
+    from sensors import DEVICE_CLASS_OPTIONS
+
+    assert "motion" in DEVICE_CLASS_OPTIONS
+    assert "motionv2" in DEVICE_CLASS_OPTIONS
+    assert "motion" in DEVICE_CLASS_OPTIONS["motion"]
+    assert "occupancy" in DEVICE_CLASS_OPTIONS["motion"]
+
+
+def test_no_device_class_options_for_leak():
+    from sensors import DEVICE_CLASS_OPTIONS
+
+    assert "leak" not in DEVICE_CLASS_OPTIONS, "Leak device_class is fixed to moisture"
+
+
+def test_no_device_class_options_for_climate():
+    from sensors import DEVICE_CLASS_OPTIONS
+
+    assert "climate" not in DEVICE_CLASS_OPTIONS
+
+
+# ---------------------------------------------------------------------------
+# INVERTIBLE_SENSOR_TYPES
+# ---------------------------------------------------------------------------
+
+
+def test_invertible_sensor_types_includes_contact_and_motion():
+    from sensors import INVERTIBLE_SENSOR_TYPES
+
+    for st in ("switch", "switchv2", "motion", "motionv2"):
+        assert st in INVERTIBLE_SENSOR_TYPES, f"{st} should be invertible"
+
+
+def test_invertible_sensor_types_excludes_leak_and_others():
+    from sensors import INVERTIBLE_SENSOR_TYPES
+
+    for st in ("leak", "climate", "keypad", "chime", "unknown"):
+        assert st not in INVERTIBLE_SENSOR_TYPES, f"{st} should NOT be invertible"
+
+
+# ---------------------------------------------------------------------------
+# PIN management
+# ---------------------------------------------------------------------------
+
+
+def test_add_pin_adds_to_empty_list(tmp_dongle_dir):
+    from sensors import SensorRegistry
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg.add_sensor("KPADKPAD", "keypad")
+    result = reg.add_pin("KPADKPAD", "1234")
+    assert result is True
+    assert "1234" in reg.sensors["KPADKPAD"]["pins"]
+
+
+def test_add_pin_no_duplicate(tmp_dongle_dir):
+    from sensors import SensorRegistry
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg.add_sensor("KPADKPAD", "keypad")
+    reg.add_pin("KPADKPAD", "1234")
+    result = reg.add_pin("KPADKPAD", "1234")
+    assert result is False
+    assert reg.sensors["KPADKPAD"]["pins"].count("1234") == 1
+
+
+def test_add_pin_multiple_pins(tmp_dongle_dir):
+    from sensors import SensorRegistry
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg.add_sensor("KPADKPAD", "keypad")
+    reg.add_pin("KPADKPAD", "1234")
+    reg.add_pin("KPADKPAD", "5678")
+    assert reg.sensors["KPADKPAD"]["pins"] == ["1234", "5678"]
+
+
+def test_add_pin_unknown_mac_returns_false(tmp_dongle_dir):
+    from sensors import SensorRegistry
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    result = reg.add_pin("UNKNOWN1", "1234")
+    assert result is False
+
+
+def test_clear_pins_removes_all(tmp_dongle_dir):
+    from sensors import SensorRegistry
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg.add_sensor("KPADKPAD", "keypad")
+    reg.add_pin("KPADKPAD", "1234")
+    reg.add_pin("KPADKPAD", "5678")
+    result = reg.clear_pins("KPADKPAD")
+    assert result is True
+    assert reg.sensors["KPADKPAD"]["pins"] == []
+
+
+def test_clear_pins_when_empty_returns_false(tmp_dongle_dir):
+    from sensors import SensorRegistry
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg.add_sensor("KPADKPAD", "keypad")
+    result = reg.clear_pins("KPADKPAD")
+    assert result is False
+
+
+def test_clear_pins_unknown_mac_returns_false(tmp_dongle_dir):
+    from sensors import SensorRegistry
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    result = reg.clear_pins("UNKNOWN1")
+    assert result is False
+
+
+def test_pin_count_empty(tmp_dongle_dir):
+    from sensors import SensorRegistry
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg.add_sensor("KPADKPAD", "keypad")
+    assert reg.pin_count("KPADKPAD") == 0
+
+
+def test_pin_count_after_adds(tmp_dongle_dir):
+    from sensors import SensorRegistry
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg.add_sensor("KPADKPAD", "keypad")
+    reg.add_pin("KPADKPAD", "1234")
+    reg.add_pin("KPADKPAD", "5678")
+    assert reg.pin_count("KPADKPAD") == 2
+
+
+def test_pin_count_handles_legacy_string_pin(tmp_dongle_dir):
+    """A single PIN stored as a bare string (legacy format) counts as 1."""
+    import yaml
+    from sensors import SensorRegistry
+    import config as cfg_module
+
+    path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
+    with open(path, "w") as f:
+        yaml.safe_dump({"KPADKPAD": {"name": "Keypad", "sensor_type": "keypad", "pins": "1234"}}, f)
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg.load_sensors()
+    assert reg.pin_count("KPADKPAD") == 1
+
+
+def test_pin_count_unknown_mac_returns_zero(tmp_dongle_dir):
+    from sensors import SensorRegistry
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    assert reg.pin_count("UNKNOWN1") == 0
+
+
+def test_add_pin_handles_legacy_string_pin(tmp_dongle_dir):
+    """add_pin promotes a bare string pin to a list before appending."""
+    import yaml
+    from sensors import SensorRegistry
+    import config as cfg_module
+
+    path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
+    with open(path, "w") as f:
+        yaml.safe_dump({"KPADKPAD": {"name": "Keypad", "sensor_type": "keypad", "pins": "1234"}}, f)
+
+    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg.load_sensors()
+    reg.add_pin("KPADKPAD", "5678")
+    pins = reg.sensors["KPADKPAD"]["pins"]
+    assert isinstance(pins, list)
+    assert "1234" in pins
+    assert "5678" in pins

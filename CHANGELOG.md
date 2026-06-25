@@ -127,7 +127,7 @@ not available in earlier versions.  The Docker image now uses
   `service.sh` detects `/data/options.json` and loads configuration from
   it automatically, including Mosquitto broker auto-discovery via the
   Supervisor services API. See the README for installation instructions.
-- **Test suite** (`tests/`) — 198 unit and integration tests covering
+- **Test suite** (`tests/`) — 332 unit and integration tests covering
   `config.py`, `sensors.py`, `mqtt.py`, `dongle_protocol.py`, and
   `bridge.py` event/availability/command logic.  Hardware smoke tests
   for the USB dongle behind a `pytest -m dongle` marker.  A synthetic
@@ -142,10 +142,53 @@ not available in earlier versions.  The Docker image now uses
   discovery topics (dry-run by default, `--apply` to clear).
 - **`tools/capture_hid.py`** — standalone HID frame capture script
   (bridge must not be running); prompts for MAC obfuscation before saving.
-- **`__init__.py`** — package version (`__version__ = "4.0.0"`) as the
-  single source of truth; imported by `mqtt.py` and `bridge.py`.
-- **`log_level` config key** — controls verbosity without editing logging
-  infrastructure.  Settable via `config.yaml` or `LOG_LEVEL` env var.
+- **HA configuration entities** — sensor settings are now adjustable live
+  from the Home Assistant device page without editing `sensors.yaml`:
+  - **Sensor name** (`text`) — renames the HA device and triggers
+    re-discovery so the new name appears immediately.
+  - **Device class** (`select`) — contact sensors: `door`, `window`,
+    `opening`, `garage_door`, `lock`; motion sensors: `motion`,
+    `occupancy`.  Other sensor types have a fixed class.
+  - **Invert state** (`switch`) — swaps `payload_on`/`payload_off` in
+    the HA discovery config for contact and motion sensors, useful for
+    sensors installed in a non-standard orientation.  The raw MQTT data
+    topic is unchanged; only HA's interpretation of the value flips.
+    Leak sensors are excluded (their `moisture` class and `wet`/`dry`
+    payloads already express the correct semantic meaning).
+  - **Arm PIN capture** (`button`, keypad only) — arms ws2m to capture
+    the next PIN entry from the physical keypad hardware.  The captured
+    PIN is added to the `sensors.yaml` pins list automatically.
+  - **Clear all PINs** (`button`, keypad only) — removes all configured
+    PINs; after clearing, all PIN entries are treated as valid.
+  - **PIN count** (`sensor`, keypad only) — read-only count of configured
+    PINs; updates after add/clear operations.
+  - **Log level** (`select`, service device) — changes the bridge log
+    verbosity live (`DEBUG`/`INFO`/`WARNING`/`ERROR`), persists to
+    `config.yaml`, and takes effect immediately without a restart.
+  All changes are persisted to `sensors.yaml` / `config.yaml` and
+  echoed back to the MQTT state topic so HA stays in sync.
+- **`invert_state` re-implemented** — the `invert_state` field was
+  present in `sensors.yaml` since v1.1 but was inadvertently dropped
+  from the bridge logic in v3.1.0 (PR #81).  It is now re-implemented:
+  when `true`, the binary sensor's `payload_on` and `payload_off` are
+  swapped in the HA discovery payload.  Pre-existing `sensors.yaml`
+  entries with `invert_state: true` are respected automatically on 4.0
+  startup.  Applicable to contact and motion sensors; ignored for leak
+  sensors.
+- **`mqtt_qos` and `mqtt_retain` removed** — these config keys are no
+  longer user-configurable.  Values are now hardcoded per message type
+  (status/discovery: QoS 1 retained; data: QoS 0 not retained; commands:
+  QoS 1 not retained; number states: QoS 1 retained).  Existing
+  `config.yaml` files with these keys are silently cleaned up on first
+  4.0 startup.
+- **`publish_sensor_name` removed** — the sensor name was already
+  published as the HA device name via MQTT discovery in 4.0.  The config
+  key was a no-op and has been removed.  Existing `config.yaml` files
+  with this key are silently cleaned up.
+- **Per-sensor `timeout` override removed** — availability timeouts are
+  now determined entirely by sensor type (V1: 8 h, V2: 4 h, Chime: 24 h)
+  and are not user-configurable.  Existing `sensors.yaml` files with a
+  `timeout` key have it silently removed on first load.
 - **HA MQTT discovery** — upgraded to the device-based format
   (`homeassistant/device/wyzesense_<mac>/config` with `components`),
   supported since HA 2024.4.  Adds `has_entity_name`, `origin`, and
@@ -204,6 +247,19 @@ not available in earlier versions.  The Docker image now uses
 Existing `config/config.yaml`, `config/sensors.yaml`, and
 `config/state.yaml` files are fully compatible — no changes required.
 New default keys are silently added on startup.
+
+**Removed config keys** (`mqtt_qos`, `mqtt_retain`, `publish_sensor_name`)
+are silently stripped from `config.yaml` on first 4.0 startup and will not
+be written back.  `hass_topic_root` remains supported (previously this was
+planned for removal but has been restored).
+
+**`invert_state`** — if any sensors in `sensors.yaml` have
+`invert_state: true`, this will now take effect automatically.  Previously
+(3.1.0) this field existed in the file but was not applied in the bridge
+logic.
+
+**Per-sensor `timeout`** key in `sensors.yaml` is silently dropped on load
+and will not be written back.  Availability timeouts are now type-driven.
 
 `config/migrations.yaml` tracks the discovery schema version.  4.0.0
 records `discovery_schema_version: 2` after the migration runs.  Installs

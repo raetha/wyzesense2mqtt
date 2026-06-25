@@ -64,12 +64,9 @@ def sample_config(tmp_config_dir):
         "mqtt_client_id": "wyzesense2mqtt_test",
         "mqtt_clean_session": False,
         "mqtt_keepalive": 60,
-        "mqtt_qos": 0,
-        "mqtt_retain": True,
         "self_topic_root": "wyzesense2mqtt",
         "hass_topic_root": "homeassistant",
         "hass_discovery": True,
-        "publish_sensor_name": True,
         "usb_dongle": "auto",
     }
     cfg_path = os.path.join(cfg_module.CONFIG_DIR, cfg_module.MAIN_CONFIG_FILE)

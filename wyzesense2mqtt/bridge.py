@@ -4,9 +4,9 @@ Bridge orchestration for WyzeSense2MQTT.
 Architecture
 ------------
 Bridge        — top-level orchestrator: config, MQTT connection, service discovery,
-                service-level MQTT commands (reload), DongleWorker lifecycle.
+                service-level MQTT commands (reload, log_level), DongleWorker lifecycle.
 DongleWorker  — owns one physical dongle + its SensorRegistry; handles all
-                sensor events and dongle-scoped MQTT commands (scan, remove).
+                sensor events and dongle-scoped MQTT commands (scan, remove, sensor config).
 
 Each DongleWorker runs independently against the shared MqttGateway.  When
 usb_dongle is "auto", all detected dongles get a worker; when it is an explicit
@@ -26,17 +26,28 @@ Startup sequence
            ├─ _publish_dongle_discovery()
            └─ _init_sensors()
 
-MQTT topics (v3 schema)
+MQTT topics (v2 schema)
 -----------------------
   <root>/reload                           — service-level reload command
+  <root>/log_level                        — service log level state (retained)
+  <root>/log_level/set                    — service log level command
   <root>/dongle_<mac>/scan                — scan for new sensor on this dongle
   <root>/dongle_<mac>/remove              — remove sensor by MAC payload
   <root>/dongle_<mac>/status              — dongle online/offline (retained)
   <root>/<sensor_mac>/status             — sensor online/offline (retained)
   <root>/<sensor_mac>                    — sensor data payload
+  <root>/<sensor_mac>/sensor_name        — sensor display name state (retained)
+  <root>/<sensor_mac>/sensor_name/set    — sensor display name command
+  <root>/<sensor_mac>/device_class       — HA device class state (retained)
+  <root>/<sensor_mac>/device_class/set   — HA device class command
+  <root>/<sensor_mac>/invert_state       — invert state switch state (retained)
+  <root>/<sensor_mac>/invert_state/set   — invert state switch command
   <root>/<sensor_mac>/set                — keypad command (alarm state in)
   <root>/<sensor_mac>/pin                — keypad PIN confirm event
   <root>/<sensor_mac>/alarm              — keypad alarm sub-event
+  <root>/<sensor_mac>/pin_count          — keypad PIN count state (retained)
+  <root>/<sensor_mac>/add_pin            — keypad: arm PIN capture mode
+  <root>/<sensor_mac>/clear_pins         — keypad: clear all PINs
   <root>/<sensor_mac>/play               — chime play button
   <root>/<sensor_mac>/<param>/set        — chime number set
 """
@@ -48,14 +59,24 @@ import dongle_protocol
 from config import (
     VERSION,
     find_all_dongle_devices,
+    init_logging,
     load_config,
     load_service_id,
     migrate_legacy_sensor_files,
     save_config,
 )
-from mqtt import DISCOVERY_SCHEMA_VERSION, MqttGateway
+from mqtt import (
+    _QOS_COMMAND,
+    _QOS_NUMBER,
+    _QOS_STATUS,
+    _RETAIN_NUMBER,
+    _RETAIN_STATUS,
+    DISCOVERY_SCHEMA_VERSION,
+    LOG_LEVEL_OPTIONS,
+    MqttGateway,
+)
 from retrying import retry
-from sensors import SensorRegistry
+from sensors import DEVICE_CLASS_OPTIONS, INVERTIBLE_SENSOR_TYPES, SensorRegistry
 
 # ---------------------------------------------------------------------------
 # DongleWorker
@@ -77,13 +98,13 @@ class DongleWorker:
         self,
         device_path: str,
         gateway: MqttGateway,
-        config: dict,
+        cfg: dict,
         service_id: str,
         logger: logging.Logger,
     ):
         self._device_path = device_path
         self._gateway = gateway
-        self._config = config
+        self._config = cfg
         self._service_id = service_id
         self._logger = logger.getChild("worker")
 
@@ -98,8 +119,12 @@ class DongleWorker:
 
         # Keypad command topics: sensor_mac → topic
         self._keypad_command_topics: dict[str, str] = {}
+        # Keypad PIN capture state: MAC → True when armed for next PIN entry
+        self._keypad_pin_capture: dict[str, bool] = {}
         # Chime command topics that are currently subscribed
         self._chime_subscribed: set[str] = set()
+        # Sensor config command topics that are currently subscribed
+        self._sensor_config_subscribed: set[str] = set()
         # MACs we've already warned about for auto-add
         self._auto_add_warned: set[str] = set()
 
@@ -133,7 +158,9 @@ class DongleWorker:
         self._dongle_status_topic = f"{root}/dongle_{mac}/status"
 
         # Publish dongle offline until fully initialised
-        self._gateway.publish(self._dongle_status_topic, "offline", is_json=False)
+        self._gateway.publish(
+            self._dongle_status_topic, "offline", is_json=False, qos=_QOS_STATUS, retain=_RETAIN_STATUS
+        )
 
         # Subscribe to dongle-scoped command topics
         self._subscribe_dongle_topics()
@@ -145,7 +172,9 @@ class DongleWorker:
 
         self._initialized = True
         self._logger.info(f"DongleWorker ready — dongle={mac}  sensors={len(self._registry.sensors)}")
-        self._gateway.publish(self._dongle_status_topic, "online", is_json=False)
+        self._gateway.publish(
+            self._dongle_status_topic, "online", is_json=False, qos=_QOS_STATUS, retain=_RETAIN_STATUS
+        )
 
     @retry(
         wait_exponential_multiplier=1000,
@@ -163,12 +192,11 @@ class DongleWorker:
 
     def _subscribe_dongle_topics(self) -> None:
         """Subscribe to scan/remove command topics for this dongle."""
-        cfg = self._config
         client = self._gateway.client
         client.subscribe(
             [
-                (self._scan_topic, cfg["mqtt_qos"]),
-                (self._remove_topic, cfg["mqtt_qos"]),
+                (self._scan_topic, _QOS_COMMAND),
+                (self._remove_topic, _QOS_COMMAND),
             ]
         )
         client.message_callback_add(self._scan_topic, self._on_mqtt_scan)
@@ -184,15 +212,21 @@ class DongleWorker:
             return
         self._subscribe_dongle_topics()
         for _mac, cmd_topic in list(self._keypad_command_topics.items()):
-            self._gateway.client.subscribe(cmd_topic, self._config["mqtt_qos"])
+            self._gateway.client.subscribe(cmd_topic, _QOS_COMMAND)
             self._gateway.client.message_callback_add(cmd_topic, self._on_mqtt_keypad_command)
         for topic in list(self._chime_subscribed):
-            self._gateway.client.subscribe(topic, self._config["mqtt_qos"])
+            self._gateway.client.subscribe(topic, _QOS_COMMAND)
         for mac, sensor in list(self._registry.sensors.items()):
             if sensor.get("sensor_type") == "chime":
                 self._subscribe_chime(mac)
+        for topic in list(self._sensor_config_subscribed):
+            self._gateway.client.subscribe(topic, _QOS_COMMAND)
+        for mac in list(self._registry.sensors.keys()):
+            self._subscribe_sensor_config(mac)
         # Re-publish dongle status
-        self._gateway.publish(self._dongle_status_topic, "online", is_json=False, wait=False)
+        self._gateway.publish(
+            self._dongle_status_topic, "online", is_json=False, wait=False, qos=_QOS_STATUS, retain=_RETAIN_STATUS
+        )
 
     # ------------------------------------------------------------------
     # Sensor initialisation
@@ -243,13 +277,14 @@ class DongleWorker:
                 if registry.is_valid_mac(mac):
                     self._publish_sensor_discovery(mac, wait=wait)
 
-        # Subscribe to command topics for already-configured keypads and chimes
+        # Subscribe to command topics for already-configured sensors
         if self._gateway.is_connected:
             for mac, sensor in list(registry.sensors.items()):
                 if sensor.get("sensor_type") == "keypad":
                     self._subscribe_keypad_command(mac)
                 elif sensor.get("sensor_type") == "chime":
                     self._subscribe_chime(mac)
+                self._subscribe_sensor_config(mac)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -338,6 +373,7 @@ class DongleWorker:
                     self._registry.add_sensor(mac, sensor_type, sensor_version)
                     if self._config["hass_discovery"]:
                         self._publish_sensor_discovery(mac, wait=False)
+                    self._subscribe_sensor_config(mac)
                 else:
                     self._logger.debug(f"Scan: sensor {mac} already in registry — no action needed")
         else:
@@ -350,18 +386,133 @@ class DongleWorker:
             self._remove_sensor(mac, wait=False)
 
     # ------------------------------------------------------------------
+    # Sensor config MQTT (name, device_class, invert_state)
+    # ------------------------------------------------------------------
+
+    def _subscribe_sensor_config(self, mac: str) -> None:
+        """Subscribe to sensor configuration command topics for one sensor."""
+        cfg = self._config
+        mac_topic = f"{cfg['self_topic_root']}/{mac}"
+
+        topics = {
+            f"{mac_topic}/sensor_name/set": self._on_mqtt_sensor_name,
+            f"{mac_topic}/device_class/set": self._on_mqtt_device_class,
+            f"{mac_topic}/invert_state/set": self._on_mqtt_invert_state,
+        }
+
+        for topic, callback in topics.items():
+            if topic not in self._sensor_config_subscribed:
+                self._sensor_config_subscribed.add(topic)
+                self._gateway.client.subscribe(topic, _QOS_COMMAND)
+                self._gateway.client.message_callback_add(topic, callback)
+                self._logger.debug(f"Subscribed to sensor config topic: {topic}")
+
+    def _on_mqtt_sensor_name(self, client, userdata, msg) -> None:
+        """Handle a sensor name update from HA."""
+        mac = self._mac_from_topic(msg.topic, "/sensor_name/set")
+        if mac is None or mac not in self._registry.sensors:
+            return
+        new_name = msg.payload.decode(errors="replace").strip()
+        if not new_name:
+            return
+        old_name = self._registry.sensors[mac].get("name", "")
+        if new_name == old_name:
+            return
+        self._logger.info(f"Sensor {mac}: name → {new_name!r}")
+        self._registry.sensors[mac]["name"] = new_name
+        self._registry.save_sensors()
+        # Re-publish discovery so HA device name updates
+        if self._config["hass_discovery"]:
+            self._publish_sensor_discovery(mac, wait=False)
+        # Echo state back
+        self._gateway.publish(
+            f"{self._config['self_topic_root']}/{mac}/sensor_name",
+            new_name,
+            is_json=False,
+            wait=False,
+            qos=_QOS_NUMBER,
+            retain=_RETAIN_NUMBER,
+        )
+
+    def _on_mqtt_device_class(self, client, userdata, msg) -> None:
+        """Handle a device_class select update from HA."""
+        mac = self._mac_from_topic(msg.topic, "/device_class/set")
+        if mac is None or mac not in self._registry.sensors:
+            return
+        sensor = self._registry.sensors[mac]
+        sensor_type = sensor.get("sensor_type", "unknown")
+        if sensor_type not in DEVICE_CLASS_OPTIONS:
+            return
+        new_class = msg.payload.decode(errors="replace").strip()
+        if new_class not in DEVICE_CLASS_OPTIONS[sensor_type]:
+            self._logger.warning(f"Sensor {mac}: invalid device_class {new_class!r} for type {sensor_type!r}")
+            return
+        if sensor.get("class") == new_class:
+            return
+        self._logger.info(f"Sensor {mac}: device_class → {new_class!r}")
+        sensor["class"] = new_class
+        self._registry.save_sensors()
+        # Re-publish discovery so HA entity updates device_class
+        if self._config["hass_discovery"]:
+            self._publish_sensor_discovery(mac, wait=False)
+        # Echo state back
+        self._gateway.publish(
+            f"{self._config['self_topic_root']}/{mac}/device_class",
+            new_class,
+            is_json=False,
+            wait=False,
+            qos=_QOS_NUMBER,
+            retain=_RETAIN_NUMBER,
+        )
+
+    def _on_mqtt_invert_state(self, client, userdata, msg) -> None:
+        """Handle an invert_state switch update from HA."""
+        mac = self._mac_from_topic(msg.topic, "/invert_state/set")
+        if mac is None or mac not in self._registry.sensors:
+            return
+        sensor = self._registry.sensors[mac]
+        if sensor.get("sensor_type", "unknown") not in INVERTIBLE_SENSOR_TYPES:
+            return
+        raw = msg.payload.decode(errors="replace").strip().lower()
+        new_val = raw in ("true", "on", "1", "yes")
+        if sensor.get("invert_state") == new_val:
+            return
+        self._logger.info(f"Sensor {mac}: invert_state → {new_val}")
+        sensor["invert_state"] = new_val
+        self._registry.save_sensors()
+        # Re-publish discovery so HA swaps payload_on/payload_off
+        if self._config["hass_discovery"]:
+            self._publish_sensor_discovery(mac, wait=False)
+        # Echo state back
+        self._gateway.publish(
+            f"{self._config['self_topic_root']}/{mac}/invert_state",
+            "true" if new_val else "false",
+            is_json=False,
+            wait=False,
+            qos=_QOS_NUMBER,
+            retain=_RETAIN_NUMBER,
+        )
+
+    # ------------------------------------------------------------------
     # Keypad MQTT
     # ------------------------------------------------------------------
 
     def _subscribe_keypad_command(self, mac: str) -> None:
-        """Subscribe to the alarm state command topic for a keypad sensor."""
+        """Subscribe to the alarm state command topic and PIN management topics for a keypad."""
         cfg = self._config
-        cmd_topic = f"{cfg['self_topic_root']}/{mac}/set"
-        if mac not in self._keypad_command_topics:
-            self._keypad_command_topics[mac] = cmd_topic
-            self._gateway.client.subscribe(cmd_topic, cfg["mqtt_qos"])
-            self._gateway.client.message_callback_add(cmd_topic, self._on_mqtt_keypad_command)
-            self._logger.debug(f"Subscribed to keypad command topic: {cmd_topic}")
+        mac_topic = f"{cfg['self_topic_root']}/{mac}"
+
+        topics = {
+            f"{mac_topic}/set": self._on_mqtt_keypad_command,
+            f"{mac_topic}/add_pin": self._on_mqtt_keypad_add_pin,
+            f"{mac_topic}/clear_pins": self._on_mqtt_keypad_clear_pins,
+        }
+        for topic, callback in topics.items():
+            if mac not in self._keypad_command_topics:
+                self._keypad_command_topics[mac] = f"{mac_topic}/set"
+            self._gateway.client.subscribe(topic, _QOS_COMMAND)
+            self._gateway.client.message_callback_add(topic, callback)
+            self._logger.debug(f"Subscribed to keypad topic: {topic}")
 
     def _on_mqtt_keypad_command(self, client, userdata, msg) -> None:
         """Handle an inbound command from HA / Alarmo on a keypad command topic.
@@ -402,6 +553,34 @@ class DongleWorker:
         elif state_byte is None:
             self._logger.debug(f"No keypad state byte mapping for {payload_str!r}")
 
+    def _on_mqtt_keypad_add_pin(self, client, userdata, msg) -> None:
+        """Handle Add PIN button press — arm ws2m to capture the next hardware PIN entry."""
+        mac = self._mac_from_topic(msg.topic, "/add_pin")
+        if mac is None or mac not in self._registry.sensors:
+            return
+        self._logger.info(f"Keypad {mac}: PIN capture armed — enter PIN on keypad to add it")
+        self._keypad_pin_capture[mac] = True
+
+    def _on_mqtt_keypad_clear_pins(self, client, userdata, msg) -> None:
+        """Handle Clear PINs button press — wipe all configured PINs."""
+        mac = self._mac_from_topic(msg.topic, "/clear_pins")
+        if mac is None:
+            return
+        cleared = self._registry.clear_pins(mac)
+        if cleared:
+            self._logger.info(f"Keypad {mac}: all PINs cleared")
+            # Update pin_count state topic
+            self._gateway.publish(
+                f"{self._config['self_topic_root']}/{mac}/pin_count",
+                "0",
+                is_json=False,
+                wait=False,
+                qos=_QOS_NUMBER,
+                retain=_RETAIN_NUMBER,
+            )
+        else:
+            self._logger.info(f"Keypad {mac}: no PINs to clear")
+
     # ------------------------------------------------------------------
     # Chime MQTT
     # ------------------------------------------------------------------
@@ -421,7 +600,7 @@ class DongleWorker:
         for topic, callback in topics.items():
             if topic not in self._chime_subscribed:
                 self._chime_subscribed.add(topic)
-            self._gateway.client.subscribe(topic, cfg["mqtt_qos"])
+            self._gateway.client.subscribe(topic, _QOS_COMMAND)
             self._gateway.client.message_callback_add(topic, callback)
             self._logger.debug(f"Subscribed to chime topic: {topic}")
 
@@ -432,9 +611,28 @@ class DongleWorker:
         cfg = self._config
         sensor_cfg = self._registry.sensors.get(mac, {})
         mac_topic = f"{cfg['self_topic_root']}/{mac}"
-        self._gateway.publish(f"{mac_topic}/ring_id", str(int(sensor_cfg.get("ring_id", 0))), is_json=False)
-        self._gateway.publish(f"{mac_topic}/volume", str(int(sensor_cfg.get("volume", 5))), is_json=False)
-        self._gateway.publish(f"{mac_topic}/repeat_count", str(int(sensor_cfg.get("repeat_count", 1))), is_json=False)
+        pub = self._gateway.publish
+        pub(
+            f"{mac_topic}/ring_id",
+            str(int(sensor_cfg.get("ring_id", 0))),
+            is_json=False,
+            qos=_QOS_NUMBER,
+            retain=_RETAIN_NUMBER,
+        )
+        pub(
+            f"{mac_topic}/volume",
+            str(int(sensor_cfg.get("volume", 5))),
+            is_json=False,
+            qos=_QOS_NUMBER,
+            retain=_RETAIN_NUMBER,
+        )
+        pub(
+            f"{mac_topic}/repeat_count",
+            str(int(sensor_cfg.get("repeat_count", 1))),
+            is_json=False,
+            qos=_QOS_NUMBER,
+            retain=_RETAIN_NUMBER,
+        )
 
     def _on_mqtt_chime_play(self, client, userdata, msg) -> None:
         """Handle a chime play button press from HA."""
@@ -490,6 +688,8 @@ class DongleWorker:
             f"{self._config['self_topic_root']}/{mac}/{param}",
             str(value),
             is_json=False,
+            qos=_QOS_NUMBER,
+            retain=_RETAIN_NUMBER,
         )
 
     # ------------------------------------------------------------------
@@ -518,6 +718,7 @@ class DongleWorker:
             registry.add_sensor(event.mac, event.sensor_type if hasattr(event, "sensor_type") else None)
             if cfg["hass_discovery"]:
                 self._publish_sensor_discovery(event.mac)
+            self._subscribe_sensor_config(event.mac)
             if event.mac not in self._auto_add_warned:
                 self._logger.warning(
                     f"Auto-added unconfigured sensor {event.mac} — "
@@ -544,7 +745,13 @@ class DongleWorker:
             registry.state[event.mac]["online"] = True
             self._logger.info(f"{event.mac} is back online")
 
-        self._gateway.publish(f"{cfg['self_topic_root']}/{event.mac}/status", "online", is_json=False)
+        self._gateway.publish(
+            f"{cfg['self_topic_root']}/{event.mac}/status",
+            "online",
+            is_json=False,
+            qos=_QOS_STATUS,
+            retain=_RETAIN_STATUS,
+        )
 
         # Route keypad sub-events
         if event.event == "keypad_mode":
@@ -575,6 +782,28 @@ class DongleWorker:
             configured_pins = sensor_cfg.get("pins", [])
             if isinstance(configured_pins, str):
                 configured_pins = [configured_pins]
+
+            # If PIN capture is armed, absorb this PIN into the config
+            if self._keypad_pin_capture.pop(event.mac, False):
+                added = registry.add_pin(event.mac, event.pin)
+                if added:
+                    self._logger.info(f"Keypad {event.mac}: PIN captured and added")
+                    # Update pin_count state
+                    self._gateway.publish(
+                        f"{cfg['self_topic_root']}/{event.mac}/pin_count",
+                        str(registry.pin_count(event.mac)),
+                        is_json=False,
+                        wait=False,
+                        qos=_QOS_NUMBER,
+                        retain=_RETAIN_NUMBER,
+                    )
+                else:
+                    self._logger.info(f"Keypad {event.mac}: PIN already configured, not added")
+                # Re-load configured_pins for validation below
+                configured_pins = registry.sensors.get(event.mac, {}).get("pins", [])
+                if isinstance(configured_pins, str):
+                    configured_pins = [configured_pins]
+
             pin_valid = not configured_pins or event.pin in configured_pins
             self._logger.info(f"Keypad {event.mac}: PIN confirmed — valid={pin_valid}")
             self._gateway.publish(
@@ -629,6 +858,8 @@ class DongleWorker:
                     f"{self._config['self_topic_root']}/{mac}/status",
                     "offline",
                     is_json=False,
+                    qos=_QOS_STATUS,
+                    retain=_RETAIN_STATUS,
                 )
                 state["online"] = False
                 self._logger.warning(f"{mac} has gone offline (no data for >{timeout / 3600:.1f}h)")
@@ -642,7 +873,9 @@ class DongleWorker:
     def stop(self) -> None:
         """Publish dongle offline, save state, stop dongle thread."""
         if self._gateway and self._dongle:
-            self._gateway.publish(self._dongle_status_topic, "offline", is_json=False)
+            self._gateway.publish(
+                self._dongle_status_topic, "offline", is_json=False, qos=_QOS_STATUS, retain=_RETAIN_STATUS
+            )
         if self._dongle:
             self._dongle.stop()
         if self._registry:
@@ -666,6 +899,7 @@ class Bridge:
         self._workers: list[DongleWorker] = []
 
         self._reload_topic = ""
+        self._log_level_set_topic = ""
 
     # ------------------------------------------------------------------
     # Startup sequence
@@ -681,7 +915,12 @@ class Bridge:
         self._connect_mqtt()
 
         if self._config["hass_discovery"]:
-            self._gateway.publish_service_discovery(self._service_id)
+            self._gateway.publish_service_discovery(
+                self._service_id,
+                self._config.get("log_level", "INFO"),
+            )
+        else:
+            self._logger.info("hass_discovery disabled — clearing any previously-published discovery topics")
 
         # Determine which device paths to open
         device_paths = self._resolve_device_paths()
@@ -694,11 +933,22 @@ class Bridge:
             worker.start()
             self._workers.append(worker)
 
-        # After all workers have run migrations, bump the schema version once
+        # After all workers have run migrations, bump the schema version once.
+        # If hass_discovery was disabled, clear all retained discovery topics now
+        # that we know every dongle MAC and sensor MAC.
         if self._config["hass_discovery"]:
             recorded = self._gateway.get_discovery_schema_version()
             if recorded < DISCOVERY_SCHEMA_VERSION:
                 self._gateway.set_discovery_schema_version(DISCOVERY_SCHEMA_VERSION)
+        else:
+            self._logger.info("Clearing retained HA discovery topics (hass_discovery is disabled)")
+            self._gateway.clear_service_discovery(self._service_id, wait=False)
+            for worker in self._workers:
+                if worker.dongle_mac:
+                    self._gateway.clear_dongle_discovery(worker.dongle_mac, wait=False)
+                    for mac, sensor in worker._registry.sensors.items():
+                        sensor_type = sensor.get("sensor_type", "unknown")
+                        self._gateway.clear_all_sensor_discovery_topics(mac, sensor_type, wait=False)
 
         total_sensors = sum(len(w._registry.sensors) for w in self._workers)
         self._logger.info(f"Bridge ready — {len(self._workers)} dongle(s), {total_sensors} sensor(s) active")
@@ -714,7 +964,9 @@ class Bridge:
             self._logger.debug("Writing updated config.yaml (new default keys added)")
             save_config(cfg, self._logger)
 
-        self._reload_topic = f"{cfg['self_topic_root']}/reload"
+        root = cfg["self_topic_root"]
+        self._reload_topic = f"{root}/reload"
+        self._log_level_set_topic = f"{root}/log_level/set"
 
     def _resolve_device_paths(self) -> list[str]:
         """Return the list of USB device paths to open.
@@ -740,8 +992,10 @@ class Bridge:
         def _on_connect(client, userdata, flags, reason_code, properties):
             if reason_code == 0:
                 # Subscribe to service-level topics
-                client.subscribe(self._reload_topic, self._config["mqtt_qos"])
+                client.subscribe(self._reload_topic, _QOS_COMMAND)
                 client.message_callback_add(self._reload_topic, self._on_mqtt_reload)
+                client.subscribe(self._log_level_set_topic, _QOS_COMMAND)
+                client.message_callback_add(self._log_level_set_topic, self._on_mqtt_log_level)
                 # Re-subscribe all worker topics (covers reconnect case)
                 for worker in self._workers:
                     worker.resubscribe()
@@ -755,6 +1009,7 @@ class Bridge:
 
         def _on_disconnect(client, userdata, flags, reason_code, properties):
             client.message_callback_remove(self._reload_topic)
+            client.message_callback_remove(self._log_level_set_topic)
             client.connected_flag = False
             self._logger.info(f"Disconnected from MQTT broker (reason: {reason_code})")
 
@@ -771,6 +1026,31 @@ class Bridge:
         self._logger.info(f"Reload requested: {msg.payload.decode()!r}")
         for worker in self._workers:
             worker.reload()
+
+    def _on_mqtt_log_level(self, client, userdata, msg) -> None:
+        """Handle a log level select change from HA."""
+        new_level = msg.payload.decode(errors="replace").strip().upper()
+        if new_level not in LOG_LEVEL_OPTIONS:
+            self._logger.warning(f"Invalid log level received: {new_level!r}")
+            return
+        current = self._config.get("log_level", "INFO").upper()
+        if new_level == current:
+            return
+        self._logger.info(f"Log level changing: {current} → {new_level}")
+        self._config["log_level"] = new_level
+        save_config(self._config, self._logger)
+        # Re-initialise logging at the new level
+        init_logging(new_level)
+        self._logger.info(f"Log level changed to {new_level}")
+        # Echo state back so HA select stays in sync
+        self._gateway.publish(
+            f"{self._config['self_topic_root']}/log_level",
+            new_level,
+            is_json=False,
+            wait=False,
+            qos=_QOS_NUMBER,
+            retain=_RETAIN_NUMBER,
+        )
 
     # ------------------------------------------------------------------
     # Main loop

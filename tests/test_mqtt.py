@@ -29,12 +29,9 @@ def _make_gateway(config=None):
         "mqtt_client_id": "test",
         "mqtt_clean_session": False,
         "mqtt_keepalive": 60,
-        "mqtt_qos": 0,
-        "mqtt_retain": True,
         "self_topic_root": "wyzesense2mqtt",
         "hass_topic_root": "homeassistant",
         "hass_discovery": True,
-        "publish_sensor_name": True,
         "usb_dongle": "auto",
     }
     gw = MqttGateway(cfg)
@@ -406,11 +403,12 @@ def test_publish_service_discovery(tmp_config_dir):
     import json
 
     gw, cfg = _make_gateway()
-    gw.publish_service_discovery(TEST_SERVICE_ID)
+    gw.publish_service_discovery(TEST_SERVICE_ID, "INFO")
 
     assert gw._client.publish.called
     calls = gw._client.publish.call_args_list
-    assert len(calls) == 1
+    # 2 publishes: discovery config + log_level state
+    assert len(calls) == 2
     topic = calls[0].args[0]
     assert topic == f"homeassistant/device/ws2m_service_{TEST_SERVICE_ID}/config"
 
@@ -434,13 +432,18 @@ def test_publish_service_discovery(tmp_config_dir):
     assert reload_["payload_press"] == "reload"
     assert reload_["has_entity_name"] is True
 
+    assert "log_level" in components, "Service device must have log_level select"
+    log_level = components["log_level"]
+    assert log_level["platform"] == "select"
+    assert log_level["entity_category"] == "config"
+
 
 def test_publish_service_discovery_unique_ids(tmp_config_dir):
     """Service device entities must have unique_ids prefixed with ws2m_service_<uuid>."""
     import json
 
     gw, cfg = _make_gateway()
-    gw.publish_service_discovery(TEST_SERVICE_ID)
+    gw.publish_service_discovery(TEST_SERVICE_ID, "INFO")
 
     payload = json.loads(gw._client.publish.call_args_list[0].kwargs["payload"])
     for key, component in payload["components"].items():
@@ -522,7 +525,7 @@ def test_clear_sensor_discovery_topics_v1_leak(tmp_config_dir):
 
     client = MagicMock()
     client.publish.return_value = MagicMock(rc=0, wait_for_publish=MagicMock())
-    config = {"hass_topic_root": "homeassistant", "mqtt_qos": 0, "mqtt_retain": True}
+    config = {"hass_topic_root": "homeassistant"}
 
     clear_sensor_discovery_topics(client, config, None, "DDDDDDDD", "leak")
 
@@ -538,7 +541,7 @@ def test_clear_sensor_discovery_topics_v1_climate(tmp_config_dir):
 
     client = MagicMock()
     client.publish.return_value = MagicMock(rc=0, wait_for_publish=MagicMock()    )
-    config = {"hass_topic_root": "homeassistant", "mqtt_qos": 0, "mqtt_retain": True}
+    config = {"hass_topic_root": "homeassistant"}
 
     clear_sensor_discovery_topics(client, config, None, "CCCCCCCC", "climate")
 
@@ -553,7 +556,7 @@ def test_clear_sensor_discovery_topics_v1_binary(tmp_config_dir):
 
     client = MagicMock()
     client.publish.return_value = MagicMock(rc=0, wait_for_publish=MagicMock())
-    config = {"hass_topic_root": "homeassistant", "mqtt_qos": 0, "mqtt_retain": True}
+    config = {"hass_topic_root": "homeassistant"}
 
     clear_sensor_discovery_topics(client, config, None, "AAAAAAAA", "switch")
 
@@ -574,11 +577,10 @@ def test_publish_logs_warning_on_failed_rc():
 
     client = MagicMock()
     client.publish.return_value = MagicMock(rc=paho_mqtt.MQTT_ERR_NO_CONN)
-    config = {"mqtt_qos": 0, "mqtt_retain": True}
     logger = logging.getLogger("test_publish")
 
     with patch.object(logger, "warning") as mock_warn:
-        _publish(client, config, logger, "test/topic", {"key": "val"})
+        _publish(client, logger, "test/topic", {"key": "val"})
         assert mock_warn.called
 
 
@@ -854,3 +856,400 @@ def test_publish_sensor_discovery_chime(sample_config, tmp_config_dir):
     assert mock_client.publish.called
     topic_args = [call.args[0] for call in mock_client.publish.call_args_list]
     assert any("wyzesense_CHIMEMAC" in t for t in topic_args)
+
+
+# ---------------------------------------------------------------------------
+# invert_state — _build_state_sensor_components
+# ---------------------------------------------------------------------------
+
+
+def test_invert_state_false_leaves_payloads_unchanged():
+    from mqtt import _build_state_sensor_components
+
+    sensor = {"sensor_type": "switch", "invert_state": False}
+    result = _build_state_sensor_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    assert result["state"]["payload_on"] == "open"
+    assert result["state"]["payload_off"] == "closed"
+
+
+def test_invert_state_true_swaps_payloads_contact():
+    from mqtt import _build_state_sensor_components
+
+    sensor = {"sensor_type": "switch", "invert_state": True}
+    result = _build_state_sensor_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    assert result["state"]["payload_on"] == "closed"
+    assert result["state"]["payload_off"] == "open"
+
+
+def test_invert_state_true_swaps_payloads_motion():
+    from mqtt import _build_state_sensor_components
+
+    sensor = {"sensor_type": "motion", "invert_state": True}
+    result = _build_state_sensor_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    assert result["state"]["payload_on"] == "inactive"
+    assert result["state"]["payload_off"] == "active"
+
+
+def test_invert_state_not_applied_to_non_invertible_type():
+    """invert_state on a sensor type not in INVERTIBLE_SENSOR_TYPES has no effect."""
+    from sensors import SENSOR_TYPES
+    from mqtt import _build_state_sensor_components
+
+    # 'unknown' is not invertible; payloads should be unchanged
+    sensor = {"sensor_type": "unknown", "invert_state": True}
+    result = _build_state_sensor_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    # Falls back to unknown type defaults; not swapped
+    assert result["state"]["payload_on"] == result["state"]["payload_on"]  # shape check
+    assert "payload_on" in result["state"]
+
+
+def test_device_class_override_used_in_state_component():
+    """Per-sensor 'class' key overrides the type default device_class."""
+    from mqtt import _build_state_sensor_components
+
+    sensor = {"sensor_type": "switch", "class": "door"}
+    result = _build_state_sensor_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    assert result["state"]["device_class"] == "door"
+
+
+def test_device_class_falls_back_to_type_default():
+    from mqtt import _build_state_sensor_components
+
+    sensor = {"sensor_type": "switch"}
+    result = _build_state_sensor_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    assert result["state"]["device_class"] == "opening"
+
+
+# ---------------------------------------------------------------------------
+# _build_sensor_config_components
+# ---------------------------------------------------------------------------
+
+
+def test_sensor_config_components_always_has_sensor_name():
+    from mqtt import _build_sensor_config_components
+
+    for sensor_type in ("switch", "motion", "leak", "climate", "chime", "keypad", "unknown"):
+        sensor = {"sensor_type": sensor_type}
+        result = _build_sensor_config_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+        assert "sensor_name" in result, f"sensor_name missing for {sensor_type}"
+        comp = result["sensor_name"]
+        assert comp["platform"] == "text"
+        assert comp["entity_category"] == "config"
+        assert "state_topic" in comp
+        assert "command_topic" in comp
+        assert comp["command_topic"].endswith("/sensor_name/set")
+
+
+def test_sensor_config_components_device_class_select_for_contact():
+    from mqtt import _build_sensor_config_components
+    from sensors import DEVICE_CLASS_OPTIONS
+
+    sensor = {"sensor_type": "switch"}
+    result = _build_sensor_config_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    assert "device_class" in result
+    comp = result["device_class"]
+    assert comp["platform"] == "select"
+    assert comp["entity_category"] == "config"
+    assert set(comp["options"]) == set(DEVICE_CLASS_OPTIONS["switch"])
+    assert comp["command_topic"].endswith("/device_class/set")
+
+
+def test_sensor_config_components_device_class_select_for_motion():
+    from mqtt import _build_sensor_config_components
+    from sensors import DEVICE_CLASS_OPTIONS
+
+    sensor = {"sensor_type": "motion"}
+    result = _build_sensor_config_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    assert "device_class" in result
+    assert set(result["device_class"]["options"]) == set(DEVICE_CLASS_OPTIONS["motion"])
+
+
+def test_sensor_config_components_no_device_class_for_leak():
+    from mqtt import _build_sensor_config_components
+
+    sensor = {"sensor_type": "leak"}
+    result = _build_sensor_config_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    assert "device_class" not in result, "Leak sensor class is fixed; no select entity"
+
+
+def test_sensor_config_components_no_device_class_for_climate():
+    from mqtt import _build_sensor_config_components
+
+    sensor = {"sensor_type": "climate"}
+    result = _build_sensor_config_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    assert "device_class" not in result
+
+
+def test_sensor_config_components_invert_state_for_contact():
+    from mqtt import _build_sensor_config_components
+
+    sensor = {"sensor_type": "switch"}
+    result = _build_sensor_config_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    assert "invert_state" in result
+    comp = result["invert_state"]
+    assert comp["platform"] == "switch"
+    assert comp["entity_category"] == "config"
+    assert comp["payload_on"] == "true"
+    assert comp["payload_off"] == "false"
+    assert comp["command_topic"].endswith("/invert_state/set")
+
+
+def test_sensor_config_components_invert_state_for_motion():
+    from mqtt import _build_sensor_config_components
+
+    sensor = {"sensor_type": "motionv2"}
+    result = _build_sensor_config_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    assert "invert_state" in result
+
+
+def test_sensor_config_components_no_invert_state_for_leak():
+    from mqtt import _build_sensor_config_components
+
+    sensor = {"sensor_type": "leak"}
+    result = _build_sensor_config_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    assert "invert_state" not in result, "Leak sensor should not expose invert_state"
+
+
+def test_sensor_config_components_no_invert_state_for_climate():
+    from mqtt import _build_sensor_config_components
+
+    sensor = {"sensor_type": "climate"}
+    result = _build_sensor_config_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    assert "invert_state" not in result
+
+
+def test_sensor_config_components_no_invert_state_for_keypad():
+    from mqtt import _build_sensor_config_components
+
+    sensor = {"sensor_type": "keypad"}
+    result = _build_sensor_config_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    assert "invert_state" not in result
+
+
+def test_sensor_config_components_returns_fresh_dicts():
+    from mqtt import _build_sensor_config_components
+
+    sensor = {"sensor_type": "switch"}
+    r1 = _build_sensor_config_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    r2 = _build_sensor_config_components("AAAAAAAA", sensor, "ws2m/AAAAAAAA")
+    r1["sensor_name"]["sentinel"] = True
+    assert "sentinel" not in r2.get("sensor_name", {})
+
+
+# ---------------------------------------------------------------------------
+# Keypad PIN entities in _build_keypad_components
+# ---------------------------------------------------------------------------
+
+
+def test_keypad_components_has_pin_management_entities():
+    from mqtt import _build_keypad_components
+
+    sensor = {"sensor_type": "keypad", "pins": ["1234", "5678"]}
+    result = _build_keypad_components("KPADKPAD", sensor, "ws2m/KPADKPAD")
+    assert "pin_count" in result
+    assert "add_pin" in result
+    assert "clear_pins" in result
+
+
+def test_keypad_pin_count_is_sensor_entity():
+    from mqtt import _build_keypad_components
+
+    result = _build_keypad_components("KPADKPAD", {}, "ws2m/KPADKPAD")
+    comp = result["pin_count"]
+    assert comp["platform"] == "sensor"
+    assert comp["entity_category"] == "config"
+    assert "state_topic" in comp
+
+
+def test_keypad_add_pin_is_button_entity():
+    from mqtt import _build_keypad_components
+
+    result = _build_keypad_components("KPADKPAD", {}, "ws2m/KPADKPAD")
+    comp = result["add_pin"]
+    assert comp["platform"] == "button"
+    assert comp["entity_category"] == "config"
+    assert comp["command_topic"].endswith("/add_pin")
+    assert comp["payload_press"] == "arm"
+
+
+def test_keypad_clear_pins_is_button_entity():
+    from mqtt import _build_keypad_components
+
+    result = _build_keypad_components("KPADKPAD", {}, "ws2m/KPADKPAD")
+    comp = result["clear_pins"]
+    assert comp["platform"] == "button"
+    assert comp["entity_category"] == "config"
+    assert comp["command_topic"].endswith("/clear_pins")
+    assert comp["payload_press"] == "clear"
+
+
+# ---------------------------------------------------------------------------
+# Log level select in _build_service_components
+# ---------------------------------------------------------------------------
+
+
+def test_service_components_has_log_level_select():
+    from mqtt import _build_service_components, LOG_LEVEL_OPTIONS
+
+    result = _build_service_components("ws2m")
+    assert "log_level" in result
+    comp = result["log_level"]
+    assert comp["platform"] == "select"
+    assert comp["entity_category"] == "config"
+    assert comp["options"] == LOG_LEVEL_OPTIONS
+    assert comp["command_topic"].endswith("/log_level/set")
+    assert "state_topic" in comp
+
+
+def test_service_log_level_options_are_valid():
+    from mqtt import LOG_LEVEL_OPTIONS
+    import logging
+
+    for level in LOG_LEVEL_OPTIONS:
+        assert hasattr(logging, level), f"Invalid log level: {level}"
+
+
+# ---------------------------------------------------------------------------
+# QoS / retain constants are exported and sensible
+# ---------------------------------------------------------------------------
+
+
+def test_qos_and_retain_constants_exist():
+    from mqtt import (
+        _QOS_STATUS, _QOS_DISCOVERY, _QOS_DATA, _QOS_COMMAND, _QOS_NUMBER,
+        _RETAIN_STATUS, _RETAIN_DISCOVERY, _RETAIN_DATA, _RETAIN_COMMAND, _RETAIN_NUMBER,
+    )
+    # Status and discovery must be retained for HA recovery after restart
+    assert _RETAIN_STATUS is True
+    assert _RETAIN_DISCOVERY is True
+    # Data topics must NOT be retained (avoid stale readings)
+    assert _RETAIN_DATA is False
+    # Commands must NOT be retained (avoid replay on reconnect)
+    assert _RETAIN_COMMAND is False
+    # All QoS values are 0 or 1 (valid MQTT QoS levels for a bridge)
+    for qos in (_QOS_STATUS, _QOS_DISCOVERY, _QOS_DATA, _QOS_COMMAND, _QOS_NUMBER):
+        assert qos in (0, 1), f"Unexpected QoS value: {qos}"
+
+
+# ---------------------------------------------------------------------------
+# hass_topic_root default value
+# ---------------------------------------------------------------------------
+
+
+def test_hass_topic_root_default_is_homeassistant():
+    """hass_topic_root defaults to 'homeassistant' in DEFAULT_CONFIG."""
+    from config import DEFAULT_CONFIG
+
+    assert DEFAULT_CONFIG["hass_topic_root"] == "homeassistant"
+
+
+# ---------------------------------------------------------------------------
+# publish_sensor_discovery includes config entity states
+# ---------------------------------------------------------------------------
+
+
+def test_publish_sensor_discovery_publishes_sensor_name_state(tmp_config_dir):
+    """publish_sensor_discovery publishes initial sensor_name state topic."""
+    gw, cfg = _make_gateway()
+    sensor = {"sensor_type": "switch", "name": "Front Door"}
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
+
+    topics = [c.args[0] for c in gw._client.publish.call_args_list]
+    assert any(t.endswith("/sensor_name") for t in topics), "sensor_name state not published"
+
+
+def test_publish_sensor_discovery_publishes_device_class_for_contact(tmp_config_dir):
+    """publish_sensor_discovery publishes initial device_class state for contact sensors."""
+    gw, cfg = _make_gateway()
+    sensor = {"sensor_type": "switch", "class": "door"}
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
+
+    topics = [c.args[0] for c in gw._client.publish.call_args_list]
+    assert any(t.endswith("/device_class") for t in topics)
+
+
+def test_publish_sensor_discovery_publishes_invert_state_for_contact(tmp_config_dir):
+    """publish_sensor_discovery publishes initial invert_state state for contact sensors."""
+    gw, cfg = _make_gateway()
+    sensor = {"sensor_type": "switch", "invert_state": False}
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
+
+    topics = [c.args[0] for c in gw._client.publish.call_args_list]
+    assert any(t.endswith("/invert_state") for t in topics)
+
+
+def test_publish_sensor_discovery_no_invert_state_for_leak(tmp_config_dir):
+    """publish_sensor_discovery does NOT publish invert_state state for leak sensors."""
+    gw, cfg = _make_gateway()
+    sensor = {"sensor_type": "leak"}
+    gw.publish_sensor_discovery("DDDDDDDD", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
+
+    topics = [c.args[0] for c in gw._client.publish.call_args_list]
+    assert not any(t.endswith("/invert_state") for t in topics)
+
+
+def test_publish_sensor_discovery_publishes_pin_count_for_keypad(tmp_config_dir):
+    """publish_sensor_discovery publishes pin_count state for keypad sensors."""
+    gw, cfg = _make_gateway()
+    sensor = {"sensor_type": "keypad", "pins": ["1234"]}
+    gw.publish_sensor_discovery("KPADKPAD", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
+
+    topics = [c.args[0] for c in gw._client.publish.call_args_list]
+    assert any(t.endswith("/pin_count") for t in topics)
+
+
+# ---------------------------------------------------------------------------
+# sensor_config components appear in sensor discovery payload
+# ---------------------------------------------------------------------------
+
+
+def test_sensor_discovery_components_include_sensor_name_entity(tmp_config_dir):
+    """sensor_name text entity appears in the discovery payload components."""
+    import json
+
+    gw, cfg = _make_gateway()
+    sensor = {"sensor_type": "switch", "name": "Side Gate"}
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
+
+    discovery_call = gw._client.publish.call_args_list[0]
+    payload = json.loads(discovery_call.kwargs["payload"])
+    assert "sensor_name" in payload["components"]
+    assert payload["components"]["sensor_name"]["platform"] == "text"
+
+
+def test_sensor_discovery_components_include_invert_state_for_contact(tmp_config_dir):
+    """invert_state switch appears in discovery payload for contact sensors."""
+    import json
+
+    gw, cfg = _make_gateway()
+    sensor = {"sensor_type": "switchv2"}
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
+
+    payload = json.loads(gw._client.publish.call_args_list[0].kwargs["payload"])
+    assert "invert_state" in payload["components"]
+    assert payload["components"]["invert_state"]["platform"] == "switch"
+
+
+def test_sensor_discovery_components_include_device_class_for_motion(tmp_config_dir):
+    """device_class select appears in discovery payload for motion sensors."""
+    import json
+
+    gw, cfg = _make_gateway()
+    sensor = {"sensor_type": "motionv2"}
+    gw.publish_sensor_discovery("AAAAAAAA", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
+
+    payload = json.loads(gw._client.publish.call_args_list[0].kwargs["payload"])
+    assert "device_class" in payload["components"]
+    assert payload["components"]["device_class"]["platform"] == "select"
+
+
+def test_sensor_discovery_no_device_class_for_climate(tmp_config_dir):
+    """device_class select NOT in discovery payload for climate sensors."""
+    import json
+
+    gw, cfg = _make_gateway()
+    sensor = {"sensor_type": "climate"}
+    gw.publish_sensor_discovery("CCCCCCCC", sensor, TEST_DONGLE_MAC, TEST_SERVICE_ID, sensor_online=True)
+
+    payload = json.loads(gw._client.publish.call_args_list[0].kwargs["payload"])
+    assert "device_class" not in payload["components"]

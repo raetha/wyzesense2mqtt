@@ -53,6 +53,46 @@ shared by all components.
   would have raised `AttributeError` for binary-sensor types when clearing
   topics.
 
+## New entities added in 4.0.0
+
+The following entities were added across all sensor device pages:
+
+| Entity | Platform | Category | Sensor types |
+|---|---|---|---|
+| Sensor name | `text` | config | All sensors |
+| Device class | `select` | config | Contact and motion sensors |
+| Invert state | `switch` | config | Contact and motion sensors |
+| Arm PIN capture | `button` | config | Keypad only |
+| Clear all PINs | `button` | config | Keypad only |
+| PIN count | `sensor` | config | Keypad only |
+
+The service device gains:
+
+| Entity | Platform | Category |
+|---|---|---|
+| Log level | `select` | config |
+
+All configuration entity commands arrive on `<self_topic_root>/<mac>/<entity>/set`
+topics. State is published retained to `<self_topic_root>/<mac>/<entity>` so
+entities display the current value immediately after HA restarts.
+
+`invert_state` is only available for contact and motion sensors. When enabled,
+`payload_on` and `payload_off` are swapped in the HA discovery payload — the
+raw MQTT data topic is unchanged.
+
+## MQTT QoS and retain policy
+
+As of 4.0.0, `mqtt_qos` and `mqtt_retain` are no longer user-configurable.
+Values are hardcoded per message type for correctness:
+
+| Message type | QoS | Retain | Rationale |
+|---|---|---|---|
+| Status (online/offline) | 1 | true | HA must recover availability after restart |
+| Discovery config | 1 | true | HA must recover entity config after restart |
+| Sensor data payload | 0 | false | High-frequency; stale reads undesirable |
+| Commands (buttons, selects) | 1 | false | Reliable delivery; must not replay on reconnect |
+| Number/config state topics | 1 | true | HA must recover current values after restart |
+
 ## Discovery payload tagging & manual cleanup
 
 Every device discovery payload now includes:
@@ -144,7 +184,7 @@ If a future HA/MQTT change means the topic structure needs to change again:
    format) published — i.e. the cleaner for version *N* always clears what
    version *N* itself published, so it can be run when migrating *away* from
    that version.
-2. Add `3: _clear_v3_discovery_topics` to `_DISCOVERY_CLEANERS`.
+2. Append `_clear_v3_discovery_topics` to `_MIGRATION_STEPS` in `mqtt.py`.
 3. Update `MqttGateway.publish_sensor_discovery()` to publish the new v3
    format.
 4. Add a builder function to `_COMPONENT_BUILDERS` if the component structure

@@ -86,12 +86,12 @@ def run_cleanup_discovery(apply: bool = False, listen_seconds: int = 5) -> None:
     i.e. sensors that were removed by hand rather than via the bridge's remove
     command, leaving retained discovery messages on the broker.
     """
-    config, _ = load_config(LOGGER)
-    if config is None:
+    cfg, _ = load_config(LOGGER)
+    if cfg is None:
         LOGGER.error("Could not load config – is config/config.yaml present and valid?")
         return
 
-    if not config["hass_discovery"]:
+    if not cfg["hass_discovery"]:
         LOGGER.warning("hass_discovery is disabled in config; nothing to clean up")
         return
 
@@ -107,13 +107,13 @@ def run_cleanup_discovery(apply: bool = False, listen_seconds: int = 5) -> None:
 
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,
-        client_id=f"{config['mqtt_client_id']}_maintenance",
+        client_id=f"{cfg['mqtt_client_id']}_maintenance",
     )
-    client.username_pw_set(username=config["mqtt_username"], password=config["mqtt_password"])
+    client.username_pw_set(username=cfg["mqtt_username"], password=cfg["mqtt_password"])
     client.on_message = _on_message
-    client.connect(config["mqtt_host"], port=config["mqtt_port"], keepalive=config["mqtt_keepalive"])
+    client.connect(cfg["mqtt_host"], port=cfg["mqtt_port"], keepalive=cfg["mqtt_keepalive"])
 
-    hass_root = config["hass_topic_root"]
+    hass_root = cfg["hass_topic_root"]
     for wildcard in _DISCOVERY_WILDCARDS:
         adjusted = wildcard.replace("homeassistant", hass_root, 1)
         client.subscribe(adjusted)
@@ -182,14 +182,14 @@ def run_cleanup_discovery(apply: bool = False, listen_seconds: int = 5) -> None:
 
     for topic, _mac, _payload in orphans:
         LOGGER.info(f"Clearing: {topic}")
-        _publish(client, config, LOGGER, topic, None, wait=False)
+        _publish(client, LOGGER, topic, None, wait=False)
 
     for mac in orphaned_macs:
         # Also clear any sibling topics from other schema versions not
         # directly returned by the wildcard scan
-        clear_sensor_discovery_topics(client, config, LOGGER, mac, "unknown", wait=False)
-        _publish(client, config, LOGGER, f"{config['self_topic_root']}/{mac}/status", None, wait=False)
-        _publish(client, config, LOGGER, f"{config['self_topic_root']}/{mac}", None, wait=False)
+        clear_sensor_discovery_topics(client, cfg, LOGGER, mac, "unknown", wait=False)
+        _publish(client, LOGGER, f"{cfg['self_topic_root']}/{mac}/status", None, wait=False)
+        _publish(client, LOGGER, f"{cfg['self_topic_root']}/{mac}", None, wait=False)
 
     time.sleep(1)  # allow publishes to flush
     client.loop_stop()
