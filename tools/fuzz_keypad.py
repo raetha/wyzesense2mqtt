@@ -19,7 +19,7 @@ The script works in two passes:
     Exhaustively tries short payload byte sequences for a given cmd_type and
     cmd_id.  Useful once Pass 1 finds a candidate.
 
-See docs/contributing_protocol.md for background on the packet format and
+See docs/protocol.md for background on the packet format and
 what we are looking for.
 
 REQUIREMENTS
@@ -89,7 +89,7 @@ and include:
   - What the reaction looked like (beep? LED colour? both?)
   - Your dongle firmware version (shown at script startup)
 
-See docs/contributing_protocol.md for more detail on what to include.
+See docs/protocol.md for more detail on what to include.
 """
 
 from __future__ import annotations

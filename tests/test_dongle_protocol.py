@@ -209,7 +209,9 @@ def test_sensor_event_contact_open():
     assert ev.event == "alarm"
     assert ev.sensor_type == "switch"
     assert ev.state == "open"
-    assert ev.battery == 80
+    # raw=80, switch (CR1632 3V): voltage=80/32.0=2.5V; range 2.4–3.2V → ~13%
+    assert ev.battery_voltage == pytest.approx(2.5, abs=0.001)
+    assert ev.battery == 13
     assert ev.signal_strength == -50  # negated
     assert abs(ev.timestamp - 1_700_000_000.0) < 0.001
 
@@ -251,7 +253,9 @@ def test_sensor_event_heartbeat():
     )
     ev = SensorEvent.from_packet(payload)
     assert ev.event == "status"
-    assert ev.battery == 65
+    # raw=65, switch (3V): voltage=65/32.0=2.03V; below v_min 2.4V → 0%
+    assert ev.battery_voltage == pytest.approx(2.03125, abs=0.001)
+    assert ev.battery == 0
     assert ev.signal_strength == -40
     assert not hasattr(ev, "state")
 
@@ -271,7 +275,9 @@ def test_sensor_event_v2_contact_open():
     ev = SensorEvent.from_packet(payload)
     assert ev.sensor_type == "switchv2"
     assert ev.state == "open"
-    assert ev.battery == 100  # 50 * 2 = 100, capped at 100
+    # raw=50, switchv2 (AAA 1.5V, doubled→100): voltage=100/32.0=3.125V; range 1.8–3.2V → ~95%
+    assert ev.battery_voltage == pytest.approx(3.125, abs=0.001)
+    assert ev.battery == 95
 
 
 def test_sensor_event_v2_contact_battery_capped_at_100():
@@ -279,7 +285,8 @@ def test_sensor_event_v2_contact_battery_capped_at_100():
 
     payload = make_alarm_payload(mac="CCCCCCCC", sensor_type=0x0E, battery=90)
     ev = SensorEvent.from_packet(payload)
-    assert ev.battery == 100  # 90 * 2 = 180, capped at 100
+    # raw=90, doubled→180: voltage=180/32.0=5.625V; above v_max → capped at 100%
+    assert ev.battery == 100
 
 
 def test_sensor_event_motion_v2():
@@ -316,8 +323,10 @@ def test_sensor_event_climate():
     assert ev.sensor_type == "climate"
     assert ev.temperature == "22.50"
     assert ev.humidity == 55
-    assert ev.battery == 90
-    assert ev.signal_strength == -60
+    # raw=90, climate (CR2450 3V): voltage=90/32.0=2.8125V; range 2.4–3.2V → ~52%
+    assert ev.battery_voltage == pytest.approx(2.8125, abs=0.001)
+    assert ev.battery == 52
+    assert ev.signal_strength == -60  # now correctly from offset 9
 
 
 def test_sensor_event_climate_temp_decimal():
@@ -354,7 +363,9 @@ def test_sensor_event_leak_dry():
     assert ev.state == "dry"
     assert ev.probe_state == "dry"
     assert ev.probe_available is True
-    assert ev.battery == 75
+    # raw=75, leak (CR2450 3V): voltage=75/32.0=2.34375V; below v_min 2.4V → 0%
+    assert ev.battery_voltage == pytest.approx(2.34375, abs=0.001)
+    assert ev.battery == 0
     assert ev.signal_strength == -45
 
 
@@ -722,3 +733,129 @@ def test_send_keypad_status_all_states():
     for state_byte in (0x01, 0x02, 0x03, 0x04, 0x05):
         pkt = Packet.send_keypad_status("KPADKPAD", state_byte)
         assert pkt.cmd == Packet.CMD_SEND_KEYPAD_EVENT
+
+
+# ---------------------------------------------------------------------------
+# die_temp — new field extracted from alarm/heartbeat/climate offset 0
+# ---------------------------------------------------------------------------
+
+
+def test_alarm_event_has_die_temp():
+    """die_temp is extracted from offset 0 of alarm event data."""
+    from dongle_protocol import SensorEvent
+
+    payload = make_alarm_payload(sensor_type=0x01, die_temp=25)
+    ev = SensorEvent.from_packet(payload)
+    assert ev.die_temp == 25
+
+
+def test_heartbeat_event_has_die_temp():
+    """die_temp is present on heartbeat (status) events."""
+    from dongle_protocol import SensorEvent
+
+    payload = make_alarm_payload(event=0xA1, sensor_type=0x01, die_temp=18)
+    ev = SensorEvent.from_packet(payload)
+    assert ev.event == "status"
+    assert ev.die_temp == 18
+
+
+def test_climate_event_has_die_temp():
+    """die_temp is extracted from offset 0 of climate event data."""
+    from dongle_protocol import SensorEvent
+
+    payload = make_climate_payload(die_temp=22)
+    ev = SensorEvent.from_packet(payload)
+    assert ev.die_temp == 22
+
+
+# ---------------------------------------------------------------------------
+# battery_voltage — AON_BATMON raw/32.0 conversion
+# ---------------------------------------------------------------------------
+
+
+def test_battery_voltage_none_for_keypad():
+    """Keypad uses a different battery scale; battery_voltage is None."""
+    from conftest import make_keypad_hms_payload
+    from dongle_protocol import SensorEvent
+
+    payload = make_keypad_hms_payload(sub_event=0x02, state_byte=0x01, battery=155)
+    ev = SensorEvent.from_packet_v2(payload)
+    assert ev.battery_voltage is None
+    assert ev.battery == 100
+
+
+def test_battery_voltage_none_for_chime_type():
+    """Chime has no battery_v_min/max; battery_voltage is set, battery is None."""
+    from dongle_protocol import SensorEvent
+
+    # Construct minimal event directly — chime doesn't send alarm packets normally
+    ev = SensorEvent("status", "CHIMCHIM", 0.0, sensor_type="chime", battery_raw=64)
+    assert ev.battery_voltage == pytest.approx(2.0, abs=0.001)
+    assert ev.battery is None
+
+
+def test_battery_voltage_below_min_gives_zero_percent():
+    """Voltage below v_min clamps to 0%."""
+    from dongle_protocol import SensorEvent
+
+    # raw=70, switch: voltage=70/32.0=2.1875V; below v_min=2.4V → 0%
+    payload = make_alarm_payload(sensor_type=0x01, battery=70)
+    ev = SensorEvent.from_packet(payload)
+    assert ev.battery_voltage == pytest.approx(2.1875, abs=0.001)
+    assert ev.battery == 0
+
+
+def test_battery_voltage_above_max_gives_100_percent():
+    """Voltage above v_max clamps to 100%."""
+    from dongle_protocol import SensorEvent
+
+    # raw=104, switch: voltage=104/32.0=3.25V; above v_max=3.2V → 100%
+    payload = make_alarm_payload(sensor_type=0x01, battery=104)
+    ev = SensorEvent.from_packet(payload)
+    assert ev.battery_voltage == pytest.approx(3.25, abs=0.001)
+    assert ev.battery == 100
+
+
+# ---------------------------------------------------------------------------
+# mqtt.py — new diagnostic entities and probe gating
+# ---------------------------------------------------------------------------
+
+
+def test_diagnostic_components_include_battery_voltage():
+    """battery_voltage entity is present in diagnostic components."""
+    import mqtt as mqtt_module
+
+    components = mqtt_module._build_diagnostic_components()
+    assert "battery_voltage" in components
+    assert components["battery_voltage"]["device_class"] == "voltage"
+    assert components["battery_voltage"]["unit_of_measurement"] == "V"
+
+
+def test_diagnostic_components_include_die_temp():
+    """die_temp entity is present in diagnostic components and disabled by default."""
+    import mqtt as mqtt_module
+
+    components = mqtt_module._build_diagnostic_components()
+    assert "die_temp" in components
+    assert components["die_temp"]["device_class"] == "temperature"
+    assert components["die_temp"]["enabled_by_default"] is False
+
+
+def test_leak_components_include_probe_state_when_probe_available():
+    """probe_state entity is included when probe_available=True (default)."""
+    import mqtt as mqtt_module
+
+    cfg = {"self_topic_root": "wyzesense2mqtt", "hass_topic_root": "homeassistant"}
+    components = mqtt_module._build_leak_sensor_components("DDDDDDDD", {}, "wyzesense2mqtt/DDDDDDDD", probe_available=True)
+    assert "probe_state" in components
+
+
+def test_leak_components_exclude_probe_state_when_no_probe():
+    """probe_state entity is omitted when probe_available=False."""
+    import mqtt as mqtt_module
+
+    components = mqtt_module._build_leak_sensor_components("DDDDDDDD", {}, "wyzesense2mqtt/DDDDDDDD", probe_available=False)
+    assert "probe_state" not in components
+    assert "state" in components
+    assert "temperature" in components
+    assert "humidity" in components

@@ -98,6 +98,7 @@ def make_alarm_payload(
     event: int = 0xA2,
     sensor_type: int = 0x01,
     battery: int = 80,
+    die_temp: int = 20,
     state: int = 1,
     signal_strength: int = 50,
     timestamp_ms: int = 1_700_000_000_000,
@@ -105,7 +106,7 @@ def make_alarm_payload(
     import struct
 
     header = struct.pack(">QB8sB", timestamp_ms, event, mac.encode("ascii"), sensor_type)
-    body = struct.pack(">BBBBBHB", 0x00, battery, 0x00, 0x00, state, 0x0001, signal_strength)
+    body = struct.pack(">BBBBBHB", die_temp, battery, 0x00, 0x00, state, 0x0001, signal_strength)
     return header + body
 
 
@@ -114,6 +115,7 @@ def make_climate_payload(
     event: int = 0xE8,
     sensor_type: int = 0x07,
     battery: int = 90,
+    die_temp: int = 18,
     temp_hi: int = 22,
     temp_lo: int = 50,
     humidity: int = 55,
@@ -123,7 +125,9 @@ def make_climate_payload(
     import struct
 
     header = struct.pack(">QB8sB", timestamp_ms, event, mac.encode("ascii"), sensor_type)
-    body = struct.pack(">BBBBBBBB", 0x00, battery, 0x00, 0x00, temp_hi, temp_lo, humidity, signal_strength)
+    # 10-byte body: [0]=die_temp [1]=battery [2]=unk [3]=unk [4]=temp_hi [5]=temp_lo
+    #               [6]=humidity [7]=unk [8]=seq [9]=signal_strength
+    body = struct.pack(">BBBBBBBBBB", die_temp, battery, 0x00, 0x00, temp_hi, temp_lo, humidity, 0x00, 0x01, signal_strength)
     return header + body
 
 

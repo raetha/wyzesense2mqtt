@@ -73,7 +73,7 @@ python3 -m cli.dongle_tool --device /dev/hidraw0 pair
 # Unpair a sensor by MAC
 python3 -m cli.dongle_tool --device /dev/hidraw0 unpair AABBCCDD
 
-# Remove sensors with corrupt/null MACs (common after battery failure)
+# Remove corrupt/null sensor MACs (fetches paired list, identifies invalids, removes only those)
 python3 -m cli.dongle_tool --device /dev/hidraw0 fix
 
 # Monitor live sensor events (useful for confirming a sensor is reachable)

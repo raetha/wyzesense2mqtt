@@ -320,6 +320,10 @@ class DongleWorker:
         """Publish HA MQTT discovery and initial availability for one sensor."""
         sensor = self._registry.sensors.get(mac, {})
         online = self._registry.state.get(mac, {}).get("online", False)
+        # For leak sensors, probe_available comes from the most recent event (stored in state).
+        # Default True so first-publish before any event includes probe_state (it will be
+        # corrected on first event if there is no probe).
+        probe_available = self._registry.state.get(mac, {}).get("probe_available", True)
         self._gateway.publish_sensor_discovery(
             mac,
             sensor,
@@ -327,6 +331,7 @@ class DongleWorker:
             self._service_id,
             sensor_online=online,
             wait=wait,
+            probe_available=probe_available,
         )
 
     def _remove_sensor(self, mac: str, wait: bool = True) -> None:
@@ -758,6 +763,13 @@ class DongleWorker:
                     self._logger.warning(f"Sensor type changed for {event.mac}")
                     if cfg["hass_discovery"]:
                         self._publish_sensor_discovery(event.mac)
+
+        # Track probe_available for leak sensors; re-publish discovery when it changes.
+        if hasattr(event, "probe_available"):
+            prev = registry.state[event.mac].get("probe_available")
+            registry.state[event.mac]["probe_available"] = event.probe_available
+            if prev != event.probe_available and cfg["hass_discovery"]:
+                self._publish_sensor_discovery(event.mac)
 
         # Ensure keypad/chime topics are subscribed on first event
         if getattr(event, "sensor_type", None) == "keypad":

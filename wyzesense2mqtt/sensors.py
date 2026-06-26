@@ -52,6 +52,9 @@ SENSOR_TYPES: dict[str, dict] = {
         "device_class": "motion",
         "state_on": "active",
         "state_off": "inactive",
+        # CR2450 3V Li coin — AON_BATMON raw / 32.0 = volts; usable range 2.4–3.2 V
+        "battery_v_min": 2.4,
+        "battery_v_max": 3.2,
     },
     "motionv2": {
         "model": "Wyze Sense V2 Motion Sensor",
@@ -60,6 +63,9 @@ SENSOR_TYPES: dict[str, dict] = {
         "device_class": "motion",
         "state_on": "active",
         "state_off": "inactive",
+        # CR2450 3V Li coin
+        "battery_v_min": 2.4,
+        "battery_v_max": 3.2,
     },
     "switch": {
         "model": "Wyze Sense V1 Contact Sensor",
@@ -68,6 +74,9 @@ SENSOR_TYPES: dict[str, dict] = {
         "device_class": "opening",
         "state_on": "open",
         "state_off": "closed",
+        # CR1632 3V Li coin — same chemistry, same voltage range as CR2450
+        "battery_v_min": 2.4,
+        "battery_v_max": 3.2,
     },
     "switchv2": {
         "model": "Wyze Sense V2 Contact Sensor",
@@ -76,6 +85,11 @@ SENSOR_TYPES: dict[str, dict] = {
         "device_class": "opening",
         "state_on": "open",
         "state_off": "closed",
+        # 1× AAA alkaline 1.5 V; AON_BATMON reports at half scale so raw is doubled before /32.
+        # Actual cell voltage range: 0.9–1.6 V; post-doubling: 1.8–3.2 V (same scale as 3 V coins).
+        "battery_v_min": 1.8,
+        "battery_v_max": 3.2,
+        "battery_raw_double": True,
     },
     "leak": {
         "model": "Wyze Sense V2 Leak Sensor",
@@ -85,24 +99,33 @@ SENSOR_TYPES: dict[str, dict] = {
         "state_on": "wet",
         "state_off": "dry",
         # invert_state not applicable — moisture/wet/dry already correct semantics
+        # CR2450 3V Li coin
+        "battery_v_min": 2.4,
+        "battery_v_max": 3.2,
     },
     "climate": {
         "model": "Wyze Sense V2 Climate Sensor",
         "hw_version": "V2",
         "timeout_hours": 4,
         # No binary state fields — numeric entities only
+        # CR2450 3V Li coin
+        "battery_v_min": 2.4,
+        "battery_v_max": 3.2,
     },
     "chime": {
         "model": "Wyze Sense Chime",
         "hw_version": "V1",
         "timeout_hours": 24,
         # Output-only RF speaker; per-device config in sensors.yaml: ring_id, repeat_count, volume
+        # Battery chemistry unknown; voltage published only, no percentage estimate.
     },
     "keypad": {
         "model": "Wyze Sense V2 Keypad",
         "hw_version": "V2",
         "timeout_hours": 4,
         # Per-device config in sensors.yaml: pins (list[str]) — valid PIN codes
+        # Keypad battery uses a 0–155 raw scale (not AON_BATMON); handled separately.
+        "battery_keypad_scale": True,
     },
     "unknown": {
         "model": "WyzeSense Sensor",

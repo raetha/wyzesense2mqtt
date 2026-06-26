@@ -108,10 +108,10 @@ _KEYPAD_EVENT_MODE = 0x02  # arm/disarm state change
 _KEYPAD_EVENT_MOTION = 0x0A  # PIR motion
 _KEYPAD_EVENT_PIN_START = 0x06  # user started entering a PIN
 _KEYPAD_EVENT_PIN_CONFIRM = 0x08  # user finished entering a PIN (digits follow)
-_KEYPAD_EVENT_ALARM = 0x0C  # unknown alarm event (TBD — see contributing_protocol.md)
+_KEYPAD_EVENT_ALARM = 0x0C  # unknown alarm event (TBD — see protocol.md)
 
 # Keypad mode state values — raw byte from event_data[6].
-# Cross-referenced from PR #63 (drinfernoo) and AK5nowman/WyzeSense; see contributing_protocol.md.
+# Cross-referenced from PR #63 (drinfernoo) and AK5nowman/WyzeSense; see protocol.md.
 _KEYPAD_MODE_STATES: dict[int, str] = {
     0x00: "unknown",  # inactive/transient
     0x01: "disarmed",
@@ -363,14 +363,34 @@ class SensorEvent:
     def __init__(self, event: str, mac: str, timestamp: float, **kwargs):
         self.__dict__.update(kwargs)
 
-        if "battery" in self.__dict__:
-            # V2 contact: 1.5 V cell reports at half scale — double to normalise (see contributing_protocol.md)
-            if self.sensor_type == SENSOR_TYPE_NAMES.get(SENSOR_TYPE_SWITCH_V2):
-                self.battery = self.battery * 2
-            # Keypad: 0–155 raw scale — normalise to 0–100 %
-            elif self.sensor_type == SENSOR_TYPE_NAMES.get(SENSOR_TYPE_KEYPAD):
-                self.battery = int(self.battery / 155 * 100)
-            self.battery = min(self.battery, 100)
+        if "battery_raw" in self.__dict__:
+            raw = self.battery_raw
+            del self.battery_raw
+            sensor_type = getattr(self, "sensor_type", None)
+
+            if sensor_type == SENSOR_TYPE_NAMES.get(SENSOR_TYPE_KEYPAD):
+                # Keypad uses a 0–155 scale from a different source, not AON_BATMON.
+                self.battery = min(100, int(raw / 155 * 100))
+                self.battery_voltage = None
+            else:
+                # All other sensors: AON_BATMON:BAT >> 3; volts = raw / 32.0.
+                # V2 contact uses a 1.5 V AAA cell; dongle reports at half scale, so double first.
+                if sensor_type == SENSOR_TYPE_NAMES.get(SENSOR_TYPE_SWITCH_V2):
+                    raw = raw * 2
+                voltage = raw / 32.0
+                self.battery_voltage = round(voltage, 3)
+                # Approximate percentage from per-type discharge range stored in SENSOR_TYPES.
+                # Import deferred to avoid a circular dependency at module load.
+                from sensors import SENSOR_TYPES as _ST
+
+                type_meta = _ST.get(sensor_type, {})
+                v_min = type_meta.get("battery_v_min")
+                v_max = type_meta.get("battery_v_max")
+                if v_min is not None and v_max is not None:
+                    pct = (voltage - v_min) / (v_max - v_min) * 100.0
+                    self.battery = max(0, min(100, round(pct)))
+                else:
+                    self.battery = None
 
         if "signal_strength" in self.__dict__:
             self.signal_strength = -self.signal_strength  # dongle reports positive RSSI; negate for dBm
@@ -388,7 +408,7 @@ class SensorEvent:
 
     @classmethod
     def _parse_alarm(cls, mac: str, event: int, sensor_type: int, timestamp: float, data: bytes) -> "SensorEvent":
-        _, battery, _, _, state, _seq, signal_strength = struct.unpack_from(">BBBBBHB", data)
+        die_temp, battery_raw, _, _, state, _seq, signal_strength = struct.unpack_from(">BBBBBHB", data)
         if sensor_type not in SENSOR_TYPE_NAMES:
             _logger.warning("Unknown sensor type in alarm: 0x%02X", sensor_type)
             return cls._parse_unknown(mac, event, sensor_type, timestamp, data)
@@ -400,14 +420,15 @@ class SensorEvent:
             mac,
             timestamp,
             sensor_type=SENSOR_TYPE_NAMES[sensor_type],
-            battery=battery,
+            battery_raw=battery_raw,
+            die_temp=die_temp,
             signal_strength=signal_strength,
             state=_BINARY_SENSOR_STATES[sensor_type][state],
         )
 
     @classmethod
     def _parse_heartbeat(cls, mac: str, event: int, sensor_type: int, timestamp: float, data: bytes) -> "SensorEvent":
-        _, battery, _, _, _state, _seq, signal_strength = struct.unpack_from(">BBBBBHB", data)
+        die_temp, battery_raw, _, _, _state, _seq, signal_strength = struct.unpack_from(">BBBBBHB", data)
         if sensor_type not in SENSOR_TYPE_NAMES:
             _logger.warning("Unknown sensor type in heartbeat: 0x%02X", sensor_type)
             return cls._parse_unknown(mac, event, sensor_type, timestamp, data)
@@ -416,13 +437,18 @@ class SensorEvent:
             mac,
             timestamp,
             sensor_type=SENSOR_TYPE_NAMES[sensor_type],
-            battery=battery,
+            battery_raw=battery_raw,
+            die_temp=die_temp,
             signal_strength=signal_strength,
         )
 
     @classmethod
     def _parse_climate(cls, mac: str, event: int, sensor_type: int, timestamp: float, data: bytes) -> "SensorEvent":
-        _, battery, _, _, temp_hi, temp_lo, humidity, signal_strength = struct.unpack_from(">BBBBBBBB", data)
+        # Climate event data: 10 bytes per protocol.md §6.4
+        # [0]=die_temp [1]=battery [2]=unk [3]=unk [4]=temp_hi [5]=temp_lo [6]=humidity [7]=unk [8]=seq [9]=RSSI
+        die_temp, battery_raw, _, _, temp_hi, temp_lo, humidity, _, _seq, signal_strength = struct.unpack_from(
+            ">BBBBBBBBBB", data
+        )
         if sensor_type not in (SENSOR_TYPE_CLIMATE, SENSOR_TYPE_LEAK):
             _logger.warning("Unexpected sensor type 0x%02X for climate event 0x%02X", sensor_type, event)
             return cls._parse_unknown(mac, event, sensor_type, timestamp, data)
@@ -432,7 +458,8 @@ class SensorEvent:
             mac,
             timestamp,
             sensor_type=SENSOR_TYPE_NAMES[sensor_type],
-            battery=battery,
+            battery_raw=battery_raw,
+            die_temp=die_temp,
             signal_strength=signal_strength,
             temperature=temperature,
             humidity=humidity,
@@ -440,7 +467,7 @@ class SensorEvent:
 
     @classmethod
     def _parse_leak(cls, mac: str, event: int, sensor_type: int, timestamp: float, data: bytes) -> "SensorEvent":
-        _, _, battery, _, _, state, probe_state, probe_available, _, _seq, signal_strength = struct.unpack_from(
+        _, _, battery_raw, _, _, state, probe_state, probe_available, _, _seq, signal_strength = struct.unpack_from(
             ">BBBBBBBBBBB", data
         )
         if sensor_type not in _BINARY_SENSOR_STATES:
@@ -451,7 +478,7 @@ class SensorEvent:
             mac,
             timestamp,
             sensor_type=SENSOR_TYPE_NAMES[sensor_type],
-            battery=battery,
+            battery_raw=battery_raw,
             signal_strength=signal_strength,
             state=_BINARY_SENSOR_STATES[sensor_type][state],
             probe_state=_BINARY_SENSOR_STATES[sensor_type][probe_state],
@@ -467,7 +494,7 @@ class SensorEvent:
           [1..4]   unknown / padding
           [5]      keypad sub-event type
           [6]      state or mode value (sub-event dependent)
-          [7]      raw battery level (0–155 scale)
+          [7]      raw battery level (0–155 scale; different source from AON_BATMON)
           [8]      signal strength (positive RSSI; negated by __init__)
           [9..]    PIN digits (only present for _KEYPAD_EVENT_PIN_CONFIRM,
                    count = data[0] - 6, ASCII digit bytes)
@@ -478,7 +505,7 @@ class SensorEvent:
 
         sub_event = data[5]
         state_byte = data[6]
-        battery = data[7]
+        battery_raw = data[7]
         signal_strength = data[8]
 
         if sub_event == _KEYPAD_EVENT_MODE:
@@ -488,7 +515,7 @@ class SensorEvent:
                 mac,
                 timestamp,
                 sensor_type="keypad",
-                battery=battery,
+                battery_raw=battery_raw,
                 signal_strength=signal_strength,
                 alarm_mode=mode,
             )
@@ -500,7 +527,7 @@ class SensorEvent:
                 mac,
                 timestamp,
                 sensor_type="keypad",
-                battery=battery,
+                battery_raw=battery_raw,
                 signal_strength=signal_strength,
                 motion=motion,
             )
@@ -511,7 +538,7 @@ class SensorEvent:
                 mac,
                 timestamp,
                 sensor_type="keypad",
-                battery=battery,
+                battery_raw=battery_raw,
                 signal_strength=signal_strength,
             )
 
@@ -529,7 +556,7 @@ class SensorEvent:
                 mac,
                 timestamp,
                 sensor_type="keypad",
-                battery=battery,
+                battery_raw=battery_raw,
                 signal_strength=signal_strength,
                 pin=pin,
             )
@@ -542,7 +569,7 @@ class SensorEvent:
                 mac,
                 timestamp,
                 sensor_type="keypad",
-                battery=battery,
+                battery_raw=battery_raw,
                 signal_strength=signal_strength,
                 alarm_raw=state_byte,
             )
@@ -984,7 +1011,7 @@ class Dongle:
 
         Note: This command's full effect on the keypad (sounds, LED colours)
         has not been confirmed with physical hardware.  Feedback welcome —
-        see docs/contributing_protocol.md.
+        see docs/protocol.md.
         """
         self._do_simple_command(Packet.send_keypad_status(mac, state_byte))
 

@@ -294,8 +294,7 @@ mapping used is:
 What has **not** been confirmed with physical hardware is whether this command
 also triggers audible feedback (beep/tone) on the keypad speaker, or only
 drives the LEDs.  If you have a keypad and can test this, please open a GitHub
-issue with your findings — see
-[`docs/contributing_protocol.md`](contributing_protocol.md) for what to
+issue with your findings — see [`docs/protocol.md`](protocol.md) for what to
 include.
 
 ### `CMD_PLAY_CHIME` does not apply to the keypad

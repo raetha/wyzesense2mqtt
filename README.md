@@ -225,7 +225,7 @@ Discovery uses Home Assistant's device-based MQTT discovery format (one config t
     * Climate Sensor (WSCS1)
     * Leak Sensor (WSLS1)
     * Keypad v2 (WSKP1) — See [docs/keypad.md](docs/keypad.md) for setup with Home Assistant and Alarmo
-    * Wyze Video Doorbell V1 Chime (WCHIME1) — Partial support; play command and ring tone, volume, and repeat controls are available via HA. Ring tone IDs are undocumented — see [docs/contributing_protocol.md](docs/contributing_protocol.md).
+    * Wyze Video Doorbell V1 Chime (WCHIME1) — Partial support; play command and ring tone, volume, and repeat controls are available via HA. Ring tone IDs are undocumented — see [docs/protocol.md](docs/protocol.md).
 
 ### Neos Smart Branded
 * Neos Smart Bridge (N-LSP-US1)

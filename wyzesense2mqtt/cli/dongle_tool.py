@@ -121,21 +121,45 @@ def cmd_unpair(dongle: dp.Dongle, args) -> None:
 
 
 def cmd_fix(dongle: dp.Dongle, _args) -> None:
-    """Attempt to remove known-bad (corrupt/null) sensor MACs from the dongle."""
-    bad_macs = [
-        "00000000",
-        "\x00\x00\x00\x00\x00\x00\x00\x00",
-        "ffffffffffffffff",
-    ]
-    print("Removing known-bad sensor MACs…")
-    for mac in bad_macs:
+    """Remove invalid (corrupt/null) sensor MACs from dongle NVRAM.
+
+    Fetches the actual paired sensor list from the dongle, identifies entries
+    with invalid MACs (all-zero, all-0xFF, non-printable ASCII), and removes
+    them.  Healthy sensors are left untouched.
+    """
+    print("Fetching paired sensor list from dongle…")
+    try:
+        macs = dongle.list()
+    except (TimeoutError, Exception) as exc:
+        print(f"  Error: could not retrieve sensor list — {exc}")
+        return
+
+    if not macs:
+        print("  No sensors paired — nothing to fix.")
+        return
+
+    def _is_invalid(mac: str) -> bool:
+        b = mac.encode("latin-1")
+        return all(c == 0x00 for c in b) or all(c == 0xFF for c in b) or not all(0x20 <= c < 0x7F for c in b)
+
+    invalid = [m for m in macs if _is_invalid(m)]
+    valid = [m for m in macs if not _is_invalid(m)]
+
+    print(f"  Found {len(macs)} paired sensor(s): {len(valid)} valid, {len(invalid)} invalid.")
+
+    if not invalid:
+        print("  No corrupt entries found — nothing to remove.")
+        return
+
+    for mac in invalid:
+        display = dp.bytes_to_hex(mac.encode("latin-1"))
         try:
             dongle.delete(mac)
-            display = mac if mac.isascii() else dp.bytes_to_hex(mac.encode("latin-1"))
             print(f"  Removed: {display}")
-        except (TimeoutError, AssertionError, Exception):
-            pass  # expected – bad MACs often don't respond cleanly
-    print("Done")
+        except (TimeoutError, AssertionError, Exception) as exc:
+            print(f"  Failed to remove {display}: {exc}")
+
+    print("Done.")
 
 
 def cmd_chime(dongle: dp.Dongle, args) -> None:

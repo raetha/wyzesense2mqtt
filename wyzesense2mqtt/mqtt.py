@@ -164,21 +164,17 @@ def _build_state_sensor_components(sensor_mac: str, sensor: dict, mac_topic: str
     }
 
 
-def _build_leak_sensor_components(sensor_mac: str, sensor: dict, mac_topic: str) -> dict:
-    """Components for the Wyze leak sensor (binary state + probe + climate readings)."""
+def _build_leak_sensor_components(sensor_mac: str, sensor: dict, mac_topic: str, probe_available: bool = True) -> dict:
+    """Components for the Wyze leak sensor (binary state + optional probe entities).
+
+    probe_available controls whether probe_state is included.  When no probe is
+    connected the probe entities are omitted rather than left permanently unavailable.
+    """
     type_meta = SENSOR_TYPES["leak"]
-    return {
+    components = {
         "state": {
             "platform": "binary_sensor",
             "name": None,
-            "device_class": type_meta["device_class"],
-            "payload_on": type_meta["state_on"],
-            "payload_off": type_meta["state_off"],
-            "json_attributes_topic": mac_topic,
-        },
-        "probe_state": {
-            "platform": "binary_sensor",
-            "name": "Extension probe",
             "device_class": type_meta["device_class"],
             "payload_on": type_meta["state_on"],
             "payload_off": type_meta["state_off"],
@@ -203,6 +199,16 @@ def _build_leak_sensor_components(sensor_mac: str, sensor: dict, mac_topic: str)
             "json_attributes_topic": mac_topic,
         },
     }
+    if probe_available:
+        components["probe_state"] = {
+            "platform": "binary_sensor",
+            "name": "Extension probe",
+            "device_class": type_meta["device_class"],
+            "payload_on": type_meta["state_on"],
+            "payload_off": type_meta["state_off"],
+            "json_attributes_topic": mac_topic,
+        }
+    return components
 
 
 def _build_climate_sensor_components(sensor_mac: str, sensor: dict, mac_topic: str) -> dict:
@@ -299,7 +305,7 @@ def _build_chime_components(sensor_mac: str, sensor: dict, mac_topic: str) -> di
     ws2m persists changes back to sensors.yaml when values are updated via MQTT.
 
     ring_id valid values and tone mapping are undocumented; the full range 0–255
-    is allowed.  See docs/contributing_protocol.md for how to explore ring IDs.
+    is allowed.  See docs/protocol.md for how to explore ring IDs.
     """
     return {
         "play": {
@@ -374,6 +380,15 @@ def _build_diagnostic_components() -> dict:
             "entity_category": "diagnostic",
             "enabled_by_default": False,
         },
+        "battery_voltage": {
+            "platform": "sensor",
+            "name": "Battery voltage",
+            "device_class": "voltage",
+            "state_class": "measurement",
+            "unit_of_measurement": "V",
+            "suggested_display_precision": 3,
+            "entity_category": "diagnostic",
+        },
         "battery": {
             "platform": "sensor",
             "name": None,
@@ -382,6 +397,16 @@ def _build_diagnostic_components() -> dict:
             "unit_of_measurement": "%",
             "suggested_display_precision": 0,
             "entity_category": "diagnostic",
+        },
+        "die_temp": {
+            "platform": "sensor",
+            "name": "Chip temperature",
+            "device_class": "temperature",
+            "state_class": "measurement",
+            "unit_of_measurement": "°C",
+            "suggested_display_precision": 0,
+            "entity_category": "diagnostic",
+            "enabled_by_default": False,
         },
     }
 
@@ -989,6 +1014,7 @@ class MqttGateway:
         service_id: str,
         sensor_online: bool,
         wait: bool = True,
+        probe_available: bool = True,
     ) -> None:
         """Build and publish the device-based HA discovery payload for one sensor.
 
@@ -1020,8 +1046,12 @@ class MqttGateway:
         mac_topic = f"{cfg['self_topic_root']}/{sensor_mac}"
         remove_topic = f"{cfg['self_topic_root']}/dongle_{dongle_mac}/remove"
 
-        # Merge all component sources — all return fresh dicts, safe to mutate below
-        components: dict = builder(sensor_mac, sensor, mac_topic)
+        # Merge all component sources — all return fresh dicts, safe to mutate below.
+        # Pass probe_available to the leak builder so it can conditionally include probe_state.
+        if sensor_type == "leak":
+            components: dict = builder(sensor_mac, sensor, mac_topic, probe_available=probe_available)
+        else:
+            components: dict = builder(sensor_mac, sensor, mac_topic)
         components.update(_build_diagnostic_components())
         components.update(_build_sensor_action_components(sensor_mac, remove_topic))
         components.update(_build_sensor_config_components(sensor_mac, sensor, mac_topic))
