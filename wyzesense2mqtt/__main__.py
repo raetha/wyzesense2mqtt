@@ -21,7 +21,7 @@ def main() -> None:
     logger = init_logging(cfg.get("log_level") if cfg else None)
     print("WyzeSense2MQTT starting — logs follow")
 
-    from bridge import Bridge
+    from bridge import Bridge, _mark_unhealthy
 
     bridge = Bridge(logger)
     try:
@@ -29,6 +29,7 @@ def main() -> None:
         bridge.run()
     except RuntimeError as err:
         logger.error(f"Fatal startup error: {err}")
+        _mark_unhealthy()
         sys.exit(1)
 
 

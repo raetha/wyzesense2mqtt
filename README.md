@@ -32,9 +32,7 @@ Please submit pull requests against the devel branch.
     - [Removing a Sensor](#removing-a-sensor)
     - [Removing a Dongle](#removing-a-dongle)
     - [Reload Sensors](#reload-sensors)
-    - [Command Line Tools](#command-line-tools)
-      - [Dongle Tool](#dongle-tool)
-      - [MQTT Tool](#mqtt-tool)
+    - [CLI Tools](docs/cli_tools.md)
   - [Home Assistant](#home-assistant)
   - [Compatible Hardware](#compatible-hardware)
 
@@ -44,67 +42,19 @@ Please submit pull requests against the devel branch.
 This is the most tested method of running the gateway. It allows for persistance and easy migration assuming the hardware dongle moves along with the configuration. All steps are performed from the Docker host, not the container. Images are published to GHCR and Docker Hub.
 
 1. Plug the Wyze Sense Bridge into a USB port on the Docker host. Confirm that it shows up as /dev/hidraw0, if not, update the devices entry in the Docker Compose file with the correct device path.
-2. Create a Docker Compose file and a .env file similar to the following. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details on the file format and options. Example files for docker-compose.yml and .env are also included in the repository for easy copying.
-```yaml
-### Example docker-compose.yml ###
-services:
-  wyzesense2mqtt:
-    container_name: wyzesense2mqtt
-    hostname: wyzesense2mqtt
-    image: ghcr.io/raetha/wyzesense2mqtt:${IMAGE_TAG:-latest}
-    network_mode: bridge
-    restart: unless-stopped
-    tty: true
-    stop_signal: SIGINT
-    environment:
-      TZ: "${TZ:-UTC}"
-      WS2M_MQTT_HOST: "${WS2M_MQTT_HOST}"
-      WS2M_MQTT_PORT: "${WS2M_MQTT_PORT:-1883}"
-      WS2M_MQTT_USERNAME: "${WS2M_MQTT_USERNAME}"
-      WS2M_MQTT_PASSWORD: "${WS2M_MQTT_PASSWORD}"
-      WS2M_MQTT_CLIENT_ID: "${WS2M_MQTT_CLIENT_ID:-ws2m}"
-      WS2M_MQTT_CLEAN_SESSION: "${WS2M_MQTT_CLEAN_SESSION:-false}"
-      WS2M_MQTT_KEEPALIVE: "${WS2M_MQTT_KEEPALIVE:-60}"
-      WS2M_SELF_TOPIC_ROOT: "${WS2M_SELF_TOPIC_ROOT:-ws2m}"
-      WS2M_HASS_TOPIC_ROOT: "${WS2M_HASS_TOPIC_ROOT:-homeassistant}"
-      WS2M_HASS_DISCOVERY: "${WS2M_HASS_DISCOVERY:-true}"
-      WS2M_USB_DONGLE: "${WS2M_USB_DONGLE:-auto}"
-      WS2M_LOG_LEVEL: "${WS2M_LOG_LEVEL:-INFO}"
-    devices:
-      - "${DEV_WYZESENSE:-/dev/hidraw0}:/dev/hidraw0"
-    volumes:
-      - "${VOL_CONFIG}:/app/data"
-```
-```shell
-### Example .env ###
-IMAGE_TAG=latest
-TZ=America/New_York
-WS2M_MQTT_HOST=
-WS2M_MQTT_PORT=1883
-WS2M_MQTT_USERNAME=
-WS2M_MQTT_PASSWORD=
-WS2M_MQTT_CLIENT_ID=ws2m
-WS2M_MQTT_CLEAN_SESSION=false
-WS2M_MQTT_KEEPALIVE=60
-WS2M_SELF_TOPIC_ROOT=ws2m
-WS2M_HASS_TOPIC_ROOT=homeassistant
-WS2M_HASS_DISCOVERY=true
-WS2M_USB_DONGLE=auto
-WS2M_LOG_LEVEL=INFO
-DEV_WYZESENSE=/dev/hidraw0
-VOL_CONFIG=/docker/wyzesense2mqtt/config
-```
-3. Create your local volume mounts. Use the same folders you entered in the Docker Compose files created above.
+2. Copy [`examples/docker-compose.yml.example`](examples/docker-compose.yml.example) to `docker-compose.yml` and [`examples/.env.example`](examples/.env.example) to `.env` in the same directory. Fill in at minimum `WS2M_MQTT_HOST` and `VOL_DATA`. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details on the file format.
+3. Create your local volume mount directory. Use the same path you set for `VOL_DATA` in your `.env` file.
 ```bash
-mkdir /docker/wyzesense2mqtt/config
+mkdir -p /docker/wyzesense2mqtt/data
 ```
-4. (Optional, when using Docker environment variables) Create or copy a config.yaml file into the config folder (see example below or copy from repository). The script will automatically create a default config.yaml if one is not found, but it will need to be modified with the correct MQTT details before things will work.
-5. (Optional) Pre-populate a sensors.yaml file for your dongle into `<data>/dongles/<dongle_mac>/sensors.yaml`. This file will automatically be created when sensors are first discovered. The dongle MAC is shown in the startup log.
-6. Start the Docker container
+4. (Optional) Pre-populate a sensors.yaml file for your dongle into `<data>/dongles/<dongle_mac>/sensors.yaml`. This file will automatically be created when sensors are first discovered. The dongle MAC is shown in the startup log.
+5. Start the Docker container
 ```bash
 docker-compose up -d
 ```
-7. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, though the sensor version will be unknown and the class will default to opening, i.e. a contact sensor. You should manually update these entries.
+6. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, though the sensor version will be unknown and the class will default to opening, i.e. a contact sensor. You should manually update these entries.
+
+**Health monitoring:** The container includes a `HEALTHCHECK` that monitors `/tmp/ws2m_healthy`. ws2m writes and periodically touches this file while running normally, and removes it if a dongle fails. The container will report as `unhealthy` within ~90 seconds of a dongle failure or process hang. When unhealthy, check `docker logs wyzesense2mqtt` — the failed dongle and all its sensors will also have been published offline to MQTT for automation triggers.
 
 ### Home Assistant App
 
@@ -242,70 +192,11 @@ If a dongle is permanently removed (replaced, retired, or lost), ws2m retains it
 
 > **Note:** Only press this button after a deliberate permanent removal. If a dongle is temporarily disconnected or experiencing a USB fault, wait until it is reconnected before using this button to avoid losing its sensor configuration.
 
-**From the command line** (surgical single-dongle removal):
+For surgical single-dongle removal from the command line, see [CLI Tools](docs/cli_tools.md).
 
-```bash
-# Dry run — show what would be cleared/deleted without making changes
-python3 -m cli.mqtt_tool remove-dongle AABBCCDD
+### CLI Tools
 
-# Actually clear MQTT topics and delete the data directory
-python3 -m cli.mqtt_tool remove-dongle AABBCCDD --apply
-```
-
-The dry run prints a full summary — dongle MAC, every sensor it owns (with type and name), and the data directory path — before making any changes.
-
-### Command Line Tools
-
-#### Dongle Tool
-`cli/dongle_tool.py` provides direct USB dongle access for pairing, unpairing, listing sensors, and low-level diagnostics. It does **not** require the bridge service or an MQTT broker to be running. Run it from inside the container (`docker exec -it wyzesense2mqtt sh`) or directly on the host.
-
-```bash
-# List paired sensors
-python3 -m cli.dongle_tool --device /dev/hidraw0 list
-
-# Pair a new sensor (waits up to 60 s)
-python3 -m cli.dongle_tool --device /dev/hidraw0 pair
-
-# Unpair a sensor
-python3 -m cli.dongle_tool --device /dev/hidraw0 unpair AABBCCDD
-
-# Remove sensors with corrupt/null MACs (common after battery failure)
-python3 -m cli.dongle_tool --device /dev/hidraw0 fix
-
-# Monitor live sensor events
-python3 -m cli.dongle_tool --device /dev/hidraw0 monitor
-
-# Show help / all available commands
-python3 -m cli.dongle_tool --help
-```
-
-#### MQTT Tool
-`cli/mqtt_tool.py` is a standalone tool for operating on the MQTT broker. It does not touch the USB dongle and does not require the bridge service to be running. Run it via `docker exec` into a running container, or on the host if the broker is reachable.
-
-**`cleanup-discovery`** scans for Home Assistant discovery topics belonging to sensors that are no longer in any dongle's `sensors.yaml` (e.g. removed by editing config files directly rather than via the [Removing a Sensor](#removing-a-sensor) MQTT command) and reports them. By default this is a dry run; pass `--apply` to actually clear the orphaned retained topics.
-
-```bash
-# Dry run — show what would be cleared
-python3 -m cli.mqtt_tool cleanup-discovery
-
-# Actually clear orphaned topics
-python3 -m cli.mqtt_tool cleanup-discovery --apply
-
-# Increase listen time if broker is slow to replay retained messages (default: 5 s)
-python3 -m cli.mqtt_tool cleanup-discovery --listen-seconds 15
-```
-
-**`remove-dongle`** permanently removes a single dongle and all of its sensors from MQTT and local storage. Prints a full summary (dongle MAC, all sensors with type and name, data directory path) and exits without making changes unless `--apply` is passed.
-
-```bash
-# Dry run — show what would be cleared/deleted
-python3 -m cli.mqtt_tool remove-dongle AABBCCDD
-
-# Actually clear MQTT topics and delete the data directory
-python3 -m cli.mqtt_tool remove-dongle AABBCCDD --apply
-```
-
-See [docs/HA_MQTT_COMPLIANCE.md](docs/HA_MQTT_COMPLIANCE.md) for details on the MQTT discovery format used and how schema migrations/cleanup work.
+For situations requiring direct dongle access or surgical MQTT cleanup outside the normal service workflow — such as pairing sensors without the bridge running, diagnosing a dongle the bridge cannot open, or clearing orphaned HA discovery topics — see [docs/cli_tools.md](docs/cli_tools.md).
 
 ## Home Assistant
 Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add a device for each sensor, along with entities for state, battery, and signal strength (plus temperature/humidity for climate and leak sensors). By default these entities will have a `device_class` of `opening` for contact sensors, `motion` for motion sensors, and `moisture` for leak sensors, and the device will be named `WyzeSense <MAC>`. The following settings are adjustable live from the HA sensor device page and are written back to `sensors.yaml` automatically:

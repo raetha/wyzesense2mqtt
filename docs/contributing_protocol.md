@@ -141,12 +141,38 @@ For the **keypad specifically**, `event_data` has its own internal structure:
 ```
 [0]     total payload length (including this byte)
 [1..4]  unknown / padding
-[5]     sub-event type  — 0x02=mode, 0x0A=motion, 0x06=pin_start, 0x08=pin_confirm
+[5]     sub-event type  — 0x02=mode, 0x0A=motion, 0x06=pin_start, 0x08=pin_confirm, 0x0C=unknown alarm event
 [6]     state value  (meaning depends on sub-event type)
 [7]     raw battery level (0–155 scale; divide by 155 × 100 for %)
 [8]     signal strength (positive RSSI; ws2m negates it)
 [9..]   PIN digits, ASCII (only present for sub-event 0x08)
 ```
+
+**Keypad mode state values** (sub-event `0x02`, state byte at `event_data[6]`):
+
+| Raw byte | HA alarm state |
+|---|---|
+| `0x00` | `unknown` — inactive/transient, no stable alarm panel meaning |
+| `0x01` | `disarmed` |
+| `0x02` | `armed_home` |
+| `0x03` | `armed_away` |
+| `0x04` | `triggered` |
+
+This mapping is confirmed by cross-referencing two independent sources:
+- PR #63 (drinfernoo): `states[raw] = ["unknown","disarmed","armed_home","armed_away","triggered"]`
+- [AK5nowman/WyzeSense](https://github.com/AK5nowman/WyzeSense): `(WyzeKeyPadState)(raw + 1)` where the enum is `{1=Active, 2=Disarmed, 3=Home, 4=Away, 5=Alarm}`
+
+Both resolve to the same raw→meaning mapping, which gives reasonable confidence this is correct without hardware verification.
+
+Sub-event `0x0C` is noted in AK5nowman's code as "Some sort of alarm event?" — exact semantics unknown. ws2m publishes it as-is for automation use.
+
+### Battery and RSSI normalisation
+
+Two sensor families require non-obvious scaling:
+
+- **V2 contact sensors** use a 1.5 V cell and report raw battery in millivolts at half the scale of 3 V sensors. ws2m doubles the raw value before publishing so all sensor types report on the same mV scale.
+- **Keypad** reports battery as a raw integer in the 0–155 range (not millivolts). ws2m normalises this to 0–100 % by dividing by 155.
+- **RSSI** is reported by the dongle as a positive integer. ws2m negates it to follow the standard dBm sign convention (more negative = weaker signal).
 
 ### Adding support for an unknown packet type
 

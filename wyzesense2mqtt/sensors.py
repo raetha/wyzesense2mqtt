@@ -84,37 +84,25 @@ SENSOR_TYPES: dict[str, dict] = {
         "device_class": "moisture",
         "state_on": "wet",
         "state_off": "dry",
-        # invert_state is not applicable to leak sensors — the device_class
-        # (moisture) and payloads (wet/dry) already represent the correct
-        # semantic meaning.  The per-sensor invert_state field is ignored
-        # for leak sensor types.
+        # invert_state not applicable — moisture/wet/dry already correct semantics
     },
     "climate": {
         "model": "Wyze Sense V2 Climate Sensor",
         "hw_version": "V2",
         "timeout_hours": 4,
-        # No binary state fields – climate sensors produce numeric entities only
+        # No binary state fields — numeric entities only
     },
     "chime": {
         "model": "Wyze Sense Chime",
         "hw_version": "V1",
         "timeout_hours": 24,
-        # Chime is a plug-in RF speaker unit paired with the Wyze Video Doorbell V1.
-        # It is output-only — ws2m sends CMD_PLAY_CHIME (0x70) to trigger it.
-        # Configurable per-device in sensors.yaml:
-        #   ring_id:      0–255  (tone index; valid values unknown — use fuzz script)
-        #   repeat_count: 1–9   (default 1)
-        #   volume:       1–9   (default 5)
+        # Output-only RF speaker; per-device config in sensors.yaml: ring_id, repeat_count, volume
     },
     "keypad": {
         "model": "Wyze Sense V2 Keypad",
         "hw_version": "V2",
         "timeout_hours": 4,
-        # No binary state fields — keypad publishes alarm_mode and motion as
-        # separate event types; see _build_keypad_components() in mqtt.py
-        # Per-device in sensors.yaml:
-        #   pins: list[str]  — valid PIN codes for keypad_pin_confirm validation
-        #                      managed via HA entities (add/clear) or sensors.yaml
+        # Per-device config in sensors.yaml: pins (list[str]) — valid PIN codes
     },
     "unknown": {
         "model": "WyzeSense Sensor",
@@ -126,9 +114,7 @@ SENSOR_TYPES: dict[str, dict] = {
 # Sensor types whose primary HA entity is a binary_sensor
 BINARY_SENSOR_TYPES: frozenset[str] = frozenset(st for st, meta in SENSOR_TYPES.items() if "device_class" in meta)
 
-# Sensor types that support invert_state (contact and motion sensors only).
-# Leak sensors are excluded: their device_class (moisture) and payloads
-# (wet/dry) already have the correct semantic meaning.
+# Sensor types that support invert_state (leak excluded — moisture/wet/dry semantics are already correct)
 INVERTIBLE_SENSOR_TYPES: frozenset[str] = frozenset(["motion", "motionv2", "switch", "switchv2"])
 
 # Valid HA device_class values selectable per sensor family.

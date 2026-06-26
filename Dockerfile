@@ -12,4 +12,8 @@ RUN apk add --no-cache tzdata jq \
 
 VOLUME /app/data
 
+# Container flips unhealthy if the bridge hangs or a dongle fails.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD test -f /tmp/ws2m_healthy
+
 ENTRYPOINT ["/app/service.sh"]

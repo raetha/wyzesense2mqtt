@@ -103,20 +103,17 @@ _EVENT_ALARM = 0xA2
 _EVENT_CLIMATE = 0xE8
 _EVENT_LEAK = 0xEA
 
-# Keypad sub-event type bytes (found inside the NOTIFY_SENSOR_ALARM2 HMS payload)
-_KEYPAD_EVENT_MODE = 0x02  # arm/disarm state change request
-_KEYPAD_EVENT_MOTION = 0x0A  # PIR motion sensor
-_KEYPAD_EVENT_PIN_START = 0x06  # user started entering a PIN (no digits yet); keypad may be polling for status
+# Keypad sub-event type bytes (inside the NOTIFY_SENSOR_ALARM2 HMS payload)
+_KEYPAD_EVENT_MODE = 0x02  # arm/disarm state change
+_KEYPAD_EVENT_MOTION = 0x0A  # PIR motion
+_KEYPAD_EVENT_PIN_START = 0x06  # user started entering a PIN
 _KEYPAD_EVENT_PIN_CONFIRM = 0x08  # user finished entering a PIN (digits follow)
-_KEYPAD_EVENT_ALARM = 0x0C  # some kind of alarm event (exact meaning TBD)
+_KEYPAD_EVENT_ALARM = 0x0C  # unknown alarm event (TBD — see contributing_protocol.md)
 
 # Keypad mode state values — raw byte from event_data[6].
-# Both the PR (drinfernoo) and AK5nowman/WyzeSense agree on this mapping:
-#   PR:        states[raw] = ["unknown","disarmed","armed_home","armed_away","triggered"]
-#   AK5nowman: (WyzeKeyPadState)(raw + 1), where enum is {1=Active,2=Disarmed,3=Home,4=Away,5=Alarm}
-# Both resolve to the same raw→meaning mapping.
+# Cross-referenced from PR #63 (drinfernoo) and AK5nowman/WyzeSense; see contributing_protocol.md.
 _KEYPAD_MODE_STATES: dict[int, str] = {
-    0x00: "unknown",  # Inactive / transient — no stable alarm panel meaning
+    0x00: "unknown",  # inactive/transient
     0x01: "disarmed",
     0x02: "armed_home",
     0x03: "armed_away",
@@ -367,18 +364,16 @@ class SensorEvent:
         self.__dict__.update(kwargs)
 
         if "battery" in self.__dict__:
-            # V2 contact sensors use a single 1.5 V cell and report half the
-            # mV of 3 V sensors; double the raw value to normalise.
+            # V2 contact: 1.5 V cell reports at half scale — double to normalise (see contributing_protocol.md)
             if self.sensor_type == SENSOR_TYPE_NAMES.get(SENSOR_TYPE_SWITCH_V2):
                 self.battery = self.battery * 2
-            # Keypad reports raw battery in a 0–155 range; normalise to 0–100 %.
+            # Keypad: 0–155 raw scale — normalise to 0–100 %
             elif self.sensor_type == SENSOR_TYPE_NAMES.get(SENSOR_TYPE_KEYPAD):
                 self.battery = int(self.battery / 155 * 100)
             self.battery = min(self.battery, 100)
 
         if "signal_strength" in self.__dict__:
-            # The dongle reports RSSI as a positive integer; negate for dBm
-            self.signal_strength = -self.signal_strength
+            self.signal_strength = -self.signal_strength  # dongle reports positive RSSI; negate for dBm
 
         self.event = event
         self.mac = mac
@@ -686,10 +681,7 @@ class Dongle:
     # ------------------------------------------------------------------
 
     def _read_raw_hid(self) -> bytes:
-        try:
-            data = os.read(self._fd, 0x40)
-        except OSError:
-            return b""
+        data = os.read(self._fd, 0x40)
         if not data:
             return b""
         data = bytes(data)

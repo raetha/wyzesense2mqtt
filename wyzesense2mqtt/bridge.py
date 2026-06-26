@@ -54,6 +54,7 @@ MQTT topics (v2 schema)
 """
 
 import logging
+import pathlib
 import shutil
 import time
 
@@ -81,6 +82,21 @@ from mqtt import (
 )
 from retrying import retry
 from sensors import DEVICE_CLASS_OPTIONS, INVERTIBLE_SENSOR_TYPES, SensorRegistry
+
+# ---------------------------------------------------------------------------
+# Health file
+# ---------------------------------------------------------------------------
+
+_HEALTH_FILE = pathlib.Path("/tmp/ws2m_healthy")  # noqa: S108
+
+
+def _mark_healthy() -> None:
+    _HEALTH_FILE.touch()
+
+
+def _mark_unhealthy() -> None:
+    _HEALTH_FILE.unlink(missing_ok=True)
+
 
 # ---------------------------------------------------------------------------
 # DongleWorker
@@ -115,6 +131,7 @@ class DongleWorker:
         self._dongle: dongle_protocol.Dongle | None = None
         self._registry: SensorRegistry | None = None
         self._initialized = False
+        self._failed = False
 
         # Dongle-MAC-derived topics (set after dongle opens)
         self._scan_topic = ""
@@ -140,6 +157,11 @@ class DongleWorker:
     @property
     def is_initialized(self) -> bool:
         return self._initialized
+
+    @property
+    def failed(self) -> bool:
+        """True if this worker's dongle has encountered a fatal hardware error."""
+        return self._failed
 
     # ------------------------------------------------------------------
     # Startup
@@ -367,7 +389,7 @@ class DongleWorker:
         try:
             result = self._dongle.scan()
         except TimeoutError:
-            pass
+            self._logger.warning(f"Scan timed out on dongle {self._dongle.mac} — no sensor found")
 
         if result:
             mac, sensor_type, sensor_version = result
@@ -747,7 +769,9 @@ class DongleWorker:
         registry.state[event.mac]["last_seen"] = event.timestamp
         if not registry.state[event.mac]["online"]:
             registry.state[event.mac]["online"] = True
-            self._logger.info(f"{event.mac} is back online")
+            _name = registry.sensors.get(event.mac, {}).get("sensor_name", "")
+            _label = f" ({_name})" if _name else ""
+            self._logger.info(f"{event.mac}{_label} is back online")
 
         self._gateway.publish(
             f"{cfg['self_topic_root']}/{event.mac}/status",
@@ -846,8 +870,48 @@ class DongleWorker:
     # ------------------------------------------------------------------
 
     def check_health(self) -> None:
-        """Check dongle error state (may raise; Bridge.run catches it)."""
-        self._dongle.check_error()
+        """Check dongle error state; mark worker failed on hardware error.
+
+        Does not raise — failure is recorded on ``self._failed`` so Bridge.run
+        can decide how to respond based on the full worker picture.
+        """
+        if self._failed:
+            return
+        try:
+            self._dongle.check_error()
+        except Exception as exc:
+            self._failed = True
+            _name = f" ({self._dongle.mac})" if self._dongle and self._dongle.mac else ""
+            self._logger.error(
+                f"Dongle{_name} at {self._device_path} has failed and will no longer be polled: {exc}",
+                exc_info=True,
+            )
+            cfg = self._config
+            root = cfg["self_topic_root"]
+            # Best-effort: publish dongle and sensors offline.
+            try:
+                if self._gateway and self._dongle_status_topic:
+                    self._gateway.publish(
+                        self._dongle_status_topic,
+                        "offline",
+                        is_json=False,
+                        qos=_QOS_STATUS,
+                        retain=_RETAIN_STATUS,
+                    )
+                if self._gateway and self._registry:
+                    for mac, state in self._registry.state.items():
+                        if state.get("online"):
+                            self._gateway.publish(
+                                f"{root}/{mac}/status",
+                                "offline",
+                                is_json=False,
+                                qos=_QOS_STATUS,
+                                retain=_RETAIN_STATUS,
+                            )
+                            state["online"] = False
+                    self._registry.save_state()
+            except Exception:
+                self._logger.debug("Failed to publish offline status during dongle failure", exc_info=True)
 
     def check_sensor_availability(self) -> None:
         """Mark sensors offline when last_seen exceeds their timeout."""
@@ -866,7 +930,9 @@ class DongleWorker:
                     retain=_RETAIN_STATUS,
                 )
                 state["online"] = False
-                self._logger.warning(f"{mac} has gone offline (no data for >{timeout / 3600:.1f}h)")
+                _name = sensor.get("sensor_name", "")
+                _label = f" ({_name})" if _name else ""
+                self._logger.warning(f"{mac}{_label} has gone offline (no data for >{timeout / 3600:.1f}h)")
 
     def reload(self) -> None:
         """Reload sensor config and state, re-run discovery."""
@@ -958,6 +1024,7 @@ class Bridge:
         total_sensors = sum(len(w._registry.sensors) for w in self._workers)
         self._logger.info(f"Bridge ready — {len(self._workers)} dongle(s), {total_sensors} sensor(s) active")
         self._logger.info("WyzeSense2MQTT ready")
+        _mark_healthy()
 
     def _load_config(self) -> None:
         cfg, from_file = load_config(self._logger)
@@ -1121,26 +1188,33 @@ class Bridge:
         try:
             while True:
                 time.sleep(5)
+
                 for worker in self._workers:
-                    try:
-                        worker.check_health()
-                    except Exception:
-                        self._logger.error(
-                            f"Error in dongle health check for {worker._device_path}",
-                            exc_info=True,
-                        )
+                    worker.check_health()
+                    if worker.failed:
+                        _mark_unhealthy()
+
+                # All workers failed — idle without doing any work until restarted.
+                if all(w.failed for w in self._workers):
+                    self._logger.debug("All dongle workers failed — idling until container is restarted")
+                    continue
+
+                # Heartbeat — also catches a hung process via HEALTHCHECK.
+                _mark_healthy()
 
                 if not self._gateway.is_connected:
                     self._logger.warning("MQTT broker disconnected — awaiting reconnect")
 
                 for worker in self._workers:
-                    worker.check_sensor_availability()
+                    if not worker.failed:
+                        worker.check_sensor_availability()
 
         except KeyboardInterrupt:
             self._logger.warning("Interrupted by user")
         except Exception:
             self._logger.error("Unexpected error in main loop", exc_info=True)
         finally:
+            _mark_unhealthy()
             self.stop()
 
     # ------------------------------------------------------------------

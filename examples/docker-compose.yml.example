@@ -24,4 +24,10 @@ services:
     devices:
       - "${DEV_WYZESENSE:-/dev/hidraw0}:/dev/hidraw0"
     volumes:
-      - "${VOL_CONFIG}:/app/data"
+      - "${VOL_DATA}:/app/data"
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ws2m_healthy"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3

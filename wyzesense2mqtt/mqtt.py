@@ -101,22 +101,18 @@ LOG_LEVEL_OPTIONS: list[str] = ["DEBUG", "INFO", "WARNING", "ERROR"]
 # ---------------------------------------------------------------------------
 # Per-message QoS / retain constants
 # ---------------------------------------------------------------------------
-#
-# Import these wherever a publish() call needs explicit QoS/retain rather than
-# the defaults.  The MqttGateway.publish() / _publish() helpers default to
-# data-topic settings (QoS 0, retain=False) and callers override as needed.
 
-_QOS_STATUS = 1  # online/offline status
-_QOS_DISCOVERY = 1  # HA discovery config
-_QOS_DATA = 0  # sensor data payloads
-_QOS_COMMAND = 1  # command topics (button, select, text, number set)
-_QOS_NUMBER = 1  # number entity state topics (chime params)
+_QOS_STATUS = 1
+_QOS_DISCOVERY = 1
+_QOS_DATA = 0
+_QOS_COMMAND = 1
+_QOS_NUMBER = 1
 
-_RETAIN_STATUS = True  # retain status for availability recovery
-_RETAIN_DISCOVERY = True  # retain discovery for HA restart recovery
-_RETAIN_DATA = False  # do not retain sensor data (avoid stale readings)
-_RETAIN_COMMAND = False  # do not retain commands (avoid replay on reconnect)
-_RETAIN_NUMBER = True  # retain number states for HA restart recovery
+_RETAIN_STATUS = True
+_RETAIN_DISCOVERY = True
+_RETAIN_DATA = False
+_RETAIN_COMMAND = False
+_RETAIN_NUMBER = True
 
 
 # ---------------------------------------------------------------------------
@@ -1153,8 +1149,6 @@ class MqttGateway:
 
     def _clear_sensor_config_state_topics(self, sensor_mac: str, sensor_type: str, wait: bool = True) -> None:
         """Clear retained config entity state topics for a removed sensor."""
-        # Delegate to module-level function; kept for internal callers that
-        # need only the state topics without the data or discovery topics.
         mac_topic = f"{self._config['self_topic_root']}/{sensor_mac}"
         for suffix in ["sensor_name", "device_class", "invert_state", "pin_count"]:
             self.publish(f"{mac_topic}/{suffix}", None, wait=wait)
