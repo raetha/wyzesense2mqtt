@@ -114,7 +114,7 @@ not available in earlier versions.  The Docker image now uses
 - **`docs/contributing_protocol.md`** — guide for contributors wanting
   to capture HID traffic, add support for new packet types, or help
   identify unknowns (e.g. keypad display feedback behaviour, chime ring
-  tone IDs).  Covers `capture_hid.py`, `bridge_tool monitor`, packet
+  tone IDs).  Covers `capture_hid.py`, `dongle_tool monitor`, packet
   framing reference, and what to include in a bug report.
 - **`tools/fuzz_keypad.py`** — systematic protocol fuzzer for exploring
   unknown dongle commands (Pass 1: cmd_id sweep; Pass 2: payload sweep).
@@ -137,9 +137,13 @@ not available in earlier versions.  The Docker image now uses
 - **`scripts/run_tests.sh`** — creates a `.venv/` automatically on first
   run, then runs lint and the test suite.  Accepts `--coverage`,
   `--hardware [--dongle PATH]`, `-k`, `-x`, `-v` flags.
-- **`cli/maintenance.py`** — MQTT maintenance CLI with a
+- **`cli/mqtt_tool.py`** — MQTT maintenance CLI with a
   `cleanup-discovery` command for finding and clearing orphaned HA
-  discovery topics (dry-run by default, `--apply` to clear).
+  discovery topics (dry-run by default, `--apply` to clear), and a
+  `remove-dongle <mac>` command for permanently decommissioning a single
+  dongle — clears all retained MQTT topics for the dongle and its sensors,
+  deletes the `data/dongles/<mac>/` directory, and prints a full summary
+  before making any changes (dry-run by default, `--apply` to apply).
 - **`tools/capture_hid.py`** — standalone HID frame capture script
   (bridge must not be running); prompts for MAC obfuscation before saving.
 - **HA configuration entities** — sensor settings are now adjustable live
@@ -165,6 +169,14 @@ not available in earlier versions.  The Docker image now uses
   - **Log level** (`select`, service device) — changes the bridge log
     verbosity live (`DEBUG`/`INFO`/`WARNING`/`ERROR`), persists to
     `config.yaml`, and takes effect immediately without a restart.
+  - **Cleanup removed dongles** (`button`, service device) — compares
+    the dongle data directories on disk against currently-connected USB
+    devices; for each dongle that is no longer present, clears all
+    retained MQTT discovery and status topics and deletes the
+    `data/dongles/<mac>/` directory tree.  Idempotent — safe to press
+    at any time; is a no-op if all known dongles are connected.  Appears
+    under the Configuration entity category on the service device page
+    (not the default dashboard) to reduce accidental activation.
   All changes are persisted to `sensors.yaml` / `config.yaml` and
   echoed back to the MQTT state topic so HA stays in sync.
 - **`invert_state` re-implemented** — the `invert_state` field was
@@ -217,7 +229,7 @@ not available in earlier versions.  The Docker image now uses
     of raising.
   - `bridge.py` — `Bridge` class orchestrating the above; no
     module-level globals.
-  - `cli/bridge_tool.py` — replaces `bridge_tool_cli.py`; argparse
+  - `cli/dongle_tool.py` — replaces `bridge_tool_cli.py`; argparse
     replaces docopt; defaults to auto-detecting the dongle.
   - Old files (`wyzesense2mqtt.py`, `mqtt_common.py`, `wyzesense.py`,
     `bridge_tool_cli.py`, `wyzesense2mqtt_cli.py`) removed.

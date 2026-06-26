@@ -444,3 +444,48 @@ def test_load_config_logs_error_when_no_host_and_logger(tmp_config_dir):
         cfg, _ = cfg_module.load_config(logger)
         assert cfg is None
         assert mock_err.called
+
+
+# ---------------------------------------------------------------------------
+# list_known_dongle_macs
+# ---------------------------------------------------------------------------
+
+
+def test_list_known_dongle_macs_empty_when_no_dongles_dir(tmp_config_dir):
+    import config as cfg_module
+
+    result = cfg_module.list_known_dongle_macs()
+    assert result == []
+
+
+def test_list_known_dongle_macs_returns_subdirectory_names(tmp_config_dir):
+    import config as cfg_module
+
+    cfg_module.ensure_dongle_dir("AABBCCDD")
+    cfg_module.ensure_dongle_dir("11223344")
+    result = cfg_module.list_known_dongle_macs()
+    assert sorted(result) == ["11223344", "AABBCCDD"]
+
+
+def test_list_known_dongle_macs_ignores_files(tmp_config_dir):
+    """Files inside dongles/ should not be returned, only subdirectories."""
+    import os
+    import config as cfg_module
+
+    dongles_dir = cfg_module.config_path(cfg_module.DONGLES_DIR)
+    os.makedirs(dongles_dir, exist_ok=True)
+    # Create a stray file inside dongles/
+    open(os.path.join(dongles_dir, "not_a_mac.txt"), "w").close()
+    cfg_module.ensure_dongle_dir("AABBCCDD")
+    result = cfg_module.list_known_dongle_macs()
+    assert result == ["AABBCCDD"]
+
+
+def test_list_known_dongle_macs_with_logger(tmp_config_dir):
+    import logging
+    import config as cfg_module
+
+    cfg_module.ensure_dongle_dir("AABBCCDD")
+    logger = logging.getLogger("test")
+    result = cfg_module.list_known_dongle_macs(logger)
+    assert result == ["AABBCCDD"]

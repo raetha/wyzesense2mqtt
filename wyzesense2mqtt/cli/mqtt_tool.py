@@ -1,25 +1,32 @@
 #!/usr/bin/env python3
 """
-WyzeSense2MQTT MQTT/discovery maintenance CLI.
+WyzeSense2MQTT MQTT tool – broker and discovery maintenance CLI.
 
 A standalone tool for operating on the MQTT broker that wyzesense2mqtt
 talks to.  It does not touch the USB dongle and does not require the bridge
-service to be running.  For direct dongle management, see cli/bridge_tool.py.
+service to be running.  For direct dongle management, see cli/dongle_tool.py.
 
 Usage:
-    python3 -m cli.maintenance cleanup-discovery [--apply] [--listen-seconds N]
+    python3 -m cli.mqtt_tool cleanup-discovery [--apply] [--listen-seconds N]
+    python3 -m cli.mqtt_tool remove-dongle <mac> [--apply]
 
 Commands:
     cleanup-discovery   Scan for and optionally clear orphaned HA MQTT
                         discovery topics left behind by sensors that were
                         removed without going through the normal bridge flow.
                         Dry-run by default; pass --apply to clear topics.
+
+    remove-dongle       Remove a single dongle and all its sensors from
+                        MQTT and local storage.  Shows a summary of what
+                        will be cleared/deleted, then exits unless --apply
+                        is passed.
 """
 
 import argparse
 import json
 import logging
 import os
+import shutil
 import sys
 import time
 
@@ -27,10 +34,19 @@ import time
 sys.path.insert(0, __file__.rsplit("/cli", 1)[0])
 
 import paho.mqtt.client as mqtt
-from config import CONFIG_DIR, DONGLES_DIR, SENSORS_CONFIG_FILE, config_path, dongle_data_path, load_config, read_yaml
-from mqtt import _publish, clear_sensor_discovery_topics
+from config import (
+    CONFIG_DIR,
+    DONGLES_DIR,
+    SENSORS_CONFIG_FILE,
+    config_path,
+    dongle_data_path,
+    list_known_dongle_macs,
+    load_config,
+    read_yaml,
+)
+from mqtt import _publish, clear_dongle_topics, clear_sensor_discovery_topics, clear_sensor_state_topics
 
-LOGGER = logging.getLogger("ws2m.maintenance")
+LOGGER = logging.getLogger("ws2m.mqtt_tool")
 
 # ---------------------------------------------------------------------------
 # Discovery topic scanning
@@ -107,7 +123,7 @@ def run_cleanup_discovery(apply: bool = False, listen_seconds: int = 5) -> None:
 
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,
-        client_id=f"{cfg['mqtt_client_id']}_maintenance",
+        client_id=f"{cfg['mqtt_client_id']}_mqtt_tool",
     )
     client.username_pw_set(username=cfg["mqtt_username"], password=cfg["mqtt_password"])
     client.on_message = _on_message
@@ -198,13 +214,92 @@ def run_cleanup_discovery(apply: bool = False, listen_seconds: int = 5) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Argument parser
+# remove-dongle command
 # ---------------------------------------------------------------------------
+
+
+def run_remove_dongle(dongle_mac: str, apply: bool = False) -> None:
+    """Remove a single dongle and all its sensors from MQTT and local storage.
+
+    Connects to the MQTT broker, clears all retained discovery and status
+    topics for the dongle and every sensor it owns, then (if ``--apply`` is
+    passed) deletes the ``data/dongles/<mac>/`` directory tree.
+
+    Dry-run by default; pass ``--apply`` to make changes.
+    """
+    cfg, _ = load_config(LOGGER)
+    if cfg is None:
+        LOGGER.error("Could not load config – is config/config.yaml present and valid?")
+        return
+
+    known_macs = list_known_dongle_macs(LOGGER)
+    if dongle_mac not in known_macs:
+        LOGGER.error(f"Dongle MAC {dongle_mac!r} not found in data/dongles/. Known MACs: {known_macs or ['(none)']}")
+        return
+
+    # Load sensor list for this dongle
+    sensors_path = dongle_data_path(dongle_mac, SENSORS_CONFIG_FILE)
+    sensors_config: dict = {}
+    if os.path.isfile(sensors_path):
+        sensors_config = read_yaml(sensors_path, LOGGER) or {}
+
+    sensor_macs = list(sensors_config.keys())
+
+    print(f"Dongle: {dongle_mac}")
+    print(f"Sensors ({len(sensor_macs)}):")
+    for mac in sensor_macs:
+        s = sensors_config[mac]
+        print(f"  {mac}  type={s.get('sensor_type', 'unknown')}  name={s.get('sensor_name', '')!r}")
+
+    dongle_dir = dongle_data_path(dongle_mac)
+    print(f"\nData directory: {dongle_dir}")
+    print(f"\nActions that {'WILL' if apply else 'WOULD'} be taken:")
+    print(f"  • Clear retained MQTT discovery topic for dongle {dongle_mac}")
+    for mac in sensor_macs:
+        print(f"  • Clear retained MQTT topics for sensor {mac}")
+    print(f"  • Delete {dongle_dir}/")
+
+    if not apply:
+        print("\nDry run — nothing changed.  Re-run with --apply to make these changes.")
+        return
+
+    # Connect to MQTT
+    client = mqtt.Client(
+        mqtt.CallbackAPIVersion.VERSION2,
+        client_id=f"{cfg['mqtt_client_id']}_mqtt_tool",
+    )
+    client.username_pw_set(username=cfg["mqtt_username"], password=cfg["mqtt_password"])
+    client.connect(cfg["mqtt_host"], port=cfg["mqtt_port"], keepalive=cfg["mqtt_keepalive"])
+    client.loop_start()
+
+    # Clear sensor topics
+    for mac in sensor_macs:
+        sensor_type = sensors_config[mac].get("sensor_type", "unknown")
+        LOGGER.info(f"Clearing sensor topics: {mac}")
+        clear_sensor_state_topics(client, cfg, LOGGER, mac, sensor_type, wait=False)
+        clear_sensor_discovery_topics(client, cfg, LOGGER, mac, sensor_type, wait=False)
+
+    # Clear dongle topics
+    LOGGER.info(f"Clearing dongle topics: {dongle_mac}")
+    clear_dongle_topics(client, cfg, LOGGER, dongle_mac, wait=False)
+
+    time.sleep(1)
+    client.loop_stop()
+    client.disconnect()
+
+    # Delete data directory
+    try:
+        shutil.rmtree(dongle_dir)
+        print(f"\nDeleted {dongle_dir}/")
+    except OSError as exc:
+        LOGGER.warning(f"Could not delete {dongle_dir}: {exc}")
+
+    print(f"\nDone.  Dongle {dongle_mac} removed.")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="WyzeSense2MQTT MQTT/discovery maintenance CLI",
+        description="WyzeSense2MQTT MQTT tool – broker and discovery maintenance",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -226,6 +321,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seconds to wait for the broker to replay retained topics (default: 5)",
     )
 
+    remove_p = sub.add_parser(
+        "remove-dongle",
+        help="Remove a single dongle and all its sensors from MQTT and local storage",
+    )
+    remove_p.add_argument(
+        "mac",
+        help="MAC address of the dongle to remove (as it appears in data/dongles/)",
+    )
+    remove_p.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually clear MQTT topics and delete data files (default is dry run)",
+    )
+
     return parser
 
 
@@ -241,6 +350,8 @@ def main() -> None:
 
     if args.command == "cleanup-discovery":
         run_cleanup_discovery(apply=args.apply, listen_seconds=args.listen_seconds)
+    elif args.command == "remove-dongle":
+        run_remove_dongle(args.mac, apply=args.apply)
 
 
 if __name__ == "__main__":

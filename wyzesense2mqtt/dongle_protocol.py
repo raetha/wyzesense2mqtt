@@ -939,7 +939,7 @@ class Dongle:
     def delete(self, mac: str) -> None:
         """Unpair a sensor by MAC address."""
         if "," in mac:
-            # Comma-separated hex bytes (non-ASCII MAC displayed by bridge_tool)
+            # Comma-separated hex bytes (non-ASCII MAC displayed by dongle_tool)
             mac_bytes = bytes(int(x, 16) for x in mac.split(","))
             resp = self._do_simple_command(Packet.del_sensor(mac_bytes))
         else:

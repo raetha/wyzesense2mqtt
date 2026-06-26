@@ -117,6 +117,24 @@ def ensure_dongle_dir(dongle_mac: str) -> str:
     return path
 
 
+def list_known_dongle_macs(logger: logging.Logger | None = None) -> list[str]:
+    """Return the MAC addresses of all dongles that have a data directory.
+
+    Scans ``<CONFIG_DIR>/dongles/`` and returns subdirectory names, which
+    correspond to dongle MAC addresses recorded during previous runs.  Returns
+    an empty list if the dongles directory does not exist yet.
+    """
+    dongles_dir = config_path(DONGLES_DIR)
+    if not os.path.isdir(dongles_dir):
+        return []
+    try:
+        return [entry for entry in os.listdir(dongles_dir) if os.path.isdir(os.path.join(dongles_dir, entry))]
+    except OSError as exc:
+        if logger:
+            logger.warning(f"Could not list dongle directories: {exc}")
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Low-level YAML I/O
 # ---------------------------------------------------------------------------

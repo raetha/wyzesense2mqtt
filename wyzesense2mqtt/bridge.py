@@ -31,6 +31,7 @@ MQTT topics (v2 schema)
   <root>/reload                           — service-level reload command
   <root>/log_level                        — service log level state (retained)
   <root>/log_level/set                    — service log level command
+  <root>/cleanup_removed_dongles          — service cleanup removed dongles command
   <root>/dongle_<mac>/scan                — scan for new sensor on this dongle
   <root>/dongle_<mac>/remove              — remove sensor by MAC payload
   <root>/dongle_<mac>/status              — dongle online/offline (retained)
@@ -53,13 +54,16 @@ MQTT topics (v2 schema)
 """
 
 import logging
+import shutil
 import time
 
 import dongle_protocol
 from config import (
     VERSION,
+    dongle_data_path,
     find_all_dongle_devices,
     init_logging,
+    list_known_dongle_macs,
     load_config,
     load_service_id,
     migrate_legacy_sensor_files,
@@ -900,6 +904,7 @@ class Bridge:
 
         self._reload_topic = ""
         self._log_level_set_topic = ""
+        self._cleanup_removed_dongles_topic = ""
 
     # ------------------------------------------------------------------
     # Startup sequence
@@ -967,6 +972,7 @@ class Bridge:
         root = cfg["self_topic_root"]
         self._reload_topic = f"{root}/reload"
         self._log_level_set_topic = f"{root}/log_level/set"
+        self._cleanup_removed_dongles_topic = f"{root}/cleanup_removed_dongles"
 
     def _resolve_device_paths(self) -> list[str]:
         """Return the list of USB device paths to open.
@@ -996,6 +1002,8 @@ class Bridge:
                 client.message_callback_add(self._reload_topic, self._on_mqtt_reload)
                 client.subscribe(self._log_level_set_topic, _QOS_COMMAND)
                 client.message_callback_add(self._log_level_set_topic, self._on_mqtt_log_level)
+                client.subscribe(self._cleanup_removed_dongles_topic, _QOS_COMMAND)
+                client.message_callback_add(self._cleanup_removed_dongles_topic, self._on_mqtt_cleanup_removed_dongles)
                 # Re-subscribe all worker topics (covers reconnect case)
                 for worker in self._workers:
                     worker.resubscribe()
@@ -1010,6 +1018,7 @@ class Bridge:
         def _on_disconnect(client, userdata, flags, reason_code, properties):
             client.message_callback_remove(self._reload_topic)
             client.message_callback_remove(self._log_level_set_topic)
+            client.message_callback_remove(self._cleanup_removed_dongles_topic)
             client.connected_flag = False
             self._logger.info(f"Disconnected from MQTT broker (reason: {reason_code})")
 
@@ -1051,6 +1060,57 @@ class Bridge:
             qos=_QOS_NUMBER,
             retain=_RETAIN_NUMBER,
         )
+
+    def _on_mqtt_cleanup_removed_dongles(self, client, userdata, msg) -> None:
+        """Handle a 'Cleanup removed dongles' button press from HA.
+
+        Diffs the dongles recorded on disk against the currently-connected
+        USB devices.  For each dongle that is no longer present:
+
+        1. Clears all retained MQTT topics for its sensors and the dongle device.
+        2. Deletes the ``data/dongles/<mac>/`` directory tree.
+
+        This is a one-way destructive action — the dongle and all its sensor
+        data are permanently removed from ws2m.  The operation is idempotent:
+        if all known dongles are currently connected it is a no-op.
+        """
+        self._logger.info("Cleanup removed dongles requested")
+
+        known_macs = list_known_dongle_macs(self._logger)
+        if not known_macs:
+            self._logger.info("No known dongles recorded — nothing to clean up")
+            return
+
+        active_macs: set[str] = {w.dongle_mac for w in self._workers if w.dongle_mac}
+
+        removed_macs = [mac for mac in known_macs if mac not in active_macs]
+        if not removed_macs:
+            self._logger.info("All recorded dongles are currently active — nothing to clean up")
+            return
+
+        self._logger.info(f"Cleaning up {len(removed_macs)} removed dongle(s): {removed_macs}")
+
+        for mac in removed_macs:
+            # Load the sensor registry for this dongle so we can clear per-sensor topics
+            registry = SensorRegistry(mac)
+            registry.load_sensors()
+            for sensor_mac, sensor in registry.sensors.items():
+                sensor_type = sensor.get("sensor_type", "unknown")
+                self._logger.info(f"  Clearing sensor topics: {sensor_mac} ({sensor_type})")
+                self._gateway.clear_sensor_topics(sensor_mac, sensor_type, wait=False)
+
+            # Clear dongle-level MQTT topics
+            self._gateway.clear_dongle_all_topics(mac, wait=False)
+
+            # Delete the data directory
+            dongle_dir = dongle_data_path(mac)
+            try:
+                shutil.rmtree(dongle_dir)
+                self._logger.info(f"  Deleted data directory: {dongle_dir}")
+            except OSError as exc:
+                self._logger.warning(f"  Could not delete {dongle_dir}: {exc}")
+
+        self._logger.info("Cleanup removed dongles complete")
 
     # ------------------------------------------------------------------
     # Main loop

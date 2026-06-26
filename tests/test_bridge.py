@@ -6,6 +6,7 @@ so no real hardware or broker is required.
 """
 
 import logging
+import os
 import time
 from unittest.mock import MagicMock, call, patch
 
@@ -723,3 +724,103 @@ def test_load_config_drops_removed_keys_from_file(tmp_config_dir, sample_config)
         assert key not in cfg, f"Removed key {key!r} survived load_config"
     # hass_topic_root is NOT a removed key — it should be present in config
     assert cfg.get("hass_topic_root") == "homeassistant"
+
+
+# ---------------------------------------------------------------------------
+# _on_mqtt_cleanup_removed_dongles
+# ---------------------------------------------------------------------------
+
+
+def _make_bridge_for_cleanup(tmp_config_dir, sample_config, worker_mac=TEST_DONGLE_MAC):
+    """Return a minimal Bridge instance with one mocked DongleWorker."""
+    from bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._config = sample_config
+    bridge._logger = logging.getLogger("test.bridge")
+    bridge._gateway = MagicMock()
+    bridge._gateway.clear_sensor_topics = MagicMock()
+    bridge._gateway.clear_dongle_all_topics = MagicMock()
+
+    worker = MagicMock()
+    worker.dongle_mac = worker_mac
+    bridge._workers = [worker]
+    return bridge
+
+
+def test_cleanup_removed_dongles_noop_when_all_active(tmp_config_dir, sample_config):
+    """Handler is a no-op when all recorded dongles match active workers."""
+    import config as cfg_module
+
+    cfg_module.ensure_dongle_dir(TEST_DONGLE_MAC)
+    bridge = _make_bridge_for_cleanup(tmp_config_dir, sample_config, worker_mac=TEST_DONGLE_MAC)
+
+    msg = MagicMock()
+    bridge._on_mqtt_cleanup_removed_dongles(None, None, msg)
+
+    bridge._gateway.clear_dongle_all_topics.assert_not_called()
+
+
+def test_cleanup_removed_dongles_noop_when_no_known_macs(tmp_config_dir, sample_config):
+    """Handler is a no-op when no dongle directories exist at all."""
+    bridge = _make_bridge_for_cleanup(tmp_config_dir, sample_config)
+    # Don't create any dongle dirs
+
+    msg = MagicMock()
+    bridge._on_mqtt_cleanup_removed_dongles(None, None, msg)
+
+    bridge._gateway.clear_dongle_all_topics.assert_not_called()
+
+
+def test_cleanup_removed_dongles_clears_missing_dongle(tmp_config_dir, sample_config):
+    """Handler clears MQTT topics for a dongle that has data but no active worker."""
+    import config as cfg_module
+
+    missing_mac = "BBBBBBBB"
+    cfg_module.ensure_dongle_dir(missing_mac)
+
+    # Active worker has a different MAC — missing_mac is absent
+    bridge = _make_bridge_for_cleanup(tmp_config_dir, sample_config, worker_mac=TEST_DONGLE_MAC)
+
+    msg = MagicMock()
+    bridge._on_mqtt_cleanup_removed_dongles(None, None, msg)
+
+    bridge._gateway.clear_dongle_all_topics.assert_called_once_with(missing_mac, wait=False)
+
+
+def test_cleanup_removed_dongles_deletes_data_directory(tmp_config_dir, sample_config):
+    """Handler deletes the data directory for the removed dongle."""
+    import config as cfg_module
+
+    missing_mac = "BBBBBBBB"
+    dongle_dir = cfg_module.ensure_dongle_dir(missing_mac)
+    assert os.path.isdir(dongle_dir)
+
+    bridge = _make_bridge_for_cleanup(tmp_config_dir, sample_config, worker_mac=TEST_DONGLE_MAC)
+
+    msg = MagicMock()
+    bridge._on_mqtt_cleanup_removed_dongles(None, None, msg)
+
+    assert not os.path.exists(dongle_dir), "Data directory should have been deleted"
+
+
+def test_cleanup_removed_dongles_clears_sensors(tmp_config_dir, sample_config):
+    """Handler clears sensor topics for each sensor in the removed dongle."""
+    import yaml
+    import config as cfg_module
+
+    missing_mac = "BBBBBBBB"
+    sensor_mac = "CCCCCCCC"
+    dongle_dir = cfg_module.ensure_dongle_dir(missing_mac)
+
+    # Write a sensors.yaml with one sensor
+    sensors_data = {sensor_mac: {"sensor_type": "switch", "sensor_name": "Test"}}
+    with open(os.path.join(dongle_dir, "sensors.yaml"), "w") as f:
+        yaml.safe_dump(sensors_data, f)
+
+    bridge = _make_bridge_for_cleanup(tmp_config_dir, sample_config, worker_mac=TEST_DONGLE_MAC)
+
+    msg = MagicMock()
+    bridge._on_mqtt_cleanup_removed_dongles(None, None, msg)
+
+    bridge._gateway.clear_sensor_topics.assert_called_once_with(sensor_mac, "switch", wait=False)

@@ -516,7 +516,7 @@ def test_publish_dongle_discovery_unique_ids(tmp_config_dir):
 
 
 # ---------------------------------------------------------------------------
-# clear_sensor_discovery_topics — module-level helper (used by maintenance CLI)
+# clear_sensor_discovery_topics — module-level helper (used by mqtt_tool CLI)
 # ---------------------------------------------------------------------------
 
 
@@ -1253,3 +1253,194 @@ def test_sensor_discovery_no_device_class_for_climate(tmp_config_dir):
 
     payload = json.loads(gw._client.publish.call_args_list[0].kwargs["payload"])
     assert "device_class" not in payload["components"]
+
+
+# ---------------------------------------------------------------------------
+# Service component: cleanup_removed_dongles button
+# ---------------------------------------------------------------------------
+
+
+def test_service_components_has_cleanup_removed_dongles_button():
+    """Service device must include the cleanup_removed_dongles button."""
+    from mqtt import _build_service_components
+
+    components = _build_service_components("ws2m")
+    assert "cleanup_removed_dongles" in components
+    btn = components["cleanup_removed_dongles"]
+    assert btn["platform"] == "button"
+    assert btn["entity_category"] == "config"
+    assert btn["payload_press"] == "cleanup"
+    assert btn["command_topic"].endswith("/cleanup_removed_dongles")
+
+
+def test_service_discovery_includes_cleanup_removed_dongles(tmp_config_dir):
+    """Published service discovery payload must contain cleanup_removed_dongles."""
+    import json
+
+    gw, _ = _make_gateway()
+    gw.publish_service_discovery(TEST_SERVICE_ID, "INFO")
+
+    payload = json.loads(gw._client.publish.call_args_list[0].kwargs["payload"])
+    assert "cleanup_removed_dongles" in payload["components"]
+
+
+# ---------------------------------------------------------------------------
+# clear_dongle_all_topics
+# ---------------------------------------------------------------------------
+
+
+def test_clear_dongle_all_topics_clears_discovery_and_status(tmp_config_dir):
+    """clear_dongle_all_topics must clear both discovery and status topics."""
+    gw, cfg = _make_gateway()
+    gw.clear_dongle_all_topics(TEST_DONGLE_MAC)
+
+    published_topics = [call.args[0] for call in gw._client.publish.call_args_list]
+    discovery_topic = f"homeassistant/device/ws2m_dongle_{TEST_DONGLE_MAC}/config"
+    status_topic = f"{cfg['self_topic_root']}/dongle_{TEST_DONGLE_MAC}/status"
+    assert discovery_topic in published_topics, "Discovery topic not cleared"
+    assert status_topic in published_topics, "Status topic not cleared"
+
+
+def test_clear_dongle_all_topics_publishes_empty_payloads(tmp_config_dir):
+    """All payloads for dongle topic clearing must be empty (retained message removal)."""
+    gw, _ = _make_gateway()
+    gw.clear_dongle_all_topics(TEST_DONGLE_MAC)
+
+    for call in gw._client.publish.call_args_list:
+        payload = call.kwargs.get("payload", call.args[1] if len(call.args) > 1 else None)
+        assert payload in (None, b"", ""), f"Expected empty payload, got {payload!r}"
+
+
+# ---------------------------------------------------------------------------
+# Module-level clear_sensor_state_topics
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_client():
+    """Return a mocked paho client for module-level function tests."""
+    from unittest.mock import MagicMock
+    client = MagicMock()
+    client.publish.return_value = MagicMock(rc=0, wait_for_publish=MagicMock())
+    return client
+
+
+def _sample_cfg():
+    return {"self_topic_root": "wyzesense2mqtt", "hass_topic_root": "homeassistant"}
+
+
+def test_clear_sensor_state_topics_clears_status_and_data():
+    from mqtt import clear_sensor_state_topics
+    client = _make_mock_client()
+    cfg = _sample_cfg()
+    clear_sensor_state_topics(client, cfg, None, "AABBCCDD", "switch")
+    published = [call.args[0] for call in client.publish.call_args_list]
+    assert "wyzesense2mqtt/AABBCCDD/status" in published
+    assert "wyzesense2mqtt/AABBCCDD" in published
+
+
+def test_clear_sensor_state_topics_clears_config_entity_topics():
+    from mqtt import clear_sensor_state_topics
+    client = _make_mock_client()
+    cfg = _sample_cfg()
+    clear_sensor_state_topics(client, cfg, None, "AABBCCDD", "switchv2")
+    published = [call.args[0] for call in client.publish.call_args_list]
+    for suffix in ["sensor_name", "device_class", "invert_state", "pin_count"]:
+        assert f"wyzesense2mqtt/AABBCCDD/{suffix}" in published, f"Missing {suffix}"
+
+
+def test_clear_sensor_state_topics_clears_chime_number_topics():
+    from mqtt import clear_sensor_state_topics
+    client = _make_mock_client()
+    cfg = _sample_cfg()
+    clear_sensor_state_topics(client, cfg, None, "CHIMEMAC", "chime")
+    published = [call.args[0] for call in client.publish.call_args_list]
+    for suffix in ["ring_id", "volume", "repeat_count"]:
+        assert f"wyzesense2mqtt/CHIMEMAC/{suffix}" in published, f"Missing chime topic {suffix}"
+
+
+def test_clear_sensor_state_topics_no_chime_topics_for_non_chime():
+    from mqtt import clear_sensor_state_topics
+    client = _make_mock_client()
+    cfg = _sample_cfg()
+    clear_sensor_state_topics(client, cfg, None, "AABBCCDD", "switch")
+    published = [call.args[0] for call in client.publish.call_args_list]
+    for suffix in ["ring_id", "volume", "repeat_count"]:
+        assert f"wyzesense2mqtt/AABBCCDD/{suffix}" not in published, f"Unexpected chime topic {suffix}"
+
+
+# ---------------------------------------------------------------------------
+# Module-level clear_dongle_topics
+# ---------------------------------------------------------------------------
+
+
+def test_clear_dongle_topics_clears_discovery_and_status():
+    from mqtt import clear_dongle_topics
+    client = _make_mock_client()
+    cfg = _sample_cfg()
+    clear_dongle_topics(client, cfg, None, TEST_DONGLE_MAC)
+    published = [call.args[0] for call in client.publish.call_args_list]
+    assert f"homeassistant/device/ws2m_dongle_{TEST_DONGLE_MAC}/config" in published
+    assert f"wyzesense2mqtt/dongle_{TEST_DONGLE_MAC}/status" in published
+
+
+def test_clear_dongle_topics_publishes_empty_payloads():
+    from mqtt import clear_dongle_topics
+    client = _make_mock_client()
+    cfg = _sample_cfg()
+    clear_dongle_topics(client, cfg, None, TEST_DONGLE_MAC)
+    for call in client.publish.call_args_list:
+        payload = call.kwargs.get("payload", call.args[1] if len(call.args) > 1 else None)
+        assert payload in (None, b"", ""), f"Expected empty payload, got {payload!r}"
+
+
+def test_clear_dongle_topics_logs_when_logger_provided():
+    import logging
+    from unittest.mock import patch
+    from mqtt import clear_dongle_topics
+    client = _make_mock_client()
+    cfg = _sample_cfg()
+    logger = logging.getLogger("test")
+    with patch.object(logger, "info") as mock_info:
+        clear_dongle_topics(client, cfg, logger, TEST_DONGLE_MAC)
+        assert mock_info.called
+
+
+# ---------------------------------------------------------------------------
+# Gateway clear_sensor_topics delegates to module-level functions
+# ---------------------------------------------------------------------------
+
+
+def test_gateway_clear_sensor_topics_delegates(tmp_config_dir):
+    """Gateway clear_sensor_topics calls the same topics as module-level functions."""
+    from unittest.mock import patch
+    from mqtt import clear_sensor_state_topics, clear_sensor_discovery_topics
+
+    gw, cfg = _make_gateway()
+    sensor_mac = "AABBCCDD"
+    sensor_type = "switchv2"
+
+    state_calls = []
+    discovery_calls = []
+
+    with patch("mqtt.clear_sensor_state_topics", side_effect=lambda *a, **kw: state_calls.append((a, kw))):
+        with patch("mqtt.clear_sensor_discovery_topics", side_effect=lambda *a, **kw: discovery_calls.append((a, kw))):
+            gw.clear_sensor_topics(sensor_mac, sensor_type)
+
+    assert len(state_calls) == 1, "clear_sensor_state_topics should be called once"
+    assert len(discovery_calls) == 1, "clear_sensor_discovery_topics should be called once"
+    assert state_calls[0][0][3] == sensor_mac
+    assert state_calls[0][0][4] == sensor_type
+
+
+def test_gateway_clear_dongle_all_topics_delegates(tmp_config_dir):
+    """Gateway clear_dongle_all_topics delegates to the module-level clear_dongle_topics."""
+    from unittest.mock import patch
+
+    gw, cfg = _make_gateway()
+    dongle_calls = []
+
+    with patch("mqtt.clear_dongle_topics", side_effect=lambda *a, **kw: dongle_calls.append((a, kw))):
+        gw.clear_dongle_all_topics(TEST_DONGLE_MAC)
+
+    assert len(dongle_calls) == 1
+    assert dongle_calls[0][0][3] == TEST_DONGLE_MAC

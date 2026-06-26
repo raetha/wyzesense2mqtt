@@ -505,6 +505,13 @@ def _build_service_components(self_root: str) -> dict:
             "command_topic": f"{self_root}/log_level/set",
             "options": LOG_LEVEL_OPTIONS,
         },
+        "cleanup_removed_dongles": {
+            "platform": "button",
+            "name": "Cleanup removed dongles",
+            "entity_category": "config",
+            "command_topic": f"{self_root}/cleanup_removed_dongles",
+            "payload_press": "cleanup",
+        },
     }
 
 
@@ -671,7 +678,7 @@ def _publish(
 # ---------------------------------------------------------------------------
 # Module-level sensor discovery cleanup helper
 #
-# Used by cli/maintenance.py which operates without a MqttGateway instance.
+# Used by cli/mqtt_tool.py which operates without a MqttGateway instance.
 # ---------------------------------------------------------------------------
 
 
@@ -717,6 +724,71 @@ def clear_sensor_discovery_topics(
 
     # v2 device-based sensor topic
     _publish(client, logger, f"{cfg['hass_topic_root']}/device/wyzesense_{sensor_mac}/config", None, wait=wait)
+
+
+def clear_sensor_state_topics(
+    client: mqtt.Client,
+    cfg: dict,
+    logger: logging.Logger | None,
+    sensor_mac: str,
+    sensor_type: str,
+    wait: bool = True,
+) -> None:
+    """Clear all retained data and config-entity state topics for a sensor.
+
+    Covers:
+      - The sensor's primary data topic and status topic
+      - Config entity state topics common to all sensors (sensor_name,
+        device_class, invert_state, pin_count)
+      - Chime number state topics (ring_id, volume, repeat_count) when
+        sensor_type == "chime"
+
+    Does NOT clear discovery topics — call ``clear_sensor_discovery_topics``
+    for those.  Together they constitute a full sensor removal.
+    """
+    mac_topic = f"{cfg['self_topic_root']}/{sensor_mac}"
+    _publish(client, logger, f"{mac_topic}/status", None, wait=wait, qos=_QOS_STATUS, retain=_RETAIN_STATUS)
+    _publish(client, logger, mac_topic, None, wait=wait)
+    for suffix in ["sensor_name", "device_class", "invert_state", "pin_count"]:
+        _publish(client, logger, f"{mac_topic}/{suffix}", None, wait=wait, qos=_QOS_NUMBER, retain=_RETAIN_NUMBER)
+    if sensor_type == "chime":
+        for suffix in ["ring_id", "volume", "repeat_count"]:
+            _publish(client, logger, f"{mac_topic}/{suffix}", None, wait=wait, qos=_QOS_NUMBER, retain=_RETAIN_NUMBER)
+
+
+def clear_dongle_topics(
+    client: mqtt.Client,
+    cfg: dict,
+    logger: logging.Logger | None,
+    dongle_mac: str,
+    wait: bool = True,
+) -> None:
+    """Clear all retained MQTT topics associated with a dongle device.
+
+    Clears the dongle's HA discovery topic and its status topic.
+    Does NOT clear sensor topics — call ``clear_sensor_state_topics`` and
+    ``clear_sensor_discovery_topics`` for each sensor first.
+    """
+    _publish(
+        client,
+        logger,
+        f"{cfg['hass_topic_root']}/device/ws2m_dongle_{dongle_mac}/config",
+        None,
+        wait=wait,
+        qos=_QOS_DISCOVERY,
+        retain=_RETAIN_DISCOVERY,
+    )
+    _publish(
+        client,
+        logger,
+        f"{cfg['self_topic_root']}/dongle_{dongle_mac}/status",
+        None,
+        wait=wait,
+        qos=_QOS_STATUS,
+        retain=_RETAIN_STATUS,
+    )
+    if logger:
+        logger.info(f"Cleared all dongle MQTT topics for {dongle_mac}")
 
 
 # ---------------------------------------------------------------------------
@@ -1075,21 +1147,20 @@ class MqttGateway:
 
     def clear_sensor_topics(self, sensor_mac: str, sensor_type: str, wait: bool = True) -> None:
         """Clear all retained topics for a sensor (used on removal)."""
-        cfg = self._config
         self._logger.info(f"Clearing MQTT topics for {sensor_mac}")
-        self.publish(f"{cfg['self_topic_root']}/{sensor_mac}/status", None, wait=wait)
-        self.publish(f"{cfg['self_topic_root']}/{sensor_mac}", None, wait=wait)
-        # Clear config entity state topics
-        self._clear_sensor_config_state_topics(sensor_mac, sensor_type, wait=wait)
-
-        self.clear_all_sensor_discovery_topics(sensor_mac, sensor_type, wait=wait)
+        clear_sensor_state_topics(self._client, self._config, self._logger, sensor_mac, sensor_type, wait=wait)
+        clear_sensor_discovery_topics(self._client, self._config, self._logger, sensor_mac, sensor_type, wait=wait)
 
     def _clear_sensor_config_state_topics(self, sensor_mac: str, sensor_type: str, wait: bool = True) -> None:
         """Clear retained config entity state topics for a removed sensor."""
-        cfg = self._config
-        mac_topic = f"{cfg['self_topic_root']}/{sensor_mac}"
+        # Delegate to module-level function; kept for internal callers that
+        # need only the state topics without the data or discovery topics.
+        mac_topic = f"{self._config['self_topic_root']}/{sensor_mac}"
         for suffix in ["sensor_name", "device_class", "invert_state", "pin_count"]:
             self.publish(f"{mac_topic}/{suffix}", None, wait=wait)
+        if sensor_type == "chime":
+            for suffix in ["ring_id", "volume", "repeat_count"]:
+                self.publish(f"{mac_topic}/{suffix}", None, wait=wait)
 
     def clear_service_discovery(self, service_id: str, wait: bool = True) -> None:
         """Clear the retained service device discovery topic."""
@@ -1106,6 +1177,15 @@ class MqttGateway:
         topic = f"{cfg['hass_topic_root']}/device/ws2m_dongle_{dongle_mac}/config"
         self.publish(topic, None, wait=wait)
         self._logger.debug(f"Cleared dongle discovery → {topic}")
+
+    def clear_dongle_all_topics(self, dongle_mac: str, wait: bool = True) -> None:
+        """Clear all retained MQTT topics associated with a dongle device.
+
+        Clears the dongle discovery topic and its status topic.  Does NOT
+        clear sensor topics — callers should iterate sensors and call
+        ``clear_sensor_topics()`` for each before calling this method.
+        """
+        clear_dongle_topics(self._client, self._config, self._logger, dongle_mac, wait=wait)
 
     def clear_all_sensor_discovery_topics(self, sensor_mac: str, sensor_type: str, wait: bool = True) -> None:
         """Clear the sensor's discovery topic from every known schema version.

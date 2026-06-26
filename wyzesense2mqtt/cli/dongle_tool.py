@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-WyzeSense bridge tool – direct USB dongle CLI.
+WyzeSense dongle tool – direct USB dongle CLI.
 
 Provides command-line access to the WyzeSense USB dongle for pairing,
 unpairing, listing sensors, and low-level diagnostics.  This tool
 communicates directly with the dongle hardware and does **not** require
 the bridge service or an MQTT broker to be running.
 
-For MQTT/discovery maintenance, see cli/maintenance.py instead.
+For MQTT/discovery maintenance, see cli/mqtt_tool.py instead.
 
 Usage:
-    python3 -m cli.bridge_tool [--device PATH] [--debug] [--verbose]
+    python3 -m cli.dongle_tool [--device PATH] [--debug] [--verbose]
 
 Options:
     --device PATH   Path to the USB HID device, or 'auto' to detect automatically [default: auto]
@@ -177,7 +177,7 @@ def cmd_monitor(dongle: dp.Dongle, args) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="WyzeSense bridge tool – direct USB dongle management",
+        description="WyzeSense dongle tool – direct USB dongle management",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(

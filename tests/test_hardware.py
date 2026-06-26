@@ -177,7 +177,7 @@ def test_dongle_list_macs_are_valid(dongle):
     for mac in sensors:
         assert SensorRegistry.is_valid_mac(mac), (
             f"Dongle returned invalid MAC {mac!r} — "
-            "consider running 'python3 -m cli.bridge_tool fix' to remove corrupt entries"
+            "consider running 'python3 -m cli.dongle_tool fix' to remove corrupt entries"
         )
 
 

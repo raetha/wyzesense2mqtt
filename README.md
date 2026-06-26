@@ -30,10 +30,11 @@ Please submit pull requests against the devel branch.
   - [Usage](#usage)
     - [Pairing a Sensor](#pairing-a-sensor)
     - [Removing a Sensor](#removing-a-sensor)
+    - [Removing a Dongle](#removing-a-dongle)
     - [Reload Sensors](#reload-sensors)
     - [Command Line Tools](#command-line-tools)
-      - [Bridge Tool](#bridge-tool)
-      - [Maintenance CLI](#maintenance-cli)
+      - [Dongle Tool](#dongle-tool)
+      - [MQTT Tool](#mqtt-tool)
   - [Home Assistant](#home-assistant)
   - [Compatible Hardware](#compatible-hardware)
 
@@ -64,12 +65,9 @@ services:
       WS2M_MQTT_CLIENT_ID: "${WS2M_MQTT_CLIENT_ID:-ws2m}"
       WS2M_MQTT_CLEAN_SESSION: "${WS2M_MQTT_CLEAN_SESSION:-false}"
       WS2M_MQTT_KEEPALIVE: "${WS2M_MQTT_KEEPALIVE:-60}"
-      WS2M_MQTT_QOS: "${WS2M_MQTT_QOS:-0}"
-      WS2M_MQTT_RETAIN: "${WS2M_MQTT_RETAIN:-true}"
       WS2M_SELF_TOPIC_ROOT: "${WS2M_SELF_TOPIC_ROOT:-ws2m}"
       WS2M_HASS_TOPIC_ROOT: "${WS2M_HASS_TOPIC_ROOT:-homeassistant}"
       WS2M_HASS_DISCOVERY: "${WS2M_HASS_DISCOVERY:-true}"
-      WS2M_PUBLISH_SENSOR_NAME: "${WS2M_PUBLISH_SENSOR_NAME:-true}"
       WS2M_USB_DONGLE: "${WS2M_USB_DONGLE:-auto}"
       WS2M_LOG_LEVEL: "${WS2M_LOG_LEVEL:-INFO}"
     devices:
@@ -88,12 +86,9 @@ WS2M_MQTT_PASSWORD=
 WS2M_MQTT_CLIENT_ID=ws2m
 WS2M_MQTT_CLEAN_SESSION=false
 WS2M_MQTT_KEEPALIVE=60
-WS2M_MQTT_QOS=0
-WS2M_MQTT_RETAIN=true
 WS2M_SELF_TOPIC_ROOT=ws2m
 WS2M_HASS_TOPIC_ROOT=homeassistant
 WS2M_HASS_DISCOVERY=true
-WS2M_PUBLISH_SENSOR_NAME=true
 WS2M_USB_DONGLE=auto
 WS2M_LOG_LEVEL=INFO
 DEV_WYZESENSE=/dev/hidraw0
@@ -240,45 +235,74 @@ If you have modified a `sensors.yaml` while the gateway is running, you can trig
 
 1. Publish a blank message (payload `reload`) to the MQTT topic `<self_topic_root>/reload` (default: `ws2m/reload`). With HA discovery enabled, a **Reload config** button appears on the WyzeSense2MQTT service device page.
 
+### Removing a Dongle
+If a dongle is permanently removed (replaced, retired, or lost), ws2m retains its data directory and HA entities until you explicitly clean them up. A simple restart or USB glitch will not trigger cleanup — the data is preserved for recovery.
+
+**From Home Assistant:** A **Cleanup removed dongles** button appears on the WyzeSense2MQTT service device page (under the **Configuration** entity category, not the default dashboard view). Pressing it compares the data directories on disk against the currently-connected dongles. Any dongle no longer connected has its retained MQTT discovery and status topics cleared and its `data/dongles/<mac>/` directory deleted. The operation is idempotent — if all known dongles are connected it does nothing.
+
+> **Note:** Only press this button after a deliberate permanent removal. If a dongle is temporarily disconnected or experiencing a USB fault, wait until it is reconnected before using this button to avoid losing its sensor configuration.
+
+**From the command line** (surgical single-dongle removal):
+
+```bash
+# Dry run — show what would be cleared/deleted without making changes
+python3 -m cli.mqtt_tool remove-dongle AABBCCDD
+
+# Actually clear MQTT topics and delete the data directory
+python3 -m cli.mqtt_tool remove-dongle AABBCCDD --apply
+```
+
+The dry run prints a full summary — dongle MAC, every sensor it owns (with type and name), and the data directory path — before making any changes.
+
 ### Command Line Tools
 
-#### Bridge Tool
-`cli/bridge_tool.py` provides direct USB dongle access for pairing, unpairing, listing sensors, and low-level diagnostics. It does **not** require the bridge service or an MQTT broker to be running. Run it from inside the container (`docker exec -it wyzesense2mqtt sh`) or directly on the host.
+#### Dongle Tool
+`cli/dongle_tool.py` provides direct USB dongle access for pairing, unpairing, listing sensors, and low-level diagnostics. It does **not** require the bridge service or an MQTT broker to be running. Run it from inside the container (`docker exec -it wyzesense2mqtt sh`) or directly on the host.
 
 ```bash
 # List paired sensors
-python3 -m cli.bridge_tool --device /dev/hidraw0 list
+python3 -m cli.dongle_tool --device /dev/hidraw0 list
 
 # Pair a new sensor (waits up to 60 s)
-python3 -m cli.bridge_tool --device /dev/hidraw0 pair
+python3 -m cli.dongle_tool --device /dev/hidraw0 pair
 
 # Unpair a sensor
-python3 -m cli.bridge_tool --device /dev/hidraw0 unpair AABBCCDD
+python3 -m cli.dongle_tool --device /dev/hidraw0 unpair AABBCCDD
 
 # Remove sensors with corrupt/null MACs (common after battery failure)
-python3 -m cli.bridge_tool --device /dev/hidraw0 fix
+python3 -m cli.dongle_tool --device /dev/hidraw0 fix
 
 # Monitor live sensor events
-python3 -m cli.bridge_tool --device /dev/hidraw0 monitor
+python3 -m cli.dongle_tool --device /dev/hidraw0 monitor
 
 # Show help / all available commands
-python3 -m cli.bridge_tool --help
+python3 -m cli.dongle_tool --help
 ```
 
-#### Maintenance CLI
-`cli/maintenance.py` is a standalone tool for operating on the MQTT broker. It does not touch the USB dongle and does not require the bridge service to be running. Run it via `docker exec` into a running container, or on the host if the broker is reachable.
+#### MQTT Tool
+`cli/mqtt_tool.py` is a standalone tool for operating on the MQTT broker. It does not touch the USB dongle and does not require the bridge service to be running. Run it via `docker exec` into a running container, or on the host if the broker is reachable.
 
-`cleanup-discovery` scans for Home Assistant discovery topics belonging to sensors that are no longer in any dongle's `sensors.yaml` (e.g. removed by editing config files directly rather than via the [Removing a Sensor](#removing-a-sensor) MQTT command) and reports them. By default this is a dry run; pass `--apply` to actually clear the orphaned retained topics.
+**`cleanup-discovery`** scans for Home Assistant discovery topics belonging to sensors that are no longer in any dongle's `sensors.yaml` (e.g. removed by editing config files directly rather than via the [Removing a Sensor](#removing-a-sensor) MQTT command) and reports them. By default this is a dry run; pass `--apply` to actually clear the orphaned retained topics.
 
 ```bash
 # Dry run — show what would be cleared
-python3 -m cli.maintenance cleanup-discovery
+python3 -m cli.mqtt_tool cleanup-discovery
 
 # Actually clear orphaned topics
-python3 -m cli.maintenance cleanup-discovery --apply
+python3 -m cli.mqtt_tool cleanup-discovery --apply
 
 # Increase listen time if broker is slow to replay retained messages (default: 5 s)
-python3 -m cli.maintenance cleanup-discovery --listen-seconds 15
+python3 -m cli.mqtt_tool cleanup-discovery --listen-seconds 15
+```
+
+**`remove-dongle`** permanently removes a single dongle and all of its sensors from MQTT and local storage. Prints a full summary (dongle MAC, all sensors with type and name, data directory path) and exits without making changes unless `--apply` is passed.
+
+```bash
+# Dry run — show what would be cleared/deleted
+python3 -m cli.mqtt_tool remove-dongle AABBCCDD
+
+# Actually clear MQTT topics and delete the data directory
+python3 -m cli.mqtt_tool remove-dongle AABBCCDD --apply
 ```
 
 See [docs/HA_MQTT_COMPLIANCE.md](docs/HA_MQTT_COMPLIANCE.md) for details on the MQTT discovery format used and how schema migrations/cleanup work.
