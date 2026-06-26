@@ -66,7 +66,7 @@ files are migrated automatically on first start.
 - **Wyze Video Doorbell V1 Chime (WCHIME1)** — play button and number entities
   for ring tone (0–255), volume (1–9), and repeat count (1–9). Values persist to
   `sensors.yaml`. Ring tone IDs are undocumented; see
-  [docs/contributing_protocol.md](docs/contributing_protocol.md).
+  [docs/protocol.md](docs/protocol.md).
 - **HA configuration entities** — sensor settings adjustable live from the HA
   device page: sensor name (text), device class (select), invert state (switch),
   and log level (select, service device). Keypad adds arm PIN capture and clear
@@ -79,14 +79,30 @@ files are migrated automatically on first start.
 - **Docker `HEALTHCHECK`** — the bridge writes and periodically touches
   `/tmp/ws2m_healthy` while running; removes it on failure. Container flips
   unhealthy within ~90 s of a dongle failure or process hang.
-- **Test suite** — 356 unit and integration tests covering all modules.
+- **Test suite** — 367 unit and integration tests covering all modules.
   Hardware smoke tests behind `pytest -m dongle`. Run with
   `bash scripts/run_tests.sh`.
 - **`cli/mqtt_tool.py`** — MQTT maintenance CLI: `cleanup-discovery` finds
   orphaned HA discovery topics; `remove-dongle <mac>` decommissions a dongle
   and clears all its retained topics and data.
-- **`docs/contributing_protocol.md`** and **`tools/fuzz_keypad.py`** — HID
-  capture guide and systematic protocol fuzzer for contributors.
+- **`docs/protocol.md`** — complete protocol specification including updated
+  battery voltage encoding, die temperature field, corrected climate packet
+  offsets, and all sensor type event layouts. Separate
+  `docs/contributing_hid_captures.md` for the capture/contribution workflow.
+- **Battery voltage sensor** — new `battery_voltage` entity (V) published
+  alongside the existing battery percentage for all AON_BATMON-reporting
+  sensors. Voltage is exact; percentage is a per-chemistry linear estimate.
+- **Chip temperature sensor** — on-chip die temperature (°C) from
+  `AON_BATMON:TEMP`, disabled by default, added to all alarm and heartbeat
+  events as a diagnostic entity.
+- **Probe availability gating** — leak sensor `probe_state` entity is only
+  included in HA discovery when `probe_available=True` from the most recent
+  event; re-published automatically if probe connectivity changes.
+- **`dongle_tool fix` upgraded** — now fetches the actual paired sensor list
+  from dongle NVRAM, identifies invalid MACs (all-zero, all-0xFF, non-printable
+  ASCII), and surgically removes only those entries. Reports how many valid
+  sensors were left untouched.
+- **`tools/fuzz_keypad.py`** — systematic protocol fuzzer for contributors.
 
 ### Changed
 
@@ -112,6 +128,14 @@ files are migrated automatically on first start.
 
 ### Fixed
 
+- **Climate signal strength offset corrected** — signal strength was read from
+  byte offset 7 of the climate event data; the correct offset is 9. The field at
+  offset 7 is an unknown reserved byte. All previous climate RSSI values were
+  wrong.
+- **Battery interpretation corrected** — the battery byte is `AON_BATMON:BAT >> 3`,
+  not a percentage. Correct interpretation: `voltage_V = raw / 32.0`. The previous
+  percentage approximation coincidentally produced plausible values for 3V sensors
+  near full charge but was meaningless at low charge levels and for 1.5V sensors.
 - **USB dongle disconnect** — an `OSError` from the HID read loop was previously
   swallowed silently, leaving the worker spinning indefinitely with no output.
   The error now propagates: the bridge logs it, publishes the dongle and all
