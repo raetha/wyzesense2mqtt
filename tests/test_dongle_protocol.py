@@ -6,17 +6,14 @@ synthetically using the same struct layouts as the production code.
 """
 
 import struct
-import time
 
 import pytest
-
 from conftest import (
     make_alarm_payload,
     make_climate_payload,
     make_leak_v2_payload,
     make_packet_bytes,
 )
-
 
 # ---------------------------------------------------------------------------
 # Utility
@@ -48,8 +45,6 @@ def test_bytes_to_hex_empty():
 
 def _round_trip(pkt):
     """Serialise a Packet to bytes via send() then parse back with Packet.parse()."""
-    import io
-    import os
     import tempfile
 
     from dongle_protocol import Packet
@@ -64,17 +59,20 @@ def _round_trip(pkt):
     return Packet.parse(raw), raw
 
 
-@pytest.mark.parametrize("factory,kwargs", [
-    ("get_version", {}),
-    ("inquiry", {}),
-    ("get_mac", {}),
-    ("get_key", {}),
-    ("enable_scan", {}),
-    ("disable_scan", {}),
-    ("get_sensor_count", {}),
-    ("finish_auth", {}),
-    ("del_all_sensors", {}),
-])
+@pytest.mark.parametrize(
+    "factory,kwargs",
+    [
+        ("get_version", {}),
+        ("inquiry", {}),
+        ("get_mac", {}),
+        ("get_key", {}),
+        ("enable_scan", {}),
+        ("disable_scan", {}),
+        ("get_sensor_count", {}),
+        ("finish_auth", {}),
+        ("del_all_sensors", {}),
+    ],
+)
 def test_packet_round_trip_no_payload(factory, kwargs):
     from dongle_protocol import Packet
 
@@ -154,7 +152,7 @@ def test_parse_too_short_raises_eoferror():
 def test_parse_bad_magic_returns_none():
     from dongle_protocol import Packet
 
-    result = Packet.parse(b"\xDE\xAD\x53\x02\x00\x00\x00")
+    result = Packet.parse(b"\xde\xad\x53\x02\x00\x00\x00")
     assert result is None
 
 
@@ -196,10 +194,10 @@ def test_sensor_event_contact_open():
 
     payload = make_alarm_payload(
         mac="AAAAAAAA",
-        event=0xA2,       # EVENT_ALARM
-        sensor_type=0x01, # SENSOR_TYPE_SWITCH
+        event=0xA2,  # EVENT_ALARM
+        sensor_type=0x01,  # SENSOR_TYPE_SWITCH
         battery=80,
-        state=1,          # open
+        state=1,  # open
         signal_strength=50,
         timestamp_ms=1_700_000_000_000,
     )
@@ -268,7 +266,7 @@ def test_sensor_event_v2_contact_open():
         mac="CCCCCCCC",
         event=0xA2,
         sensor_type=0x0E,  # SENSOR_TYPE_SWITCH_V2
-        battery=50,        # raw; doubled by SensorEvent.__init__ for V2 contact
+        battery=50,  # raw; doubled by SensorEvent.__init__ for V2 contact
         state=1,
         signal_strength=35,
     )
@@ -350,7 +348,7 @@ def test_sensor_event_leak_dry():
         event=0xEA,
         sensor_type=0x03,
         battery=75,
-        state=0,        # dry
+        state=0,  # dry
         probe_state=0,
         probe_available=1,
         signal_strength=45,
@@ -482,8 +480,7 @@ def test_packet_del_sensor_bytes_variant():
 
 def test_parse_async_ack_packet():
     """Verify that an ASYNC_ACK packet round-trips through parse correctly."""
-    import struct
-    from dongle_protocol import Packet, _TYPE_ASYNC, _checksum
+    from dongle_protocol import _TYPE_ASYNC, Packet, _checksum
 
     # Build a valid ASYNC_ACK frame manually
     # Header: AA 55 | cmd_type=53 | b2=FF | cmd_id=FF | checksum
@@ -529,7 +526,6 @@ def test_sensor_event_non_ascii_mac_in_alarm():
     raising UnicodeDecodeError.  The dongle should never produce such MACs in
     normal operation, but the bridge should not crash if it encounters one.
     """
-    import struct
     from dongle_protocol import SensorEvent
 
     mac_bytes = b"\x80\x81\x82\x83\x84\x85\x86\x87"
@@ -675,8 +671,7 @@ def test_keypad_battery_normalised():
 
 def test_keypad_short_payload_returns_unknown():
     """A payload too short to parse produces an 'unknown:*' event rather than crashing."""
-    import struct
-    from dongle_protocol import SensorEvent, SENSOR_TYPE_KEYPAD
+    from dongle_protocol import SENSOR_TYPE_KEYPAD, SensorEvent
 
     # Only the 10-byte header, no data bytes at all
     header = struct.pack(">B8sB", 0x00, b"KPADKPAD", SENSOR_TYPE_KEYPAD)
@@ -719,7 +714,6 @@ def test_send_keypad_status_packet_builds():
     from dongle_protocol import Packet
 
     pkt = Packet.send_keypad_status("KPADKPAD", 0x01)
-    raw = pkt._to_bytes() if hasattr(pkt, "_to_bytes") else None
     # Verify the cmd encodes CMD_SEND_KEYPAD_EVENT (0x53/0x53)
     assert pkt.cmd == Packet.CMD_SEND_KEYPAD_EVENT
     # State byte 0x01 (disarmed) should be in the payload
@@ -845,8 +839,9 @@ def test_leak_components_include_probe_state_when_probe_available():
     """probe_state entity is included when probe_available=True (default)."""
     import mqtt as mqtt_module
 
-    cfg = {"self_topic_root": "wyzesense2mqtt", "hass_topic_root": "homeassistant"}
-    components = mqtt_module._build_leak_sensor_components("DDDDDDDD", {}, "wyzesense2mqtt/DDDDDDDD", probe_available=True)
+    components = mqtt_module._build_leak_sensor_components(
+        "DDDDDDDD", {}, "wyzesense2mqtt/DDDDDDDD", probe_available=True
+    )
     assert "probe_state" in components
 
 
@@ -854,7 +849,9 @@ def test_leak_components_exclude_probe_state_when_no_probe():
     """probe_state entity is omitted when probe_available=False."""
     import mqtt as mqtt_module
 
-    components = mqtt_module._build_leak_sensor_components("DDDDDDDD", {}, "wyzesense2mqtt/DDDDDDDD", probe_available=False)
+    components = mqtt_module._build_leak_sensor_components(
+        "DDDDDDDD", {}, "wyzesense2mqtt/DDDDDDDD", probe_available=False
+    )
     assert "probe_state" not in components
     assert "state" in components
     assert "temperature" in components

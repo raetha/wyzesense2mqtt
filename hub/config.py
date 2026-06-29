@@ -31,7 +31,7 @@ CONFIG_DIR = os.environ.get("WS2M_DATA_DIR", "data")
 # File names (relative to CONFIG_DIR unless noted)
 MAIN_CONFIG_FILE = "config.yaml"
 MIGRATIONS_FILE = "migrations.yaml"
-SERVICE_FILE = "service.yaml"
+HUB_FILE = "hub.yaml"
 
 # Per-dongle data lives under <CONFIG_DIR>/dongles/<dongle_mac>/
 DONGLES_DIR = "dongles"
@@ -83,6 +83,18 @@ DEFAULT_CONFIG: dict = {
     #                   (multi-dongle supported when "auto" is used)
     #   "/dev/hidrawN" — use exactly this one device (single-dongle)
     "usb_dongle": "auto",
+    # Remote bridge — WebSocket listener for remote connections.
+    # Adoption is token-less: enable pairing mode from HA or via the ws2m/hub/<uuid>/remote_pair
+    # MQTT topic, then start the remote. The remote auto-adopts and saves the token.
+    #   hub_ws_port:       TCP port for the WebSocket listener (default 8765).
+    #   hub_remote_pairing_seconds: how long pairing mode stays active after being enabled.
+    #   hub_ws_mdns:       advertise the hub via mDNS/Zeroconf (default True).
+    #                      Set to False if mDNS is not available or causes issues.
+    #   hub_ws_enabled:    enable the WebSocket listener for remote connections (default False).
+    "hub_ws_port": 8765,
+    "hub_remote_pairing_seconds": 60,
+    "hub_ws_mdns": True,
+    "hub_ws_enabled": False,
     # Logging
     "log_level": "INFO",
 }
@@ -180,9 +192,7 @@ def load_config(logger: logging.Logger | None = None) -> tuple[dict | None, dict
     Resolution order (later entries win):
       1. DEFAULT_CONFIG hardcoded defaults
       2. config/config.yaml (if present)
-      3. Unprefixed environment variables matching a config key (e.g. MQTT_HOST)
-         — accepted for backwards compatibility, deprecated in 4.0.
-      4. WS2M_-prefixed environment variables (e.g. WS2M_MQTT_HOST) — preferred.
+      3. WS2M_-prefixed environment variables (e.g. WS2M_MQTT_HOST).
 
     WS2M_DATA_DIR is handled separately at module level and is not a config key.
 
@@ -206,31 +216,29 @@ def load_config(logger: logging.Logger | None = None) -> tuple[dict | None, dict
             cfg.update(config_from_file)
 
     def _coerce(val: str):
-        if val.isnumeric():
-            return int(val)
-        if val.lower() == "true":
+        lower = val.lower()
+        if lower == "true":
             return True
-        if val.lower() == "false":
+        if lower == "false":
             return False
-        if val.lower() == "none":
+        if lower == "none":
             return None
+        try:
+            return int(val)
+        except ValueError:
+            pass
+        try:
+            return float(val)
+        except ValueError:
+            pass
         return val
 
-    # Collect unprefixed vars first (backwards compat), then WS2M_-prefixed
-    # (preferred). Prefixed wins when both are present for the same key.
-    unprefixed: dict = {}
-    prefixed: dict = {}
     for env_key, env_val in os.environ.items():
         lower = env_key.lower()
         if lower.startswith("ws2m_") and lower != "ws2m_data_dir":
             key = lower[len("ws2m_") :]
             if key in cfg:
-                prefixed[key] = _coerce(env_val)
-        elif lower in cfg:
-            unprefixed[lower] = _coerce(env_val)
-
-    cfg.update(unprefixed)
-    cfg.update(prefixed)
+                cfg[key] = _coerce(env_val)
 
     # Validate required fields
     if not cfg.get("mqtt_host"):
@@ -292,28 +300,28 @@ def init_logging(log_level: str | None = None) -> logging.Logger:
 # ---------------------------------------------------------------------------
 # Service identity
 #
-# A stable UUID is generated on first run and persisted to service.yaml.
+# A stable UUID is generated on first run and persisted to hub.yaml.
 # This ensures each ws2m instance has a unique identity on the MQTT broker,
 # which is important when multiple instances share the same broker.
 # ---------------------------------------------------------------------------
 
 
-def load_service_id(logger: logging.Logger | None = None) -> str:
-    """Return the stable service UUID, generating and persisting it if needed."""
-    path = config_path(SERVICE_FILE)
+def load_hub_id(logger: logging.Logger | None = None) -> str:
+    """Return the stable hub UUID, generating and persisting it if needed."""
+    path = config_path(HUB_FILE)
     if os.path.isfile(path):
         data = read_yaml(path, logger) or {}
-        service_id = data.get("service_id")
-        if service_id:
-            return str(service_id)
+        hub_id = data.get("hub_id")
+        if hub_id:
+            return str(hub_id)
 
     # Generate a new UUID and persist it
-    service_id = str(uuid.uuid4())
+    hub_id = str(uuid.uuid4())
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    write_yaml(path, {"service_id": service_id}, logger)
+    write_yaml(path, {"hub_id": hub_id}, logger)
     if logger:
-        logger.info(f"Generated new service UUID: {service_id}")
-    return service_id
+        logger.info(f"Generated new hub UUID: {hub_id}")
+    return hub_id
 
 
 # ---------------------------------------------------------------------------

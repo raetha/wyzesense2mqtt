@@ -24,7 +24,7 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "wyzesense2mqtt"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "hub"))
 
 FIXTURE_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "hid_capture.bin")
 
@@ -101,7 +101,7 @@ def _parse_frames(frames: list[bytes]):
         if pkt is None:
             buf = buf[2:]
             continue
-        buf = buf[pkt.length:]
+        buf = buf[pkt.length :]
 
         if pkt.cmd == Packet.NOTIFY_SENSOR_ALARM and len(pkt.payload) >= 19:
             events.append(SensorEvent.from_packet(pkt.payload))
@@ -147,7 +147,7 @@ def test_fixture_frames_parse_without_error(fixture_frames):
 
     for i, frame in enumerate(fixture_frames):
         try:
-            pkt = Packet.parse(frame)
+            Packet.parse(frame)
         except EOFError:
             pass  # short/incomplete frame — acceptable
         except Exception as exc:
@@ -156,9 +156,7 @@ def test_fixture_frames_parse_without_error(fixture_frames):
 
 def test_fixture_has_parseable_sensor_events(parsed_events):
     """The fixture should yield at least one sensor event."""
-    assert len(parsed_events) >= 1, (
-        "No sensor events found in fixture — check fixture content or MAC obfuscation"
-    )
+    assert len(parsed_events) >= 1, "No sensor events found in fixture — check fixture content or MAC obfuscation"
 
 
 def test_fixture_all_events_have_valid_mac(parsed_events):
@@ -178,9 +176,7 @@ def test_fixture_all_events_have_known_sensor_type(parsed_events):
     for i, ev in enumerate(parsed_events):
         sensor_type = getattr(ev, "sensor_type", None)
         if sensor_type is not None:
-            assert sensor_type in SENSOR_TYPES, (
-                f"Event[{i}] has unrecognised sensor_type {sensor_type!r}"
-            )
+            assert sensor_type in SENSOR_TYPES, f"Event[{i}] has unrecognised sensor_type {sensor_type!r}"
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,30 @@
+# ws2m remote — docker-compose example
+# Run this on the machine that physically holds the WyzeSense USB dongle.
+# Copy this file to docker-compose.yml and edit to suit your environment.
+# Then copy .env.example to .env and fill in the required values.
+
+services:
+  ws2m-remote:
+    container_name: ws2m-remote
+    hostname: ws2m-remote
+    image: ghcr.io/raetha/ws2m-remote:${IMAGE_TAG:-latest}
+    network_mode: bridge
+    restart: unless-stopped  # Required: the hub Restart button uses os._exit(0); Docker will restart it
+    tty: true
+    stop_signal: SIGINT
+    environment:
+      # Required
+      WS2M_HUB_URL: "${WS2M_HUB_URL}"
+      # Optional
+      WS2M_DATA_DIR: "${WS2M_DATA_DIR:-/app/data}"   # where remote_id / hub_token are stored
+      WS2M_REMOTE_ID: "${WS2M_REMOTE_ID:-}"           # override stable remote UUID
+      WS2M_DEVICE: "${WS2M_DEVICE:-auto}"             # HID device path or "auto"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      TZ: "${TZ:-UTC}"
+    volumes:
+      - "${VOL_DATA:-./data}:/app/data"
+    devices:
+      # Pass through the WyzeSense USB dongle.
+      # If WS2M_DEVICE=auto, all hidraw devices matching VID 1a86 / PID e024
+      # are detected automatically — grant access to all or just the one you need.
+      - "${DEV_WYZESENSE:-/dev/hidraw0}:/dev/hidraw0"

@@ -64,7 +64,7 @@ if [[ ! -f "$VENV/bin/activate" ]]; then
         || { echo "ERROR: Could not create venv — is python3 installed?"; exit 1; }
     echo "[ setup ] Installing dependencies..."
     "$VENV/bin/pip" install --upgrade pip -q
-    "$VENV/bin/pip" install -r wyzesense2mqtt/requirements.txt -q
+    "$VENV/bin/pip" install -r hub/requirements.txt -r remote/requirements.txt -q
     "$VENV/bin/pip" install pytest pytest-cov ruff -q
     echo "[ setup ] Done."
     echo ""
@@ -87,12 +87,12 @@ echo ""
 FAILED=0
 
 # ── Step 1: ruff check ────────────────────────────────────────────────────────
-echo "[ 1/$STEPS ] ruff check wyzesense2mqtt/..."
-ruff check wyzesense2mqtt/ && echo "        PASS" || { echo "        FAIL"; FAILED=1; }
+echo "[ 1/$STEPS ] ruff check hub/ remote/ tests/..."
+ruff check hub/ remote/ tests/ && echo "        PASS" || { echo "        FAIL"; FAILED=1; }
 
 # ── Step 2: ruff format check ─────────────────────────────────────────────────
-echo "[ 2/$STEPS ] ruff format --check wyzesense2mqtt/..."
-ruff format --check wyzesense2mqtt/ && echo "        PASS" || { echo "        FAIL"; FAILED=1; }
+echo "[ 2/$STEPS ] ruff format --check hub/ remote/ tests/..."
+ruff format --check hub/ remote/ tests/ && echo "        PASS" || { echo "        FAIL"; FAILED=1; }
 
 # ── Step 3: pytest unit / integration tests ───────────────────────────────────
 echo "[ 3/$STEPS ] pytest (unit + integration tests)..."
@@ -100,7 +100,7 @@ if [[ $COVERAGE -eq 1 ]]; then
     # shellcheck disable=SC2086
     "$PYTHON" -m pytest \
         --rootdir="$REPO_ROOT" \
-        --cov=wyzesense2mqtt \
+        --cov=hub \
         --cov-report=term-missing \
         $PYTEST_EXTRA_ARGS \
         && echo "        PASS" || { echo "        FAIL"; FAILED=1; }

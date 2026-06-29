@@ -11,9 +11,7 @@ import time
 
 import pytest
 import yaml
-
 from conftest import TEST_DONGLE_MAC
-
 
 # ---------------------------------------------------------------------------
 # SENSOR_TYPES registry integrity
@@ -57,15 +55,18 @@ def test_unknown_in_sensor_types_not_binary():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("mac,expected", [
-    ("AAAAAAAA", True),
-    ("12345678", True),
-    ("ABCD1234", True),
-    ("00000000", False),
-    ("ABC", False),
-    ("AAAAAAAAA", False),
-    ("\x00\x00\x00\x00\x00\x00\x00\x00", False),
-])
+@pytest.mark.parametrize(
+    "mac,expected",
+    [
+        ("AAAAAAAA", True),
+        ("12345678", True),
+        ("ABCD1234", True),
+        ("00000000", False),
+        ("ABC", False),
+        ("AAAAAAAAA", False),
+        ("\x00\x00\x00\x00\x00\x00\x00\x00", False),
+    ],
+)
 def test_is_valid_mac(mac, expected):
     from sensors import SensorRegistry
 
@@ -77,15 +78,18 @@ def test_is_valid_mac(mac, expected):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("sensor_type,expected_hours", [
-    ("motion", 8),
-    ("motionv2", 4),
-    ("switch", 8),
-    ("switchv2", 4),
-    ("leak", 4),
-    ("climate", 4),
-    ("unknown", 8),
-])
+@pytest.mark.parametrize(
+    "sensor_type,expected_hours",
+    [
+        ("motion", 8),
+        ("motionv2", 4),
+        ("switch", 8),
+        ("switchv2", 4),
+        ("leak", 4),
+        ("climate", 4),
+        ("unknown", 8),
+    ],
+)
 def test_timeout_for_defaults(sensor_type, expected_hours):
     from sensors import SensorRegistry
 
@@ -322,8 +326,7 @@ def test_stale_state_is_discarded(tmp_dongle_dir):
     path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, "state.yaml")
     with open(path, "w") as f:
         yaml.safe_dump(
-            {"AAAAAAAA": {"last_seen": 0.0, "online": True},
-             "modified": time.time() - STALE_STATE_SECONDS - 1},
+            {"AAAAAAAA": {"last_seen": 0.0, "online": True}, "modified": time.time() - STALE_STATE_SECONDS - 1},
             f,
         )
 
@@ -339,8 +342,7 @@ def test_fresh_state_is_loaded(tmp_dongle_dir):
     path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, "state.yaml")
     with open(path, "w") as f:
         yaml.safe_dump(
-            {"AAAAAAAA": {"last_seen": time.time(), "online": True},
-             "modified": time.time()},
+            {"AAAAAAAA": {"last_seen": time.time(), "online": True}, "modified": time.time()},
             f,
         )
 
@@ -423,21 +425,21 @@ def test_ensure_all_have_state(tmp_dongle_dir):
 
 
 def test_get_type_meta_known_type():
-    from sensors import SensorRegistry, SENSOR_TYPES
+    from sensors import SENSOR_TYPES, SensorRegistry
 
     meta = SensorRegistry.get_type_meta("motion")
     assert meta == SENSOR_TYPES["motion"]
 
 
 def test_get_type_meta_unknown_falls_back():
-    from sensors import SensorRegistry, SENSOR_TYPES
+    from sensors import SENSOR_TYPES, SensorRegistry
 
     meta = SensorRegistry.get_type_meta("totally_unknown")
     assert meta == SENSOR_TYPES["unknown"]
 
 
 def test_get_type_meta_all_known_types():
-    from sensors import SensorRegistry, SENSOR_TYPES
+    from sensors import SENSOR_TYPES, SensorRegistry
 
     for sensor_type in SENSOR_TYPES:
         meta = SensorRegistry.get_type_meta(sensor_type)
@@ -445,7 +447,7 @@ def test_get_type_meta_all_known_types():
 
 
 def test_keypad_in_sensor_types():
-    from sensors import SENSOR_TYPES, BINARY_SENSOR_TYPES
+    from sensors import BINARY_SENSOR_TYPES, SENSOR_TYPES
 
     assert "keypad" in SENSOR_TYPES
     meta = SENSOR_TYPES["keypad"]
@@ -455,7 +457,7 @@ def test_keypad_in_sensor_types():
 
 
 def test_chime_in_sensor_types():
-    from sensors import SENSOR_TYPES, BINARY_SENSOR_TYPES
+    from sensors import BINARY_SENSOR_TYPES, SENSOR_TYPES
 
     assert "chime" in SENSOR_TYPES
     meta = SENSOR_TYPES["chime"]
@@ -479,9 +481,9 @@ def test_add_sensor_sets_invert_state_false_by_default(tmp_dongle_dir):
 
 def test_load_sensors_backfills_invert_state(tmp_dongle_dir):
     """Sensors loaded from a file without invert_state get it back-filled to False."""
+    import config as cfg_module
     import yaml
     from sensors import SensorRegistry
-    import config as cfg_module
 
     path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
     with open(path, "w") as f:
@@ -495,9 +497,9 @@ def test_load_sensors_backfills_invert_state(tmp_dongle_dir):
 
 def test_load_sensors_preserves_invert_state_true(tmp_dongle_dir):
     """A pre-existing invert_state: true in the file is preserved on load."""
+    import config as cfg_module
     import yaml
     from sensors import SensorRegistry
-    import config as cfg_module
 
     path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
     with open(path, "w") as f:
@@ -510,9 +512,9 @@ def test_load_sensors_preserves_invert_state_true(tmp_dongle_dir):
 
 def test_load_sensors_drops_legacy_timeout_key(tmp_dongle_dir):
     """A 'timeout' key left in a sensors.yaml from a previous version is silently removed."""
+    import config as cfg_module
     import yaml
     from sensors import SensorRegistry
-    import config as cfg_module
 
     path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
     with open(path, "w") as f:
@@ -670,9 +672,9 @@ def test_pin_count_after_adds(tmp_dongle_dir):
 
 def test_pin_count_handles_legacy_string_pin(tmp_dongle_dir):
     """A single PIN stored as a bare string (legacy format) counts as 1."""
+    import config as cfg_module
     import yaml
     from sensors import SensorRegistry
-    import config as cfg_module
 
     path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
     with open(path, "w") as f:
@@ -692,9 +694,9 @@ def test_pin_count_unknown_mac_returns_zero(tmp_dongle_dir):
 
 def test_add_pin_handles_legacy_string_pin(tmp_dongle_dir):
     """add_pin promotes a bare string pin to a list before appending."""
+    import config as cfg_module
     import yaml
     from sensors import SensorRegistry
-    import config as cfg_module
 
     path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
     with open(path, "w") as f:

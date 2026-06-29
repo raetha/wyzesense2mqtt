@@ -4,6 +4,9 @@
 paho-mqtt >= 2, < 3
 PyYAML
 retrying
+websockets >= 12
 
 # Development / test dependencies
 pytest
+
+zeroconf>=0.131

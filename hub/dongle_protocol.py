@@ -10,10 +10,23 @@ Public API
 open_dongle(device, event_handler, logger) -> Dongle
     Open the dongle at *device* path and return a connected Dongle instance.
 
+open_remote_dongle(ws_connection, remote_id, dongle_mac, replay_frames, event_handler, logger) -> Dongle
+    Open a dongle via a remote WebSocket connection.
+
+Transport (ABC)
+    Abstract transport layer; concrete implementations below.
+
+LocalTransport
+    Wraps a local USB HID file descriptor.
+
+RemoteTransport
+    Wraps an accepted WebSocket connection from a remote.
+
 Dongle
     .mac         – dongle MAC address string
     .version     – firmware version string
     .enr         – ENR bytes
+    .remote_id   – remote identifier (None for local dongles)
     .list()      – list paired sensor MACs
     .scan()      – pair a new sensor (blocks up to 60 s)
     .delete(mac) – remove a paired sensor
@@ -30,12 +43,137 @@ import os
 import struct
 import threading
 import time
+from abc import ABC, abstractmethod
+from collections import deque
 
 # ---------------------------------------------------------------------------
 # Default logger; overridden when open_dongle() is called with a logger argument.
 # ---------------------------------------------------------------------------
 
 _logger = logging.getLogger("ws2m.dongle")
+
+
+# ---------------------------------------------------------------------------
+# Transport layer abstraction
+# ---------------------------------------------------------------------------
+
+
+class Transport(ABC):
+    """Abstract I/O transport between the hub and a dongle (local or remote)."""
+
+    @abstractmethod
+    def read(self) -> bytes:
+        """Return the next raw HID report bytes (64-byte report including the length prefix).
+
+        Blocks until data is available.  Returns an empty bytes object on EOF/disconnect.
+        """
+
+    @abstractmethod
+    def write(self, data: bytes) -> None:
+        """Write raw protocol bytes to the dongle (no HID framing required for writes)."""
+
+    @abstractmethod
+    def close(self) -> None:
+        """Close the transport and release resources."""
+
+
+class LocalTransport(Transport):
+    """Transport backed by a local USB HID file descriptor."""
+
+    def __init__(self, device: str):
+        self._fd = os.open(device, os.O_RDWR | os.O_NONBLOCK)
+
+    def read(self) -> bytes:
+        return os.read(self._fd, 0x40)
+
+    def write(self, data: bytes) -> None:
+        written = os.write(self._fd, data)
+        assert written == len(data)
+
+    def close(self) -> None:
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+
+
+class RemoteTransport(Transport):
+    """Transport backed by a WebSocket connection from a remote.
+
+    The remote sends raw HID reports as binary WebSocket messages (dongle→hub direction)
+    and receives raw protocol bytes as binary WebSocket messages (hub→dongle direction).
+
+    Replay frames collected during the auth handshake are delivered first via an
+    in-memory deque before switching to live WebSocket reads.
+
+    Health messages (JSON text frames with type "remote_unhealthy" / "remote_healthy")
+    are intercepted and routed to an optional on_health_change callback; they return
+    b"" so the read loop does not treat them as HID data.
+    """
+
+    def __init__(
+        self,
+        ws_connection,
+        remote_id: str,
+        dongle_mac: str,
+        replay_frames: list[bytes],
+        on_health_change=None,
+    ):
+        self._ws = ws_connection
+        self._remote_id = remote_id
+        self._dongle_mac = dongle_mac
+        self._replay: deque[bytes] = deque(replay_frames)
+        self._on_health_change = on_health_change  # Callable[[str, bool], None] | None
+
+    @property
+    def remote_id(self) -> str:
+        return self._remote_id
+
+    @property
+    def dongle_mac(self) -> str:
+        return self._dongle_mac
+
+    def read(self) -> bytes:
+        if self._replay:
+            return self._replay.popleft()
+        msg = self._ws.recv()
+        if isinstance(msg, str):
+            # Intercept health messages; route to callback, return empty bytes.
+            try:
+                import json
+
+                parsed = json.loads(msg)
+                msg_type = parsed.get("type", "")
+                if msg_type == "remote_unhealthy":
+                    _logger.warning("RemoteTransport: remote reported unhealthy: %s", parsed.get("reason", ""))
+                    if self._on_health_change is not None:
+                        self._on_health_change(self._remote_id, False)
+                    return b""
+                if msg_type == "remote_healthy":
+                    _logger.info("RemoteTransport: remote reported healthy")
+                    if self._on_health_change is not None:
+                        self._on_health_change(self._remote_id, True)
+                    return b""
+            except Exception:
+                pass
+            # Other control messages are unexpected during normal forwarding; log and skip.
+            _logger.warning("RemoteTransport: unexpected text message from remote: %s", msg[:120])
+            return b""
+        return bytes(msg)
+
+    def write(self, data: bytes) -> None:
+        self._ws.send(data)
+
+    def send_restart(self) -> None:
+        """Send a restart command to the remote as a JSON text frame."""
+        import json
+
+        self._ws.send(json.dumps({"type": "restart"}))
+
+    def close(self) -> None:
+        try:
+            self._ws.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +329,8 @@ class Packet:
     def payload(self) -> bytes:
         return self._payload
 
-    def send(self, fd: int) -> None:
+    def to_bytes(self) -> bytes:
+        """Serialise the packet to wire-format bytes (no HID framing)."""
         pkt = struct.pack(">HB", 0xAA55, self._cmd >> 8)
         if self._cmd == self.ASYNC_ACK:
             pkt += struct.pack("BB", self._payload & 0xFF, self._cmd & 0xFF)
@@ -200,6 +339,11 @@ class Packet:
             if self._payload:
                 pkt += self._payload
         pkt += struct.pack(">H", _checksum(pkt))
+        return pkt
+
+    def send(self, fd: int) -> None:
+        """Write the packet directly to a file descriptor (for tests and LocalTransport)."""
+        pkt = self.to_bytes()
         _logger.debug("Sending: %s", bytes_to_hex(pkt))
         written = os.write(fd, pkt)
         assert written == len(pkt)
@@ -648,9 +792,9 @@ class Dongle:
             for key, value in kwargs.items():
                 setattr(self, key, value)
 
-    def __init__(self, device: str, event_handler):
+    def __init__(self, transport: Transport, event_handler):
         self._lock = threading.Lock()
-        self._fd = os.open(device, os.O_RDWR | os.O_NONBLOCK)
+        self._transport = transport
         self._exit_event = threading.Event()
         self._thread = threading.Thread(target=self._worker, name="dongle-worker", daemon=True)
         self._event_handler = event_handler
@@ -672,6 +816,13 @@ class Dongle:
     mac: str
     version: str
     enr: bytes
+
+    @property
+    def remote_id(self) -> str | None:
+        """Return the remote identifier for remote dongles, or None for local dongles."""
+        if isinstance(self._transport, RemoteTransport):
+            return self._transport.remote_id
+        return None
 
     # ------------------------------------------------------------------
     # Async notification handlers
@@ -708,7 +859,7 @@ class Dongle:
     # ------------------------------------------------------------------
 
     def _read_raw_hid(self) -> bytes:
-        data = os.read(self._fd, 0x40)
+        data = self._transport.read()
         if not data:
             return b""
         data = bytes(data)
@@ -729,7 +880,9 @@ class Dongle:
 
     def _send_packet(self, pkt: Packet) -> None:
         _logger.debug("===> %s", pkt)
-        pkt.send(self._fd)
+        data = pkt.to_bytes()
+        _logger.debug("Sending: %s", bytes_to_hex(data))
+        self._transport.write(data)
 
     def _handle_packet(self, pkt: Packet) -> None:
         _logger.debug("<=== %s", pkt)
@@ -1027,12 +1180,10 @@ class Dongle:
             raise self._last_exception
 
     def stop(self, timeout: int = _CMD_TIMEOUT) -> None:
-        """Stop the worker thread and close the HID device."""
+        """Stop the worker thread and close the transport."""
         self._exit_event.set()
         self._thread.join(timeout)
-        if self._fd is not None:
-            os.close(self._fd)
-            self._fd = None
+        self._transport.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1053,4 +1204,40 @@ def open_dongle(device: str, event_handler, logger: logging.Logger | None = None
         _logger = logger
     else:
         _logger = logging.getLogger("ws2m.dongle")
-    return Dongle(device, event_handler)
+    return Dongle(LocalTransport(device), event_handler)
+
+
+def open_remote_dongle(
+    ws_connection,
+    remote_id: str,
+    dongle_mac: str,
+    replay_frames: list[bytes],
+    event_handler,
+    logger: logging.Logger | None = None,
+    on_health_change=None,
+) -> Dongle:
+    """Return a connected :class:`Dongle` backed by a remote WebSocket connection.
+
+    This is called by the hub's WebSocket listener after completing the auth
+    handshake with a remote.  The remote has already supplied ``remote_id``,
+    ``dongle_mac``, and any buffered ``replay_frames`` during the auth exchange.
+
+    The :class:`RemoteTransport` delivers replay frames first (allowing the hub's
+    HID handshake to consume them), then switches to live WebSocket reads.
+
+    Args:
+        ws_connection:   Accepted WebSocket connection (``websockets.sync.server.Connection``).
+        remote_id:       Remote UUID from the auth message.
+        dongle_mac:      Dongle MAC string from the auth message.
+        replay_frames:   Ordered list of raw HID report bytes buffered by the remote.
+        event_handler:   Callable ``(dongle, event)`` invoked for each sensor event.
+        logger:          Optional logger; falls back to the module logger.
+        on_health_change: Optional callable ``(remote_id, is_healthy)`` for health messages.
+    """
+    global _logger
+    if logger is not None:
+        _logger = logger
+    else:
+        _logger = logging.getLogger("ws2m.dongle")
+    transport = RemoteTransport(ws_connection, remote_id, dongle_mac, replay_frames, on_health_change=on_health_change)
+    return Dongle(transport, event_handler)

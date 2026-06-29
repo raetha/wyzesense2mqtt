@@ -24,13 +24,13 @@ without corrupting any shared module-level state.
 Adding a new universal sensor entity is a one-line addition to
 _build_diagnostic_components() or _build_sensor_action_components().
 Adding a new dongle entity means editing _build_dongle_components().
-Adding a new service entity means editing _build_service_components().
+Adding a new hub entity means editing _build_hub_components().
 Adding a new sensor type means adding a builder and registering it in
 _COMPONENT_BUILDERS.
 
 HA device hierarchy
 --------------------
-  ws2m_service_<uuid>     — software service device (singleton per ws2m instance)
+  ws2m_hub_<uuid>       — software hub device (singleton per ws2m instance)
     └─ ws2m_dongle_<mac>  — physical USB dongle device (one per connected dongle)
          └─ wyzesense_<mac> — individual Wyze sensor
 
@@ -43,12 +43,13 @@ _MIGRATION_STEPS list below.
 
 Schema history
   v1 — legacy per-entity sensor topics + 3.x bridge topic:
-         homeassistant/<platform>/wyzesense_<mac>/<entity>/config
-         homeassistant/binary_sensor/wyzesense_bridge_<mac>/connection_state/config
-  v2 — device-based topics; service + dongle split (4.0.0):
-         homeassistant/device/wyzesense_<mac>/config       (sensor)
-         homeassistant/device/ws2m_service_<uuid>/config   (software service)
-         homeassistant/device/ws2m_dongle_<mac>/config     (hardware dongle)
+         <hass_topic_root>/<platform>/wyzesense_<mac>/<entity>/config
+         <hass_topic_root>/binary_sensor/wyzesense_bridge_<mac>/connection_state/config
+  v2 — device-based topics; hub + dongle + remote split (4.0.0):
+         <hass_topic_root>/device/ws2m_sensor_<mac>/config     (sensor)
+         <hass_topic_root>/device/ws2m_hub_<uuid>/config       (software hub)
+         <hass_topic_root>/device/ws2m_dongle_<mac>/config     (hardware dongle)
+         <hass_topic_root>/device/ws2m_remote_<uuid>/config    (remote)
 
 The single ``discovery_schema_version`` key in migrations.yaml tracks where
 each installation is up to.  All device and sensor topics are migrated
@@ -102,17 +103,17 @@ LOG_LEVEL_OPTIONS: list[str] = ["DEBUG", "INFO", "WARNING", "ERROR"]
 # Per-message QoS / retain constants
 # ---------------------------------------------------------------------------
 
-_QOS_STATUS = 1
-_QOS_DISCOVERY = 1
-_QOS_DATA = 0
-_QOS_COMMAND = 1
-_QOS_NUMBER = 1
+QOS_STATUS = 1
+QOS_DISCOVERY = 1
+QOS_DATA = 0
+QOS_COMMAND = 1
+QOS_NUMBER = 1
 
-_RETAIN_STATUS = True
-_RETAIN_DISCOVERY = True
-_RETAIN_DATA = False
-_RETAIN_COMMAND = False
-_RETAIN_NUMBER = True
+RETAIN_STATUS = True
+RETAIN_DISCOVERY = True
+RETAIN_DATA = False
+RETAIN_COMMAND = False
+RETAIN_NUMBER = True
 
 
 # ---------------------------------------------------------------------------
@@ -501,13 +502,16 @@ _STATE_PLATFORMS: frozenset[str] = frozenset({"sensor", "binary_sensor"})
 # ---------------------------------------------------------------------------
 
 
-def _build_service_components(self_root: str) -> dict:
-    """Components for the ws2m software service device (singleton per instance).
+def _build_hub_components(self_root: str, hub_id: str) -> dict:
+    """Components for the ws2m software hub device (singleton per instance).
 
-    The service device owns the reload button, log level select, and any other
-    service-level controls that span all connected dongles.
+    The hub device owns the reload button, log level select, and any other
+    hub-level controls that span all connected dongles.
 
-    Returns a fresh dict on every call.  To add a new service-level entity,
+    All hub-level MQTT topics live under <self_root>/hub/<hub_id>/ to separate them
+    from sensor and dongle data topics and to namespace by instance UUID.
+
+    Returns a fresh dict on every call.  To add a new hub-level entity,
     add an entry here — no other code needs to change.
     """
     return {
@@ -515,23 +519,128 @@ def _build_service_components(self_root: str) -> dict:
             "platform": "button",
             "name": "Reload config",
             "entity_category": "config",
-            "command_topic": f"{self_root}/reload",
+            "command_topic": f"{self_root}/hub/{hub_id}/reload",
             "payload_press": "reload",
         },
         "log_level": {
             "platform": "select",
             "name": "Log level",
             "entity_category": "config",
-            "state_topic": f"{self_root}/log_level",
-            "command_topic": f"{self_root}/log_level/set",
+            "state_topic": f"{self_root}/hub/{hub_id}/log_level",
+            "command_topic": f"{self_root}/hub/{hub_id}/log_level/set",
             "options": LOG_LEVEL_OPTIONS,
         },
         "cleanup_removed_dongles": {
             "platform": "button",
             "name": "Cleanup removed dongles",
             "entity_category": "config",
-            "command_topic": f"{self_root}/cleanup_removed_dongles",
+            "command_topic": f"{self_root}/hub/{hub_id}/cleanup_removed_dongles",
             "payload_press": "cleanup",
+        },
+        "remote_pair": {
+            "platform": "button",
+            "name": "Enable Remote Pairing",
+            "entity_category": "config",
+            "command_topic": f"{self_root}/hub/{hub_id}/remote_pair",
+            "payload_press": "pair",
+        },
+        "remote_pairing": {
+            "platform": "sensor",
+            "name": "Remote Pairing",
+            "entity_category": "diagnostic",
+            "state_topic": f"{self_root}/hub/{hub_id}/remote_pairing",
+        },
+        "connected_dongles": {
+            "platform": "sensor",
+            "name": "Connected dongles",
+            "state_topic": f"{self_root}/hub/{hub_id}/connected_dongles",
+            "state_class": "measurement",
+            "icon": "mdi:usb",
+            "entity_category": "diagnostic",
+        },
+        "remote_dongles": {
+            "platform": "sensor",
+            "name": "Remote dongles",
+            "state_topic": f"{self_root}/hub/{hub_id}/remote_dongles",
+            "state_class": "measurement",
+            "icon": "mdi:usb-port",
+            "entity_category": "diagnostic",
+        },
+        "connected_remotes": {
+            "platform": "sensor",
+            "name": "Connected remotes",
+            "state_topic": f"{self_root}/hub/{hub_id}/connected_remotes",
+            "state_class": "measurement",
+            "icon": "mdi:router-network",
+            "entity_category": "diagnostic",
+        },
+        "health": {
+            "platform": "binary_sensor",
+            "name": "Hub Health",
+            "entity_category": "diagnostic",
+            "state_topic": f"{self_root}/hub/{hub_id}/health",
+            "payload_on": "healthy",
+            "payload_off": "degraded",
+        },
+        "restart": {
+            "platform": "button",
+            "name": "Restart",
+            "command_topic": f"{self_root}/hub/{hub_id}/restart/set",
+            "icon": "mdi:restart",
+            "entity_category": "config",
+        },
+        "usb_dongle": {
+            "platform": "text",
+            "name": "USB dongle",
+            "entity_category": "config",
+            "state_topic": f"{self_root}/hub/{hub_id}/usb_dongle",
+            "command_topic": f"{self_root}/hub/{hub_id}/usb_dongle/set",
+            "icon": "mdi:usb",
+        },
+        "ws_port": {
+            "platform": "number",
+            "name": "WebSocket port",
+            "entity_category": "config",
+            "state_topic": f"{self_root}/hub/{hub_id}/ws_port",
+            "command_topic": f"{self_root}/hub/{hub_id}/ws_port/set",
+            "min": 1024,
+            "max": 65535,
+            "step": 1,
+            "mode": "box",
+            "icon": "mdi:lan-connect",
+        },
+        "remote_pairing_timeout": {
+            "platform": "number",
+            "name": "Remote pairing timeout",
+            "entity_category": "config",
+            "state_topic": f"{self_root}/hub/{hub_id}/remote_pairing_timeout",
+            "command_topic": f"{self_root}/hub/{hub_id}/remote_pairing_timeout/set",
+            "min": 10,
+            "max": 3600,
+            "step": 5,
+            "mode": "box",
+            "unit_of_measurement": "s",
+            "icon": "mdi:timer",
+        },
+        "mdns": {
+            "platform": "switch",
+            "name": "mDNS advertisement",
+            "entity_category": "config",
+            "state_topic": f"{self_root}/hub/{hub_id}/mdns",
+            "command_topic": f"{self_root}/hub/{hub_id}/mdns/set",
+            "payload_on": "true",
+            "payload_off": "false",
+            "icon": "mdi:broadcast",
+        },
+        "ws_enabled": {
+            "platform": "switch",
+            "name": "WebSocket remote listener",
+            "entity_category": "config",
+            "state_topic": f"{self_root}/hub/{hub_id}/ws_enabled",
+            "command_topic": f"{self_root}/hub/{hub_id}/ws_enabled/set",
+            "payload_on": "true",
+            "payload_off": "false",
+            "icon": "mdi:lan-connect",
         },
     }
 
@@ -544,8 +653,14 @@ def _build_service_components(self_root: str) -> dict:
 def _build_dongle_components(self_root: str, dongle_mac: str) -> dict:
     """Components for one physical USB dongle device.
 
-    Each dongle gets its own HA device with connection state, scan, and
-    remove buttons scoped to that specific dongle.
+    Each dongle gets its own HA device with connection state and scan button
+    scoped to that specific dongle.  Sensor removal is done per-sensor via
+    the Remove sensor button on each sensor's device page.  Dongle-level
+    cleanup (clearing topics and data after a dongle is permanently removed)
+    is done via the Cleanup removed dongles button on the hub device (for
+    local dongles) or Cleanup disconnected dongles on the remote device (for
+    relayed dongles) — those buttons remain pressable even when the dongle
+    device itself is shown as offline in HA.
 
     Returns a fresh dict on every call.  To add a new per-dongle entity,
     add an entry here — no other code needs to change.
@@ -558,21 +673,74 @@ def _build_dongle_components(self_root: str, dongle_mac: str) -> dict:
             "entity_category": "diagnostic",
             "payload_on": "online",
             "payload_off": "offline",
-            "state_topic": f"{self_root}/dongle_{dongle_mac}/status",
+            "state_topic": f"{self_root}/dongle/{dongle_mac}/status",
         },
         "scan": {
             "platform": "button",
             "name": "Scan for sensor",
             "entity_category": "config",
-            "command_topic": f"{self_root}/dongle_{dongle_mac}/scan",
+            "command_topic": f"{self_root}/dongle/{dongle_mac}/scan",
             "payload_press": "scan",
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Remote component builder
+# ---------------------------------------------------------------------------
+
+
+def _build_remote_components(self_root: str, remote_id: str) -> dict:
+    """Components for one ws2m-remote device.
+
+    The remote device exposes health and a restart button.  Connectivity to
+    the hub is reflected by HA device availability (online/offline) via the
+    LWT on ws2m/remote/<uuid>/status — no separate entity is needed.
+
+    Dongle-specific entities (connection state, scan, remove) live on the
+    dongle device (ws2m_dongle_<mac>), which is the same whether the dongle
+    is locally attached to the hub or relayed via a remote.
+
+    Returns a fresh dict on every call.
+    """
+    return {
+        "connected_dongles": {
+            "platform": "sensor",
+            "name": "Connected dongles",
+            "state_topic": f"{self_root}/remote/{remote_id}/connected_dongles",
+            "state_class": "measurement",
+            "icon": "mdi:usb",
+            "entity_category": "diagnostic",
+        },
+        "health": {
+            "platform": "sensor",
+            "name": "Health",
+            "state_topic": f"{self_root}/remote/{remote_id}/health",
+            "value_template": "{{ value }}",
+            "icon": "mdi:heart-pulse",
+            "entity_category": "diagnostic",
+        },
+        "restart": {
+            "platform": "button",
+            "name": "Restart",
+            "command_topic": f"{self_root}/remote/{remote_id}/restart/set",
+            "icon": "mdi:restart",
+            "entity_category": "config",
         },
         "remove": {
             "platform": "button",
-            "name": "Remove sensor",
+            "name": "Remove remote",
             "entity_category": "config",
-            "command_topic": f"{self_root}/dongle_{dongle_mac}/remove",
+            "device_class": "restart",
+            "command_topic": f"{self_root}/remote/{remote_id}/remove",
             "payload_press": "remove",
+        },
+        "cleanup_disconnected_dongles": {
+            "platform": "button",
+            "name": "Cleanup disconnected dongles",
+            "entity_category": "config",
+            "command_topic": f"{self_root}/remote/{remote_id}/cleanup_disconnected_dongles",
+            "payload_press": "cleanup",
         },
     }
 
@@ -582,7 +750,7 @@ def _build_dongle_components(self_root: str, dongle_mac: str) -> dict:
 #
 # Each entry in _MIGRATION_STEPS is a callable:
 #   migrate_to_vN(client, cfg, logger, sensor_mac, sensor_type,
-#                 dongle_mac, service_id, wait)
+#                 dongle_mac, hub_id, wait)
 #
 # The function clears *all* stale retained topics that were published by
 # version N-1.  Adding a migration for a future version N:
@@ -602,17 +770,20 @@ def _migrate_to_v2(
     sensor_mac: str,
     sensor_type: str,
     dongle_mac: str,
-    service_id: str,
+    hub_id: str,
     wait: bool = True,
 ) -> None:
     """Clear all v1 retained topics for one sensor and the v1 bridge device.
 
     v1 sensor topics — legacy per-entity format:
-      homeassistant/<platform>/wyzesense_<mac>/<entity>/config
+      <hass_topic_root>/<platform>/wyzesense_<mac>/<entity>/config
 
     v1 bridge topic — 3.x identity:
-      homeassistant/binary_sensor/wyzesense_bridge_<mac>/connection_state/config
+      <hass_topic_root>/binary_sensor/wyzesense_bridge_<mac>/connection_state/config
     """
+    # SCOPE: This function clears only topics that existed in 3.1.x releases.
+    # Do NOT add cleanup for topics introduced during 4.0.0 development —
+    # those were never published by any released version.
     # --- v1 sensor per-entity topics ---
     entity_types = ["signal_strength", "battery"]
     if sensor_type in BINARY_SENSOR_TYPES:
@@ -645,6 +816,11 @@ def _migrate_to_v2(
     bridge_topic = f"{cfg['hass_topic_root']}/binary_sensor/wyzesense_bridge_{dongle_mac}/connection_state/config"
     _publish(client, logger, bridge_topic, None, wait=wait)
 
+    # --- old-style data topics (pre-topic-restructure, e.g. 3.1.0 ws2m/sensor_mac/...) ---
+    root = cfg["self_topic_root"]
+    _publish(client, logger, f"{root}/{sensor_mac}/status", None, wait=wait, qos=QOS_STATUS, retain=RETAIN_STATUS)
+    _publish(client, logger, f"{root}/{sensor_mac}", None, wait=wait)
+
 
 # List of migration step functions, one per schema version transition.
 # Index 0 = migration to v2 (clears all pre-v2 topics).
@@ -666,8 +842,8 @@ def _publish(
     payload,
     is_json: bool = True,
     wait: bool = True,
-    qos: int = _QOS_DATA,
-    retain: bool = _RETAIN_DATA,
+    qos: int = QOS_DATA,
+    retain: bool = RETAIN_DATA,
 ) -> mqtt.MQTTMessageInfo:
     """Publish a single MQTT message.
 
@@ -744,7 +920,7 @@ def clear_sensor_discovery_topics(
         _publish(client, logger, topic, None, wait=wait)
 
     # v2 device-based sensor topic
-    _publish(client, logger, f"{cfg['hass_topic_root']}/device/wyzesense_{sensor_mac}/config", None, wait=wait)
+    _publish(client, logger, f"{cfg['hass_topic_root']}/device/ws2m_sensor_{sensor_mac}/config", None, wait=wait)
 
 
 def clear_sensor_state_topics(
@@ -767,14 +943,14 @@ def clear_sensor_state_topics(
     Does NOT clear discovery topics — call ``clear_sensor_discovery_topics``
     for those.  Together they constitute a full sensor removal.
     """
-    mac_topic = f"{cfg['self_topic_root']}/{sensor_mac}"
-    _publish(client, logger, f"{mac_topic}/status", None, wait=wait, qos=_QOS_STATUS, retain=_RETAIN_STATUS)
+    mac_topic = f"{cfg['self_topic_root']}/sensor/{sensor_mac}"
+    _publish(client, logger, f"{mac_topic}/status", None, wait=wait, qos=QOS_STATUS, retain=RETAIN_STATUS)
     _publish(client, logger, mac_topic, None, wait=wait)
     for suffix in ["sensor_name", "device_class", "invert_state", "pin_count"]:
-        _publish(client, logger, f"{mac_topic}/{suffix}", None, wait=wait, qos=_QOS_NUMBER, retain=_RETAIN_NUMBER)
+        _publish(client, logger, f"{mac_topic}/{suffix}", None, wait=wait, qos=QOS_NUMBER, retain=RETAIN_NUMBER)
     if sensor_type == "chime":
         for suffix in ["ring_id", "volume", "repeat_count"]:
-            _publish(client, logger, f"{mac_topic}/{suffix}", None, wait=wait, qos=_QOS_NUMBER, retain=_RETAIN_NUMBER)
+            _publish(client, logger, f"{mac_topic}/{suffix}", None, wait=wait, qos=QOS_NUMBER, retain=RETAIN_NUMBER)
 
 
 def clear_dongle_topics(
@@ -796,20 +972,57 @@ def clear_dongle_topics(
         f"{cfg['hass_topic_root']}/device/ws2m_dongle_{dongle_mac}/config",
         None,
         wait=wait,
-        qos=_QOS_DISCOVERY,
-        retain=_RETAIN_DISCOVERY,
+        qos=QOS_DISCOVERY,
+        retain=RETAIN_DISCOVERY,
     )
     _publish(
         client,
         logger,
-        f"{cfg['self_topic_root']}/dongle_{dongle_mac}/status",
+        f"{cfg['self_topic_root']}/dongle/{dongle_mac}/status",
         None,
         wait=wait,
-        qos=_QOS_STATUS,
-        retain=_RETAIN_STATUS,
+        qos=QOS_STATUS,
+        retain=RETAIN_STATUS,
     )
     if logger:
         logger.info(f"Cleared all dongle MQTT topics for {dongle_mac}")
+
+
+def clear_remote_topics(
+    client: mqtt.Client,
+    cfg: dict,
+    logger: logging.Logger | None,
+    remote_id: str,
+    wait: bool = True,
+) -> None:
+    """Clear all retained MQTT topics associated with a remote device.
+
+    Clears the remote's HA discovery topic, its status topic, health topic,
+    and connected_dongles count topic.  Call this after clearing the sensor
+    and dongle topics for all dongles served by this remote.
+    """
+    _publish(
+        client,
+        logger,
+        f"{cfg['hass_topic_root']}/device/ws2m_remote_{remote_id}/config",
+        None,
+        wait=wait,
+        qos=QOS_DISCOVERY,
+        retain=RETAIN_DISCOVERY,
+    )
+    root = cfg["self_topic_root"]
+    for subtopic in ("status", "health", "connected_dongles"):
+        _publish(
+            client,
+            logger,
+            f"{root}/remote/{remote_id}/{subtopic}",
+            None,
+            wait=wait,
+            qos=QOS_STATUS,
+            retain=RETAIN_STATUS,
+        )
+    if logger:
+        logger.info(f"Cleared all remote MQTT topics for {remote_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -895,8 +1108,8 @@ class MqttGateway:
         payload,
         is_json: bool = True,
         wait: bool = True,
-        qos: int = _QOS_DATA,
-        retain: bool = _RETAIN_DATA,
+        qos: int = QOS_DATA,
+        retain: bool = RETAIN_DATA,
     ) -> mqtt.MQTTMessageInfo:
         """Publish to *topic*.  Pass payload=None to clear a retained topic."""
         return _publish(self._client, self._logger, topic, payload, is_json=is_json, wait=wait, qos=qos, retain=retain)
@@ -905,30 +1118,29 @@ class MqttGateway:
     # Service discovery
     # ------------------------------------------------------------------
 
-    def publish_service_discovery(self, service_id: str, log_level: str, wait: bool = True) -> None:
-        """Publish the HA device-based discovery config for the ws2m service.
+    def publish_hub_discovery(self, hub_id: str, log_level: str, wait: bool = True) -> None:
+        """Publish the HA device-based discovery config for the ws2m hub.
 
         Publishes a single retained topic:
-          homeassistant/device/ws2m_service_<uuid>/config
+          <hass_topic_root>/device/ws2m_hub_<uuid>/config
 
-        The service device is a software-only singleton representing this
+        The hub device is a software-only singleton representing this
         ws2m instance.  It intentionally omits hw_version and connections so
         that HA classifies it as a software device in the device info panel
         (HA's heuristic: sw_version present, hw_version and connections absent).
-        To add a new service-level entity, edit _build_service_components().
+        To add a new hub-level entity, edit _build_hub_components().
         """
         cfg = self._config
-        components = _build_service_components(cfg["self_topic_root"])
-        for component in components.values():
+        components = _build_hub_components(cfg["self_topic_root"], hub_id)
+        for key, component in components.items():
             component["has_entity_name"] = True
-            uid_key = component.get("command_topic", "").split("/")[-1]
-            component["unique_id"] = f"ws2m_service_{service_id}_{uid_key}"
+            component["unique_id"] = f"ws2m_hub_{hub_id}_{key}"
 
         payload = {
             "device": {
-                "identifiers": [f"ws2m_service_{service_id}"],
+                "identifiers": [f"ws2m_hub_{hub_id}"],
                 "manufacturer": "Raetha",
-                "model": "WyzeSense2MQTT Service",
+                "model": "WyzeSense2MQTT Hub",
                 "name": "WyzeSense2MQTT",
                 "sw_version": VERSION,
             },
@@ -938,40 +1150,87 @@ class MqttGateway:
                 "support_url": "https://github.com/raetha/wyzesense2mqtt",
             },
             "components": components,
-            "qos": _QOS_DISCOVERY,
+            "qos": QOS_DISCOVERY,
         }
-        topic = f"{cfg['hass_topic_root']}/device/ws2m_service_{service_id}/config"
-        self.publish(topic, payload, wait=wait, qos=_QOS_DISCOVERY, retain=_RETAIN_DISCOVERY)
-        self._logger.debug(f"Published service discovery → {topic}")
+        topic = f"{cfg['hass_topic_root']}/device/ws2m_hub_{hub_id}/config"
+        self.publish(topic, payload, wait=wait, qos=QOS_DISCOVERY, retain=RETAIN_DISCOVERY)
+        self._logger.debug(f"Published hub discovery → {topic}")
 
-        # Publish initial log_level state
+        # Publish initial log_level state (under ws2m/hub/<hub_id>/)
         self.publish(
-            f"{cfg['self_topic_root']}/log_level",
+            f"{cfg['self_topic_root']}/hub/{hub_id}/log_level",
             log_level.upper(),
             is_json=False,
             wait=wait,
-            qos=_QOS_NUMBER,
-            retain=_RETAIN_NUMBER,
+            qos=QOS_NUMBER,
+            retain=RETAIN_NUMBER,
         )
 
     # ------------------------------------------------------------------
     # Dongle discovery
     # ------------------------------------------------------------------
 
+    def publish_remote_discovery(
+        self,
+        remote_id: str,
+        hub_id: str,
+        wait: bool = True,
+    ) -> None:
+        """Publish the HA device-based discovery config for one ws2m-remote.
+
+        Publishes a single retained topic:
+          <hass_topic_root>/device/ws2m_remote_<uuid>/config
+
+        The remote device sits between the service device and the dongle(s)
+        it relays.  Availability is tracked via LWT on remote_<uuid>/status.
+        """
+        cfg = self._config
+        components = _build_remote_components(cfg["self_topic_root"], remote_id)
+        for key, component in components.items():
+            component["has_entity_name"] = True
+            component["unique_id"] = f"ws2m_remote_{remote_id}_{key}"
+
+        payload = {
+            "device": {
+                "identifiers": [f"ws2m_remote_{remote_id}"],
+                "manufacturer": "Raetha",
+                "model": "WyzeSense2MQTT Remote",
+                "name": f"WyzeSense Remote {remote_id[:8]}",
+                "sw_version": VERSION,
+                "via_device": f"ws2m_hub_{hub_id}",
+            },
+            "availability": [
+                {"topic": f"{cfg['self_topic_root']}/remote/{remote_id}/status"},
+            ],
+            "availability_mode": "all",
+            "origin": {
+                "name": "WyzeSense2MQTT",
+                "sw_version": VERSION,
+                "support_url": "https://github.com/raetha/wyzesense2mqtt",
+            },
+            "components": components,
+            "qos": QOS_DISCOVERY,
+        }
+        topic = f"{cfg['hass_topic_root']}/device/ws2m_remote_{remote_id}/config"
+        self.publish(topic, payload, wait=wait, qos=QOS_DISCOVERY, retain=RETAIN_DISCOVERY)
+        self._logger.debug(f"Published remote discovery → {topic}")
+
     def publish_dongle_discovery(
         self,
         dongle_mac: str,
         dongle_version: str,
-        service_id: str,
+        hub_id: str,
+        via_remote_id: str | None = None,
         wait: bool = True,
     ) -> None:
         """Publish the HA device-based discovery config for one USB dongle.
 
         Publishes a single retained topic:
-          homeassistant/device/ws2m_dongle_<mac>/config
+          <hass_topic_root>/device/ws2m_dongle_<mac>/config
 
         The dongle device is a hardware device with hw_version from the
-        dongle firmware.  It is a child of the service device.
+        dongle firmware.  It is a child of the service device (local dongles)
+        or the remote device (relayed dongles — via_remote_id set).
         To add a new per-dongle entity, edit _build_dongle_components().
         """
         cfg = self._config
@@ -980,6 +1239,7 @@ class MqttGateway:
             component["has_entity_name"] = True
             component["unique_id"] = f"ws2m_dongle_{dongle_mac}_{key}"
 
+        via_device = f"ws2m_remote_{via_remote_id}" if via_remote_id else f"ws2m_hub_{hub_id}"
         payload = {
             "device": {
                 "hw_version": dongle_version,
@@ -988,7 +1248,7 @@ class MqttGateway:
                 "model": "WyzeSense Bridge Dongle",
                 "name": f"WyzeSense Dongle {dongle_mac}",
                 "sw_version": VERSION,
-                "via_device": f"ws2m_service_{service_id}",
+                "via_device": via_device,
             },
             "origin": {
                 "name": "WyzeSense2MQTT",
@@ -996,10 +1256,19 @@ class MqttGateway:
                 "support_url": "https://github.com/raetha/wyzesense2mqtt",
             },
             "components": components,
-            "qos": _QOS_DISCOVERY,
+            "qos": QOS_DISCOVERY,
         }
+        # Remote dongles: HA entity availability gates on both the dongle status
+        # and the remote's connection to the hub.  If the remote drops, all its
+        # dongle entities should go unavailable automatically.
+        if via_remote_id:
+            payload["availability"] = [
+                {"topic": f"{cfg['self_topic_root']}/dongle/{dongle_mac}/status"},
+                {"topic": f"{cfg['self_topic_root']}/remote/{via_remote_id}/status"},
+            ]
+            payload["availability_mode"] = "all"
         topic = f"{cfg['hass_topic_root']}/device/ws2m_dongle_{dongle_mac}/config"
-        self.publish(topic, payload, wait=wait, qos=_QOS_DISCOVERY, retain=_RETAIN_DISCOVERY)
+        self.publish(topic, payload, wait=wait, qos=QOS_DISCOVERY, retain=RETAIN_DISCOVERY)
         self._logger.debug(f"Published dongle discovery → {topic}")
 
     # ------------------------------------------------------------------
@@ -1011,7 +1280,7 @@ class MqttGateway:
         sensor_mac: str,
         sensor: dict,
         dongle_mac: str,
-        service_id: str,
+        hub_id: str,
         sensor_online: bool,
         wait: bool = True,
         probe_available: bool = True,
@@ -1019,11 +1288,11 @@ class MqttGateway:
         """Build and publish the device-based HA discovery payload for one sensor.
 
         Uses the v2 device-based format:
-          homeassistant/device/wyzesense_<mac>/config
+          <hass_topic_root>/device/wyzesense_<mac>/config
 
         Sensor availability depends on both the dongle and the service:
-          - ws2m/<sensor_mac>/status  — sensor-level heartbeat timeout
-          - ws2m/dongle_<mac>/status  — dongle connectivity
+          - ws2m/sensor/<sensor_mac>/status  — sensor-level heartbeat timeout
+          - ws2m/dongle/<mac>/status          — dongle connectivity
 
         The payload's ``components`` block is assembled from four sources:
           1. The sensor-type-specific builder from _COMPONENT_BUILDERS
@@ -1043,8 +1312,8 @@ class MqttGateway:
             self._logger.error(f"No discovery component builder for sensor type {sensor_type!r} ({sensor_mac})")
             return
 
-        mac_topic = f"{cfg['self_topic_root']}/{sensor_mac}"
-        remove_topic = f"{cfg['self_topic_root']}/dongle_{dongle_mac}/remove"
+        mac_topic = f"{cfg['self_topic_root']}/sensor/{sensor_mac}"
+        remove_topic = f"{cfg['self_topic_root']}/dongle/{dongle_mac}/remove"
 
         # Merge all component sources — all return fresh dicts, safe to mutate below.
         # Pass probe_available to the leak builder so it can conditionally include probe_state.
@@ -1085,25 +1354,25 @@ class MqttGateway:
             "components": components,
             "state_topic": mac_topic,
             "availability": [
-                {"topic": f"{cfg['self_topic_root']}/{sensor_mac}/status"},
-                {"topic": f"{cfg['self_topic_root']}/dongle_{dongle_mac}/status"},
+                {"topic": f"{cfg['self_topic_root']}/sensor/{sensor_mac}/status"},
+                {"topic": f"{cfg['self_topic_root']}/dongle/{dongle_mac}/status"},
             ],
             "availability_mode": "all",
-            "qos": _QOS_DISCOVERY,
+            "qos": QOS_DISCOVERY,
         }
 
-        device_topic = f"{cfg['hass_topic_root']}/device/wyzesense_{sensor_mac}/config"
-        self.publish(device_topic, device_payload, wait=wait, qos=_QOS_DISCOVERY, retain=_RETAIN_DISCOVERY)
+        device_topic = f"{cfg['hass_topic_root']}/device/ws2m_sensor_{sensor_mac}/config"
+        self.publish(device_topic, device_payload, wait=wait, qos=QOS_DISCOVERY, retain=RETAIN_DISCOVERY)
         self._logger.debug(f"Published discovery for {sensor_mac} → {device_topic}")
 
         # Publish initial availability
         self.publish(
-            f"{cfg['self_topic_root']}/{sensor_mac}/status",
+            f"{cfg['self_topic_root']}/sensor/{sensor_mac}/status",
             "online" if sensor_online else "offline",
             is_json=False,
             wait=wait,
-            qos=_QOS_STATUS,
-            retain=_RETAIN_STATUS,
+            qos=QOS_STATUS,
+            retain=RETAIN_STATUS,
         )
 
         # Publish initial config entity states
@@ -1116,7 +1385,7 @@ class MqttGateway:
         the current value.
         """
         cfg = self._config
-        mac_topic = f"{cfg['self_topic_root']}/{sensor_mac}"
+        mac_topic = f"{cfg['self_topic_root']}/sensor/{sensor_mac}"
         sensor_type = sensor.get("sensor_type", "unknown")
 
         # sensor_name
@@ -1125,8 +1394,8 @@ class MqttGateway:
             sensor.get("name", f"WyzeSense {sensor_mac}"),
             is_json=False,
             wait=wait,
-            qos=_QOS_NUMBER,
-            retain=_RETAIN_NUMBER,
+            qos=QOS_NUMBER,
+            retain=RETAIN_NUMBER,
         )
 
         # device_class — only if this type has selectable options
@@ -1137,8 +1406,8 @@ class MqttGateway:
                 current_class,
                 is_json=False,
                 wait=wait,
-                qos=_QOS_NUMBER,
-                retain=_RETAIN_NUMBER,
+                qos=QOS_NUMBER,
+                retain=RETAIN_NUMBER,
             )
 
         # invert_state — only for invertible sensor types
@@ -1149,8 +1418,8 @@ class MqttGateway:
                 invert_val,
                 is_json=False,
                 wait=wait,
-                qos=_QOS_NUMBER,
-                retain=_RETAIN_NUMBER,
+                qos=QOS_NUMBER,
+                retain=RETAIN_NUMBER,
             )
 
         # pin_count — only for keypad
@@ -1163,61 +1432,90 @@ class MqttGateway:
                 str(len(pins)),
                 is_json=False,
                 wait=wait,
-                qos=_QOS_NUMBER,
-                retain=_RETAIN_NUMBER,
+                qos=QOS_NUMBER,
+                retain=RETAIN_NUMBER,
             )
 
     # ------------------------------------------------------------------
-    # Sensor topic cleanup
+    # Component topic cleanup
     # ------------------------------------------------------------------
 
-    def clear_sensor_topics(self, sensor_mac: str, sensor_type: str, wait: bool = True) -> None:
-        """Clear all retained topics for a sensor (used on removal)."""
-        self._logger.info(f"Clearing MQTT topics for {sensor_mac}")
+    def clear_sensor(self, sensor_mac: str, sensor_type: str, wait: bool = True) -> None:
+        """Clear all retained topics for a sensor (state + discovery).
+
+        Used when a sensor is removed from a dongle.  Clears state topics
+        first so HA immediately shows the sensor as gone, then clears the
+        discovery config so HA removes the device entity.
+        """
+        self._logger.info(f"Clearing MQTT topics for sensor {sensor_mac}")
         clear_sensor_state_topics(self._client, self._config, self._logger, sensor_mac, sensor_type, wait=wait)
         clear_sensor_discovery_topics(self._client, self._config, self._logger, sensor_mac, sensor_type, wait=wait)
 
-    def _clear_sensor_config_state_topics(self, sensor_mac: str, sensor_type: str, wait: bool = True) -> None:
-        """Clear retained config entity state topics for a removed sensor."""
-        mac_topic = f"{self._config['self_topic_root']}/{sensor_mac}"
-        for suffix in ["sensor_name", "device_class", "invert_state", "pin_count"]:
-            self.publish(f"{mac_topic}/{suffix}", None, wait=wait)
-        if sensor_type == "chime":
-            for suffix in ["ring_id", "volume", "repeat_count"]:
-                self.publish(f"{mac_topic}/{suffix}", None, wait=wait)
+    def clear_dongle(self, dongle_mac: str, wait: bool = True) -> None:
+        """Clear all retained MQTT topics for a dongle (discovery + status).
 
-    def clear_service_discovery(self, service_id: str, wait: bool = True) -> None:
-        """Clear the retained service device discovery topic."""
-        cfg = self._config
-        topic = f"{cfg['hass_topic_root']}/device/ws2m_service_{service_id}/config"
-        self.publish(topic, None, wait=wait)
-        # Also clear the log_level state topic
-        self.publish(f"{cfg['self_topic_root']}/log_level", None, wait=wait)
-        self._logger.debug(f"Cleared service discovery → {topic}")
-
-    def clear_dongle_discovery(self, dongle_mac: str, wait: bool = True) -> None:
-        """Clear the retained dongle device discovery topic."""
-        cfg = self._config
-        topic = f"{cfg['hass_topic_root']}/device/ws2m_dongle_{dongle_mac}/config"
-        self.publish(topic, None, wait=wait)
-        self._logger.debug(f"Cleared dongle discovery → {topic}")
-
-    def clear_dongle_all_topics(self, dongle_mac: str, wait: bool = True) -> None:
-        """Clear all retained MQTT topics associated with a dongle device.
-
-        Clears the dongle discovery topic and its status topic.  Does NOT
-        clear sensor topics — callers should iterate sensors and call
-        ``clear_sensor_topics()`` for each before calling this method.
+        Does NOT clear sensor topics — callers should call ``clear_sensor()``
+        for each sensor first so HA removes them before the dongle device goes.
         """
         clear_dongle_topics(self._client, self._config, self._logger, dongle_mac, wait=wait)
 
-    def clear_all_sensor_discovery_topics(self, sensor_mac: str, sensor_type: str, wait: bool = True) -> None:
-        """Clear the sensor's discovery topic from every known schema version.
+    def clear_remote(self, remote_id: str, wait: bool = True) -> None:
+        """Clear all retained MQTT topics for a remote (discovery + state).
 
-        Safe to call regardless of which version originally published the config;
-        used for full sensor removal so no stale entities remain in HA.
+        Does NOT clear dongle or sensor topics — callers should clear those
+        first (sensor → dongle) before calling this method.
         """
-        clear_sensor_discovery_topics(self._client, self._config, self._logger, sensor_mac, sensor_type, wait=wait)
+        clear_remote_topics(self._client, self._config, self._logger, remote_id, wait=wait)
+
+    def clear_all_hass_discovery(
+        self,
+        hub_id: str,
+        remote_ids: list[str],
+        dongle_macs: list[str],
+        sensors: list[tuple[str, str]],
+        wait: bool = True,
+    ) -> None:
+        """Clear ONLY the HA discovery config topics for all component types.
+
+        Called when hass_discovery is disabled at startup — the ws2m state and
+        data topics are left intact so the system continues to work without HA.
+        Covers hub, all remotes, all dongles, and all sensors across every known
+        schema version.
+
+        Args:
+            hub_id:      Hub UUID.
+            remote_ids:  List of remote UUIDs currently known to the hub.
+            dongle_macs: List of dongle MAC addresses currently known.
+            sensors:     List of (sensor_mac, sensor_type) tuples across all dongles.
+        """
+        cfg = self._config
+        # Hub discovery
+        self.publish(f"{cfg['hass_topic_root']}/device/ws2m_hub_{hub_id}/config", None, wait=wait)
+        # Remote discovery
+        for remote_id in remote_ids:
+            self.publish(
+                f"{cfg['hass_topic_root']}/device/ws2m_remote_{remote_id}/config",
+                None,
+                wait=wait,
+                qos=QOS_DISCOVERY,
+                retain=RETAIN_DISCOVERY,
+            )
+        # Dongle discovery
+        for dongle_mac in dongle_macs:
+            self.publish(
+                f"{cfg['hass_topic_root']}/device/ws2m_dongle_{dongle_mac}/config",
+                None,
+                wait=wait,
+                qos=QOS_DISCOVERY,
+                retain=RETAIN_DISCOVERY,
+            )
+        # Sensor discovery (all schema versions)
+        for sensor_mac, sensor_type in sensors:
+            clear_sensor_discovery_topics(self._client, cfg, self._logger, sensor_mac, sensor_type, wait=wait)
+        self._logger.debug(
+            f"Cleared HA discovery topics: hub, {len(remote_ids)} remote(s), "
+            f"{len(dongle_macs)} dongle(s), {len(sensors)} sensor(s)"
+        )
 
     # ------------------------------------------------------------------
     # Discovery schema migration
@@ -1236,13 +1534,13 @@ class MqttGateway:
         sensor_mac: str,
         sensor_type: str,
         dongle_mac: str,
-        service_id: str,
+        hub_id: str,
         from_version: int,
         wait: bool = True,
     ) -> None:
         """Clear stale retained topics for all schema versions from *from_version* to current.
 
-        Each migration step handles sensor, dongle, and service topics for that
+        Each migration step handles sensor, dongle, and hub topics for that
         version transition, driven by the DongleWorker's _init_sensors loop.
         """
         for step_index in range(from_version - 1, DISCOVERY_SCHEMA_VERSION - 1):
@@ -1256,6 +1554,6 @@ class MqttGateway:
                     sensor_mac,
                     sensor_type,
                     dongle_mac,
-                    service_id,
+                    hub_id,
                     wait=wait,
                 )

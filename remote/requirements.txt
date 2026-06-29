@@ -1,0 +1,4 @@
+# ws2m remote relay requirements
+websockets >= 12
+
+zeroconf>=0.131

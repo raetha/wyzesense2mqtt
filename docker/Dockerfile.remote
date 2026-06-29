@@ -1,0 +1,17 @@
+FROM docker.io/python:3.13-alpine
+
+LABEL maintainer="Raetha"
+
+COPY remote /app/
+
+RUN apk add --no-cache tzdata \
+    && pip3 install --no-cache-dir --upgrade pip \
+    && pip3 install --no-cache-dir -r /app/requirements.txt \
+    && chmod +x /app/service.sh
+
+VOLUME /app/data
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD test -f /tmp/ws2m_healthy
+
+ENTRYPOINT ["/app/service.sh"]

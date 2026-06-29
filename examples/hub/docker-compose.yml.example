@@ -1,0 +1,43 @@
+# ws2m hub — docker-compose example
+# Copy this file to docker-compose.yml and edit to suit your environment.
+# Then copy .env.example to .env and fill in the required values.
+
+services:
+  ws2m-hub:
+    container_name: ws2m-hub
+    hostname: ws2m-hub
+    image: ghcr.io/raetha/ws2m-hub:${IMAGE_TAG:-latest}
+    network_mode: bridge
+    restart: unless-stopped  # Required: the hub Restart button uses os._exit(0); Docker will restart it
+    tty: true
+    stop_signal: SIGINT
+    environment:
+      TZ: "${TZ:-UTC}"
+      WS2M_MQTT_HOST: "${WS2M_MQTT_HOST}"
+      WS2M_MQTT_PORT: "${WS2M_MQTT_PORT:-1883}"
+      WS2M_MQTT_USERNAME: "${WS2M_MQTT_USERNAME}"
+      WS2M_MQTT_PASSWORD: "${WS2M_MQTT_PASSWORD}"
+      WS2M_MQTT_CLIENT_ID: "${WS2M_MQTT_CLIENT_ID:-ws2m}"
+      WS2M_SELF_TOPIC_ROOT: "${WS2M_SELF_TOPIC_ROOT:-ws2m}"
+      WS2M_HASS_TOPIC_ROOT: "${WS2M_HASS_TOPIC_ROOT:-homeassistant}"
+      WS2M_HASS_DISCOVERY: "${WS2M_HASS_DISCOVERY:-true}"
+      WS2M_USB_DONGLE: "${WS2M_USB_DONGLE:-auto}"
+      WS2M_HUB_WS_ENABLED: "${WS2M_HUB_WS_ENABLED:-false}"
+      WS2M_HUB_WS_PORT: "${WS2M_HUB_WS_PORT:-8765}"
+      WS2M_HUB_REMOTE_PAIRING_SECONDS: "${WS2M_HUB_REMOTE_PAIRING_SECONDS:-60}"
+      WS2M_LOG_LEVEL: "${WS2M_LOG_LEVEL:-INFO}"
+    # Include if the hub has a local USB dongle:
+    # devices:
+    #   - "${DEV_WYZESENSE:-/dev/hidraw0}:/dev/hidraw0"
+    ports:
+      # Expose the remote WebSocket port when accepting remote connections.
+      # Remove this section if running local-only.
+      - "${WS2M_HUB_WS_PORT:-8765}:${WS2M_HUB_WS_PORT:-8765}"
+    volumes:
+      - "${VOL_DATA}:/app/data"
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ws2m_healthy"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3

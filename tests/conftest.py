@@ -2,6 +2,14 @@
 Shared pytest fixtures for WyzeSense2MQTT tests.
 """
 
+import os
+import sys
+
+import pytest
+
+# Ensure the package directory is on the path for all tests
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "hub"))
+
 
 def pytest_addoption(parser):
     """Register --dongle option for hardware tests."""
@@ -10,22 +18,13 @@ def pytest_addoption(parser):
         default="auto",
         metavar="PATH|auto",
         help="Path to the WyzeSense USB HID device for hardware tests, or "
-             "'auto' to use the same auto-detection as the bridge (default: auto)",
+        "'auto' to use the same auto-detection as the bridge (default: auto)",
     )
 
 
-import os
-import sys
-import tempfile
-
-import pytest
-
-# Ensure the package directory is on the path for all tests
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "wyzesense2mqtt"))
-
 # Stable test dongle MAC used wherever a dongle MAC is needed
 TEST_DONGLE_MAC = "DONGLE01"
-TEST_SERVICE_ID = "test-service-uuid-1234"
+TEST_HUB_ID = "test-hub-uuid-1234"
 
 
 @pytest.fixture()
@@ -52,9 +51,8 @@ def tmp_dongle_dir(tmp_config_dir):
 @pytest.fixture()
 def sample_config(tmp_config_dir):
     """Write a minimal valid config.yaml and return the loaded config dict."""
-    import yaml
-
     import config as cfg_module
+    import yaml
 
     cfg_data = {
         "mqtt_host": "testbroker.local",
@@ -127,7 +125,19 @@ def make_climate_payload(
     header = struct.pack(">QB8sB", timestamp_ms, event, mac.encode("ascii"), sensor_type)
     # 10-byte body: [0]=die_temp [1]=battery [2]=unk [3]=unk [4]=temp_hi [5]=temp_lo
     #               [6]=humidity [7]=unk [8]=seq [9]=signal_strength
-    body = struct.pack(">BBBBBBBBBB", die_temp, battery, 0x00, 0x00, temp_hi, temp_lo, humidity, 0x00, 0x01, signal_strength)
+    body = struct.pack(
+        ">BBBBBBBBBB",
+        die_temp,
+        battery,
+        0x00,
+        0x00,
+        temp_hi,
+        temp_lo,
+        humidity,
+        0x00,
+        0x01,
+        signal_strength,
+    )
     return header + body
 
 
@@ -146,9 +156,17 @@ def make_leak_v2_payload(
     header = struct.pack(">B8sB", event, mac.encode("ascii"), sensor_type)
     body = struct.pack(
         ">BBBBBBBBBBB",
-        0x00, 0x00, battery, 0x00, 0x00,
-        state, probe_state, probe_available,
-        0x00, 0x01, signal_strength,
+        0x00,
+        0x00,
+        battery,
+        0x00,
+        0x00,
+        state,
+        probe_state,
+        probe_available,
+        0x00,
+        0x01,
+        signal_strength,
     )
     return header + body
 

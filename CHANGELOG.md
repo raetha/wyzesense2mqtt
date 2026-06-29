@@ -8,16 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Breaking changes
 
+**Container image renamed and environment variables updated** — the hub image
+is now `ghcr.io/<owner>/ws2m-hub` (was `ghcr.io/<owner>/wyzesense2mqtt`).
+Updating to the new image requires editing your compose file; while there,
+all environment variables must also be updated to use a `WS2M_` prefix
+(e.g. `MQTT_HOST` → `WS2M_MQTT_HOST`). Unprefixed names are no longer
+accepted. See `examples/hub/` for updated compose and env file examples.
+The remote image is `ghcr.io/<owner>/ws2m-remote` (new — see Added).
+
 **Data directory renamed** — the default data directory inside the container
 has been renamed from `config/` to `data/` (`/app/config` → `/app/data`).
 On first start, `service.sh` creates a symlink so existing mounts continue
 to work. To migrate cleanly, update your volume mount to `/app/data` and
 remove the symlink.
-
-**Environment variable prefix** — all environment variables now require a
-`WS2M_` prefix (e.g. `MQTT_HOST` → `WS2M_MQTT_HOST`). Unprefixed names are
-still accepted in 4.0 but are deprecated. Update your `.env` files and
-Docker Compose blocks — see `examples/`.
 
 **Logging** — logs now go to stdout only (`docker logs` / `journalctl`).
 `config/logging.yaml` and the `logs/` directory are no longer used; remove
@@ -33,8 +36,8 @@ values in your config.
 `ws2m_version`, `discovery_schema_version` → `ws2m_discovery_schema`. Update
 any HA templates or automations that reference these attributes.
 
-**Bridge HA device identity** — the single `ws2m_bridge_<mac>` device is now
-two devices: `ws2m_service_<uuid>` (software) and `ws2m_dongle_<mac>`
+**Hub HA device identity** — the single `ws2m_bridge_<mac>` device is now
+two devices: `ws2m_hub_<uuid>` (software) and `ws2m_dongle_<mac>`
 (hardware). On first 4.0 startup the bridge clears all pre-4.0 retained
 topics automatically (schema v1→v2). Delete the stale bridge device from HA's
 device registry manually after upgrading.
@@ -45,20 +48,37 @@ device registry manually after upgrading.
 files are migrated automatically on first start.
 
 **Scan and remove MQTT topics are now dongle-scoped** — `ws2m/scan` and
-`ws2m/remove` are now `ws2m/dongle_<mac>/scan` and `ws2m/dongle_<mac>/remove`.
+`ws2m/remove` are now `ws2m/dongle/<mac>/scan` and `ws2m/dongle/<mac>/remove`.
 
 **Python 3.12+ required.**
 
 ### Added
 
+- **Remote bridge** — a new `ws2m-remote` image runs on any machine with a
+  USB WyzeSense dongle and forwards raw HID frames to the hub over an
+  authenticated WebSocket. The hub runs the full sensor protocol; the remote
+  is fully transparent. Supports hot-reconnect with a replay buffer (10 s TTL,
+  500-frame ring buffer) so brief network disruptions do not drop sensor events.
+  Remotes auto-discover the hub via mDNS (`_ws2m._tcp.local.`) when
+  `WS2M_HUB_URL` is not set — useful for simple single-hub setups. Set
+  `WS2M_HUB_URL` explicitly when crossing VLANs or in Docker without host
+  networking. Enable remote connections on the hub with `hub_ws_enabled: true`
+  in `config.yaml` or `WS2M_HUB_WS_ENABLED=true` in the environment; the HA
+  hub device also exposes a **WebSocket remote listener** switch for toggling
+  this at runtime. Activate pairing mode via the `ws2m/hub/<uuid>/remote_pair` button
+  in HA to adopt new remotes — no pre-shared secret is required. Each remote
+  appears in HA with `health` (healthy/degraded), `connected_dongles`
+  (count of relayed dongles), a `Restart` button, and a **Remove remote** button
+  that clears all MQTT topics for the remote and its entire dongle and sensor chain.
+  See `examples/hub/` and `examples/remote/` for compose and service file examples.
 - **Multi-dongle support** — `usb_dongle: auto` (the default) connects to all
   WyzeSense bridge dongles at startup. Each gets its own worker with independent
   sensor registry and dongle-scoped MQTT topics. Explicit paths (`/dev/hidrawN`)
   remain supported.
-- **HA device hierarchy** — three-level device tree: `ws2m_service_<uuid>` →
+- **HA device hierarchy** — three-level device tree: `ws2m_hub_<uuid>` →
   `ws2m_dongle_<mac>` → `wyzesense_<mac>`, linked via `via_device` so HA shows
-  the full chain. A stable service UUID is generated on first run and persisted
-  to `service.yaml`.
+  the full chain. A stable hub UUID is generated on first run and persisted
+  to `hub.yaml`.
 - **Wyze Sense Keypad v2 (WSKP1)** — publishes arm/disarm mode, motion, and PIN
   events to MQTT. Creates an `alarm_control_panel` and `motion` binary sensor in
   HA. Supports PIN validation and pushes state back to the keypad display/LEDs
@@ -69,9 +89,12 @@ files are migrated automatically on first start.
   [docs/protocol.md](docs/protocol.md).
 - **HA configuration entities** — sensor settings adjustable live from the HA
   device page: sensor name (text), device class (select), invert state (switch),
-  and log level (select, service device). Keypad adds arm PIN capture and clear
-  PINs buttons plus a PIN count sensor. Cleanup removed dongles button on the
-  service device removes MQTT topics and data for dongles no longer connected.
+  and log level (select, hub device). Keypad adds arm PIN capture and clear
+  PINs buttons plus a PIN count sensor. **Cleanup removed dongles** button on the
+  hub device removes MQTT topics and data for dongles no longer connected (covers
+  both local and remote-relayed dongles). **Cleanup disconnected dongles** button
+  on each remote device clears topics and data for that remote's failed/disconnected
+  dongles while leaving healthy ones untouched.
 - **Home Assistant App** — available via
   [raetha/home-assistant-apps](https://github.com/raetha/home-assistant-apps).
   `service.sh` detects `/data/options.json` and loads config automatically,
@@ -79,7 +102,7 @@ files are migrated automatically on first start.
 - **Docker `HEALTHCHECK`** — the bridge writes and periodically touches
   `/tmp/ws2m_healthy` while running; removes it on failure. Container flips
   unhealthy within ~90 s of a dongle failure or process hang.
-- **Test suite** — 367 unit and integration tests covering all modules.
+- **Test suite** — 509 unit and integration tests covering all modules.
   Hardware smoke tests behind `pytest -m dongle`. Run with
   `bash scripts/run_tests.sh`.
 - **`cli/mqtt_tool.py`** — MQTT maintenance CLI: `cleanup-discovery` finds
@@ -110,6 +133,10 @@ files are migrated automatically on first start.
   by a structured package: `config.py`, `sensors.py`, `mqtt.py`,
   `dongle_protocol.py` (renamed from `wyzesense.py`, fully snake_cased),
   `bridge.py`, and `cli/`. Old files removed.
+- **MQTT topic restructure** — sensor topics moved to `ws2m/sensor/<mac>/`;
+  dongle topics to `ws2m/dongle/<mac>/`; hub service topics to
+  `ws2m/hub/<uuid>/` (UUID included for multi-hub support). Old flat-root
+  sensor and dongle topics are cleared as retained on first 4.0 start.
 - **HA MQTT discovery** upgraded to device-based format
   (`homeassistant/device/wyzesense_<mac>/config` with `components`), supported
   since HA 2024.4. Adds `has_entity_name`, `origin`, `suggested_display_precision`,
@@ -123,8 +150,7 @@ files are migrated automatically on first start.
   `config.yaml` on first load.
 - Per-sensor `timeout` override removed from `sensors.yaml`; timeouts are now
   type-driven (V1: 8 h, V2: 4 h, Chime: 24 h); silently stripped on first load.
-- `examples/` files are the single source of truth for Docker Compose and `.env`
-  configuration.
+- Docker Compose and environment variable examples are in `examples/hub/` and `examples/remote/`. Dockerfiles are `docker/Dockerfile.hub` and `docker/Dockerfile.remote`.
 
 ### Fixed
 

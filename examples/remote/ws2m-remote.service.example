@@ -1,0 +1,17 @@
+[Unit]
+Description=WyzeSense2MQTT Remote Bridge
+Documentation=https://github.com/raetha/wyzesense2mqtt
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ws2m/remote
+ExecStart=/opt/ws2m/remote/service.sh
+Restart=always
+KillSignal=SIGINT
+Environment=WS2M_DATA_DIR=/opt/ws2m/remote-data
+# Uncomment and set if mDNS discovery is not available:
+# Environment=WS2M_HUB_URL=ws://192.168.1.10:8765
+
+[Install]
+WantedBy=multi-user.target

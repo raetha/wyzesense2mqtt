@@ -96,4 +96,4 @@ if [ -f "$OPTIONS" ]; then
 fi
 
 cd "$SCRIPT_DIR"
-python3 __main__.py "$@"
+exec python3 __main__.py "$@"

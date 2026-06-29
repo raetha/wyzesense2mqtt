@@ -22,8 +22,10 @@ Please submit pull requests against the devel branch.
   - [Table of Contents](#table-of-contents)
   - [Installation](#installation)
     - [Docker](#docker)
+    - [Remote Bridge (Docker)](#remote-bridge-docker)
     - [Home Assistant App](#home-assistant-app)
-    - [Linux Systemd](#linux-systemd)
+    - [Linux Systemd](docs/linux_systemd_installation.md)
+  - [Remote Bridge](#remote-bridge)
   - [Configuration Files](#configuration-files)
     - [config.yaml](#configyaml)
       - [sensors.yaml](#sensorsyaml)
@@ -39,22 +41,34 @@ Please submit pull requests against the devel branch.
 ## Installation
 
 ### Docker
-This is the most tested method of running the gateway. It allows for persistance and easy migration assuming the hardware dongle moves along with the configuration. All steps are performed from the Docker host, not the container. Images are published to GHCR and Docker Hub.
+This is the most tested method of running the gateway. It allows for persistence and easy migration assuming the hardware dongle moves along with the configuration. All steps are performed from the Docker host, not the container. Images are published to `ghcr.io`.
 
-1. Plug the Wyze Sense Bridge into a USB port on the Docker host. Confirm that it shows up as /dev/hidraw0, if not, update the devices entry in the Docker Compose file with the correct device path.
-2. Copy [`examples/docker-compose.yml.example`](examples/docker-compose.yml.example) to `docker-compose.yml` and [`examples/.env.example`](examples/.env.example) to `.env` in the same directory. Fill in at minimum `WS2M_MQTT_HOST` and `VOL_DATA`. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details on the file format.
-3. Create your local volume mount directory. Use the same path you set for `VOL_DATA` in your `.env` file.
+1. Plug the Wyze Sense Bridge into a USB port on the Docker host. Confirm that it shows up as `/dev/hidraw0`; if not, update the `devices` entry in the Docker Compose file with the correct path.
+2. Copy [`examples/hub/docker-compose.yml.example`](examples/hub/docker-compose.yml.example) to `docker-compose.yml` and [`examples/hub/.env.example`](examples/hub/.env.example) to `.env` in the same directory. Fill in at minimum `WS2M_MQTT_HOST` and `VOL_DATA`. See [Docker Compose Docs](https://docs.docker.com/compose/) for more details.
+3. Create your local volume mount directory using the same path you set for `VOL_DATA`:
 ```bash
-mkdir -p /docker/wyzesense2mqtt/data
+mkdir -p /docker/ws2m-hub/data
 ```
-4. (Optional) Pre-populate a sensors.yaml file for your dongle into `<data>/dongles/<dongle_mac>/sensors.yaml`. This file will automatically be created when sensors are first discovered. The dongle MAC is shown in the startup log.
-5. Start the Docker container
+4. (Optional) Pre-populate a sensors.yaml file for your dongle into `<data>/dongles/<dongle_mac>/sensors.yaml`. This file is created automatically when sensors are first discovered. The dongle MAC is shown in the startup log.
+5. Start the container:
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
-6. Pair sensors following [instructions below](#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, though the sensor version will be unknown and the class will default to opening, i.e. a contact sensor. You should manually update these entries.
+6. Pair sensors following [instructions below](#pairing-a-sensor). Sensors already paired to the dongle are found automatically on start; they will be added with default values (unknown version, contact sensor class) until updated manually.
 
-**Health monitoring:** The container includes a `HEALTHCHECK` that monitors `/tmp/ws2m_healthy`. ws2m writes and periodically touches this file while running normally, and removes it if a dongle fails. The container will report as `unhealthy` within ~90 seconds of a dongle failure or process hang. When unhealthy, check `docker logs wyzesense2mqtt` — the failed dongle and all its sensors will also have been published offline to MQTT for automation triggers.
+**Health monitoring:** The container includes a `HEALTHCHECK` that monitors `/tmp/ws2m_healthy`. ws2m writes and periodically touches this file while running normally, and removes it on dongle failure. The container reports as `unhealthy` within ~90 seconds of a dongle failure or process hang. When unhealthy, check `docker logs ws2m-hub` — the failed dongle and all its sensors will also have been published offline to MQTT for automation triggers.
+
+### Remote Bridge (Docker)
+
+To use a WyzeSense USB dongle on a separate machine from the hub, run the `ws2m-remote` image on that machine. The remote forwards raw USB frames to the hub over an authenticated WebSocket.
+
+**On the hub:** enable the WebSocket listener by setting `hub_ws_enabled: true` in `config.yaml` (or `WS2M_HUB_WS_ENABLED=true` in your hub `.env`). The hub advertises itself via mDNS on the local network by default.
+
+**On the remote machine:**
+1. Copy [`examples/remote/docker-compose.yml.example`](examples/remote/docker-compose.yml.example) to `docker-compose.yml` and [`examples/remote/.env.example`](examples/remote/.env.example) to `.env` in the same directory.
+2. `WS2M_HUB_URL` is optional if the hub and remote are on the same network segment (auto-discovered via mDNS). Set it explicitly when crossing VLANs or in Docker without host networking: `WS2M_HUB_URL=ws://192.168.1.10:8765`.
+3. Start the remote: `docker compose up -d`
+4. Adopt the remote: see [Adopting a Remote](#adopting-a-remote) below.
 
 ### Home Assistant App
 
@@ -74,7 +88,60 @@ for full installation and configuration documentation.
 
 ### Linux Systemd
 
-If you would like to use this project outside of docker, please follow the instructions at [Linux Systemd Installation](docs/linux_systemd_installation.md). This method is not actively tested and may require more knowledge to succesfully implement.
+For hub and remote installations without Docker, see [docs/linux_systemd_installation.md](docs/linux_systemd_installation.md). This method is not actively tested.
+
+## Remote Bridge
+
+The remote bridge lets the hub run on one machine (e.g. your Docker host or Home Assistant server) while the USB dongle lives on a different machine (e.g. a Raspberry Pi in another room). The **remote** (`ws2m-remote` image) forwards raw HID frames to the hub over an authenticated WebSocket.
+
+### How it works
+
+1. The **hub** runs with `hub_ws_enabled: true`. The hub advertises itself via mDNS (`_ws2m._tcp.local.`) so remotes on the same network segment can connect without any explicit URL configuration.
+2. The **remote** connects to the hub — automatically via mDNS, or explicitly via `WS2M_HUB_URL`. On first start it generates a stable UUID and attempts to adopt with the hub.
+3. **Adoption** — press the **Enable Remote Pairing** button on the hub device in HA (or publish any payload to `<self_topic_root>/hub/<uuid>/remote_pair`). The hub enters pairing mode for `hub_remote_pairing_seconds` seconds; the `<self_topic_root>/hub/<uuid>/remote_pairing` state shows `active`. The next unauthenticated remote that connects receives a unique token, saved on both sides.
+4. On subsequent connects the remote presents its token; the hub validates it. No further adoption steps are needed.
+5. On reconnect, the remote replays a ring buffer of recent frames (10-second TTL, 500-frame capacity) so brief network disruptions do not lose sensor events.
+
+### Hub configuration
+
+Enable and tune the WebSocket listener in your hub's `config.yaml` (or via ENV vars):
+
+```yaml
+hub_ws_enabled: true              # enable WebSocket listener for remote connections
+hub_ws_port: 8765                 # WebSocket listener port (default 8765)
+hub_remote_pairing_seconds: 60    # how long pairing mode stays active (default 60)
+hub_ws_mdns: true                 # advertise via mDNS for auto-discovery (default true)
+```
+
+These settings can also be toggled live from the hub device page in Home Assistant.
+
+### Adopting a remote
+
+1. Start the remote container on the machine with the USB dongle.
+2. In HA, go to the **WyzeSense Hub** device page and press **Enable Remote Pairing**. The pairing state sensor shows `active` for 60 seconds (or your configured duration).
+3. The remote is adopted automatically: its token is saved on both sides. Future restarts reconnect without any further action.
+
+### Remote environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `WS2M_HUB_URL` | *(auto)* | Hub WebSocket URL, e.g. `ws://192.168.1.10:8765`. Optional when hub and remote are on the same network and mDNS is available. |
+| `WS2M_DEVICE` | `auto` | HID device path, e.g. `/dev/hidraw0`. `auto` detects all matching dongles. |
+| `WS2M_REMOTE_ID` | *(from data dir)* | Override the remote's stable UUID. |
+| `WS2M_DATA_DIR` | `/app/data` | Directory for persistent state (`remote_id`, `hub_token`). |
+| `WS2M_HUB_ID` | *(none)* | Preferred hub UUID when multiple hubs are discoverable via mDNS. |
+| `WS2M_DISCOVERY_TIMEOUT` | `30` | mDNS discovery timeout in seconds. |
+
+### HA entities (remote)
+
+Each adopted remote appears in HA as a **WyzeSense Remote `<UUID>`** device linked to the hub. The device shows as **available** (online) when the ws2m-remote service is connected to the hub, and **unavailable** (offline) when the WebSocket connection drops — this is the remote's connectivity indicator, mirroring how the hub device's availability tracks its MQTT connection. The remote device includes:
+- **Health** — `healthy` / `degraded` based on the remote process's self-reported health.
+- **Connected dongles** — count of WyzeSense dongles currently being relayed by this remote.
+- **Restart** — button to restart the remote container.
+- **Remove remote** — button that clears all MQTT topics for this remote and its entire dongle and sensor chain, and deletes the remote's token so it cannot reconnect without re-pairing. Use this after permanently decommissioning a remote so HA removes all related devices cleanly.
+- **Cleanup disconnected dongles** — button that clears MQTT topics and data for dongles relayed by this remote that have failed or disconnected, leaving healthy dongles untouched. Use this when a remote's dongle was physically removed but the remote itself is still running.
+
+Each dongle relayed by a remote appears as its own **WyzeSense Dongle `<MAC>`** device in HA — the same device type as locally-attached dongles — with the same set of entities: **Connection state** (online/offline), **Scan for sensor**, and **Remove sensor**. Hub health is independent of remote health.
 
 ## Configuration Files
 The gateway uses three config files located in the config directory. Examples of each are below and in the repository.
@@ -93,6 +160,10 @@ self_topic_root: ws2m
 hass_topic_root: homeassistant
 hass_discovery: true
 usb_dongle: auto
+hub_ws_enabled: false
+hub_ws_port: 8765
+hub_remote_pairing_seconds: 60
+hub_ws_mdns: true
 log_level: INFO
 ```
 
@@ -106,9 +177,13 @@ log_level: INFO
 | `mqtt_keepalive` | `60` | Broker keepalive in seconds |
 | `self_topic_root` | `ws2m` | Topic prefix for all ws2m data topics. Change when running multiple instances on the same broker. |
 | `hass_topic_root` | `homeassistant` | HA MQTT discovery prefix. Only change if you have set `mqtt: discovery_prefix` in HA's `configuration.yaml`. |
-| `hass_discovery` | `true` | Publish HA MQTT discovery config. Disable to suppress all discovery; ws2m cleans up retained topics on startup when false. |
-| `usb_dongle` | `auto` | USB dongle path. `auto` detects all connected dongles; set to `/dev/hidrawN` to pin to a specific device. |
-| `log_level` | `INFO` | Log verbosity. `DEBUG`, `INFO`, `WARNING`, or `ERROR`. Also adjustable live from the HA service device page. |
+| `hass_discovery` | `true` | Publish HA MQTT discovery config. When false, ws2m clears all retained discovery config topics on startup. All `ws2m/` state and data topics continue to function normally — only the `homeassistant/` discovery payloads are suppressed. |
+| `usb_dongle` | `auto` | USB dongle path. `auto` detects all connected dongles automatically; `/dev/hidrawN` pins to one specific device. |
+| `hub_ws_enabled` | `false` | Enable the WebSocket listener to accept connections from `ws2m-remote` instances. |
+| `hub_ws_port` | `8765` | WebSocket listener port for remote connections. |
+| `hub_remote_pairing_seconds` | `60` | How long remote pairing mode remains active after pressing Enable Remote Pairing. |
+| `hub_ws_mdns` | `true` | Advertise the hub via mDNS so remotes can auto-discover without `WS2M_HUB_URL`. |
+| `log_level` | `INFO` | Log verbosity: `DEBUG`, `INFO`, `WARNING`, or `ERROR`. Also adjustable live from the hub device page in HA. |
 
 
 
@@ -172,23 +247,23 @@ At this time only a single sensor can be properly paired at once. Please repeat 
 
 With multi-dongle support, scan is scoped to a specific dongle. If you only have one dongle the MAC is shown in the startup log.
 
-1. Publish a blank message (payload `scan`) to the MQTT topic `<self_topic_root>/dongle_<dongle_mac>/scan` (e.g. `ws2m/dongle_AABBCCDD/scan`). This can be done via Home Assistant or any MQTT client. With HA discovery enabled, a **Scan for sensor** button appears on each dongle's device page.
+1. Publish a blank message (payload `scan`) to the MQTT topic `<self_topic_root>/dongle/<dongle_mac>/scan` (e.g. `ws2m/dongle/AABBCCDD/scan`). This can be done via Home Assistant or any MQTT client. With HA discovery enabled, a **Scan for sensor** button appears on each dongle's device page.
 2. Use the pin tool that came with your Wyze Sense sensors to press the reset switch on the side of the sensor. Hold until the red LED blinks.
 
 ### Removing a Sensor
 Remove is also dongle-scoped — the sensor can only be removed from the dongle it is paired with.
 
-1. Publish the sensor MAC address as the payload to the MQTT topic `<self_topic_root>/dongle_<dongle_mac>/remove` (e.g. `ws2m/dongle_AABBCCDD/remove`). The payload should be the 8-character MAC, e.g. `EEFFGGHH`. With HA discovery enabled, a **Remove sensor** button also appears on each sensor's device page.
+1. Publish the sensor MAC address as the payload to `<self_topic_root>/dongle/<dongle_mac>/remove` (e.g. `ws2m/dongle/AABBCCDD/remove`). The payload should be the 8-character MAC, e.g. `AABBCCDD`. With HA discovery enabled, a **Remove sensor** button also appears on each sensor's device page.
 
 ### Reload Sensors
 If you have modified a `sensors.yaml` while the gateway is running, you can trigger a reload of all dongles without restarting the service or Docker container.
 
-1. Publish a blank message (payload `reload`) to the MQTT topic `<self_topic_root>/reload` (default: `ws2m/reload`). With HA discovery enabled, a **Reload config** button appears on the WyzeSense2MQTT service device page.
+1. Publish a blank message (payload `reload`) to `<self_topic_root>/hub/<uuid>/reload`. With HA discovery enabled, a **Reload config** button appears on the WyzeSense Hub device page in HA.
 
 ### Removing a Dongle
 If a dongle is permanently removed (replaced, retired, or lost), ws2m retains its data directory and HA entities until you explicitly clean them up. A simple restart or USB glitch will not trigger cleanup — the data is preserved for recovery.
 
-**From Home Assistant:** A **Cleanup removed dongles** button appears on the WyzeSense2MQTT service device page (under the **Configuration** entity category, not the default dashboard view). Pressing it compares the data directories on disk against the currently-connected dongles. Any dongle no longer connected has its retained MQTT discovery and status topics cleared and its `data/dongles/<mac>/` directory deleted. The operation is idempotent — if all known dongles are connected it does nothing.
+**From Home Assistant:** A **Cleanup removed dongles** button appears on the WyzeSense2MQTT hub device page (under the **Configuration** entity category, not the default dashboard view). Pressing it compares the data directories on disk against the currently-connected dongles. Any dongle no longer connected has its retained MQTT discovery and status topics cleared and its `data/dongles/<mac>/` directory deleted. The operation is idempotent — if all known dongles are connected it does nothing.
 
 > **Note:** Only press this button after a deliberate permanent removal. If a dongle is temporarily disconnected or experiencing a USB fault, wait until it is reconnected before using this button to avoid losing its sensor configuration.
 

@@ -9,7 +9,6 @@ invocations don't error, invalid ones do, and --help exits cleanly.
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # cli/dongle_tool.py
 # ---------------------------------------------------------------------------
@@ -96,6 +95,7 @@ def test_dongle_tool_unknown_command_exits_nonzero():
 
 def test_mqtt_tool_help_exits_zero():
     import sys
+
     import cli.mqtt_tool as mt
 
     with pytest.raises(SystemExit) as exc:

@@ -8,7 +8,7 @@ Primary sources:
 - PR #63 (drinfernoo): keypad HMS events
 - PR #82 (HclX): chime play command
 
-All implementation lives in `wyzesense2mqtt/dongle_protocol.py`.
+All implementation lives in `hub/dongle_protocol.py`.
 
 ---
 
