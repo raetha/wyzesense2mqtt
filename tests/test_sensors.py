@@ -634,6 +634,11 @@ def test_clear_pins_removes_all(tmp_dongle_dir):
     assert result is True
     assert reg.sensors["KPADKPAD"]["pins"] == []
 
+    # Verify the empty list was persisted — reload from disk and check
+    reg2 = SensorRegistry(TEST_DONGLE_MAC)
+    reg2.load_sensors()
+    assert reg2.sensors["KPADKPAD"]["pins"] == []
+
 
 def test_clear_pins_when_empty_returns_false(tmp_dongle_dir):
     from sensors import SensorRegistry

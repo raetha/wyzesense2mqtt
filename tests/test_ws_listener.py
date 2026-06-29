@@ -352,3 +352,207 @@ class TestHandleConnection:
         on_conn.return_value = None
         listener._handle_connection(ws)
         ws.close.assert_not_called()
+
+    def test_handle_connection_close_exception_is_swallowed(self):
+        """If ws.close() raises during auth failure cleanup, _handle_connection must not re-raise."""
+        listener, _ = _build_listener(get_pairing_active=lambda: False)
+        ws = _make_ws([_auth_msg(token=None)])
+        ws.close.side_effect = OSError("connection already closed")
+        listener._handle_connection(ws)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# stop() — server shutdown
+# ---------------------------------------------------------------------------
+
+
+class TestStop:
+    def test_stop_shuts_down_server_and_clears_reference(self):
+        """stop() calls shutdown() on the server and sets _server to None."""
+        from unittest.mock import MagicMock
+
+        listener, _ = _build_listener()
+        mock_server = MagicMock()
+        listener._server = mock_server
+
+        listener.stop()
+
+        mock_server.shutdown.assert_called_once()
+        assert listener._server is None
+
+    def test_stop_noop_when_no_server(self):
+        """stop() is a no-op when _server is None."""
+        listener, _ = _build_listener()
+        listener._server = None
+        listener.stop()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Token file read error (OSError on disk)
+# ---------------------------------------------------------------------------
+
+
+class TestTokenFileReadError:
+    def test_oserror_reading_token_file_falls_through_to_auth_fail(self, tmp_path):
+        """If reading the stored token raises OSError, the provided token cannot be
+        validated and auth_fail is sent."""
+        from unittest.mock import patch
+
+        remote_id = "test-remote-uuid"
+        remotes_path = tmp_path / "remotes"
+        token_dir = remotes_path / remote_id
+        token_dir.mkdir(parents=True, exist_ok=True)
+        (token_dir / "token").write_text("correct-token")
+
+        listener, on_conn = _build_listener(remotes_path=remotes_path)
+        ws = _make_ws([_auth_msg(token="correct-token", remote_id=remote_id)])
+
+        with patch("pathlib.Path.read_text", side_effect=OSError("disk error")):
+            with pytest.raises(ValueError, match="Invalid token"):
+                listener._authenticate(ws, "127.0.0.1:1234")
+
+        text_sends = [c.args[0] for c in ws.send.call_args_list if isinstance(c.args[0], str)]
+        assert any('"auth_fail"' in m for m in text_sends)
+        on_conn.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Token directory creation error (OSError during adoption)
+# ---------------------------------------------------------------------------
+
+
+class TestTokenDirectoryCreateError:
+    def test_oserror_creating_token_dir_raises_runtime_error(self, tmp_path):
+        """If mkdir raises OSError during adoption, a RuntimeError is raised."""
+        from unittest.mock import patch
+
+        remotes_path = tmp_path / "remotes"
+        listener, on_conn = _build_listener(
+            remotes_path=remotes_path,
+            get_pairing_active=lambda: True,
+        )
+        ws = _make_ws([_auth_msg(token=None)])
+
+        with patch("pathlib.Path.mkdir", side_effect=OSError("read-only filesystem")):
+            with pytest.raises(RuntimeError, match="Could not save token"):
+                listener._authenticate(ws, "127.0.0.1:1234")
+
+        on_conn.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# auth_ack edge cases (adoption path)
+# ---------------------------------------------------------------------------
+
+
+class TestAuthAckEdgeCases:
+    def test_malformed_json_ack_raises(self):
+        """A non-JSON auth_ack text message raises ValueError."""
+        import tempfile
+
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        remotes_path = tmp / "remotes"
+        listener, on_conn = _build_listener(
+            remotes_path=remotes_path,
+            get_pairing_active=lambda: True,
+        )
+        ws = _make_ws(
+            [
+                _auth_msg(token=None),
+                "not valid json }{{",  # malformed ack
+            ]
+        )
+        # Malformed JSON → ack_msg becomes {} → type != "auth_ack" → ValueError
+        with pytest.raises(ValueError, match="auth_ack"):
+            listener._authenticate(ws, "127.0.0.1:1234")
+
+    def test_wrong_ack_type_raises(self):
+        """An auth_ack message with the wrong type field raises ValueError."""
+        import tempfile
+
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        remotes_path = tmp / "remotes"
+        listener, on_conn = _build_listener(
+            remotes_path=remotes_path,
+            get_pairing_active=lambda: True,
+        )
+        ws = _make_ws(
+            [
+                _auth_msg(token=None),
+                json.dumps({"type": "unexpected"}),
+            ]
+        )
+        with pytest.raises(ValueError, match="auth_ack"):
+            listener._authenticate(ws, "127.0.0.1:1234")
+
+    def test_binary_ack_raises(self):
+        """A binary (non-text) auth_ack message raises ValueError."""
+        import tempfile
+
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        remotes_path = tmp / "remotes"
+        listener, on_conn = _build_listener(
+            remotes_path=remotes_path,
+            get_pairing_active=lambda: True,
+        )
+        ws = _make_ws(
+            [
+                _auth_msg(token=None),
+                b"\xaa\x55\x00\x00",  # binary, not text
+            ]
+        )
+        with pytest.raises(ValueError, match="auth_ack text message"):
+            listener._authenticate(ws, "127.0.0.1:1234")
+
+
+# ---------------------------------------------------------------------------
+# replay_done edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestReplayDoneEdgeCases:
+    def _make_frame(self) -> bytes:
+        return b"\x01" * 64
+
+    def test_malformed_json_replay_done_is_warned_not_raised(self):
+        """A non-JSON replay_done text message logs a warning but does not raise."""
+        token = "my-token"
+        listener, on_conn, _ = _build_listener_with_stored_token(token)
+        ws = _make_ws(
+            [
+                _auth_msg(token=token, queue_depth=1),
+                self._make_frame(),
+                "not valid json }{{",  # malformed replay_done
+            ]
+        )
+        # Must not raise — just warns
+        listener._authenticate(ws, "127.0.0.1:1234")
+        on_conn.assert_called_once()
+
+    def test_wrong_replay_done_type_is_warned_not_raised(self):
+        """A replay_done message with the wrong type field logs a warning but proceeds."""
+        token = "my-token"
+        listener, on_conn, _ = _build_listener_with_stored_token(token)
+        ws = _make_ws(
+            [
+                _auth_msg(token=token, queue_depth=1),
+                self._make_frame(),
+                json.dumps({"type": "unexpected"}),
+            ]
+        )
+        listener._authenticate(ws, "127.0.0.1:1234")
+        on_conn.assert_called_once()
+
+    def test_binary_replay_done_is_warned_not_raised(self):
+        """A binary replay_done message logs a warning but does not raise."""
+        token = "my-token"
+        listener, on_conn, _ = _build_listener_with_stored_token(token)
+        ws = _make_ws(
+            [
+                _auth_msg(token=token, queue_depth=1),
+                self._make_frame(),
+                b"\xaa\x55\x00\x00",  # binary instead of text
+            ]
+        )
+        listener._authenticate(ws, "127.0.0.1:1234")
+        on_conn.assert_called_once()

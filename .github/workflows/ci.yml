@@ -4,9 +4,9 @@ name: CI
 
 on:
   push:
-    branches: ["master", "devel"]
+    branches: ["main"]
   pull_request:
-    branches: ["master", "devel"]
+    branches: ["main"]
 
 jobs:
   # ── Lint with ruff ──────────────────────────────────────────────────────

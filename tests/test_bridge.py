@@ -1630,7 +1630,12 @@ def test_on_mqtt_hub_ws_enabled_false_also_stops_mdns(tmp_config_dir, sample_con
 
 
 def test_hub_starts_without_dongle(tmp_config_dir, sample_config):
-    """Bridge.start() does not raise when no dongles are found."""
+    """Bridge startup logic does not raise when no dongles are found.
+
+    This test exercises the no-dongle warning path in isolation using a
+    partially-constructed Bridge.  Full Bridge.start() requires a live MQTT
+    broker and is covered by integration tests.
+    """
     import threading
     from unittest.mock import MagicMock, patch
 

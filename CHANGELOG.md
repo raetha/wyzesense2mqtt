@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [4.0.0] — TBD
+## [4.0.0] — 2026-06-29
 
 ### Breaking changes
 
@@ -13,7 +13,8 @@ is now `ghcr.io/<owner>/ws2m-hub` (was `ghcr.io/<owner>/wyzesense2mqtt`).
 Updating to the new image requires editing your compose file; while there,
 all environment variables must also be updated to use a `WS2M_` prefix
 (e.g. `MQTT_HOST` → `WS2M_MQTT_HOST`). Unprefixed names are no longer
-accepted. See `examples/hub/` for updated compose and env file examples.
+accepted. Updated compose and env file examples are in `examples/hub/`;
+Dockerfiles are `docker/Dockerfile.hub` and `docker/Dockerfile.remote`.
 The remote image is `ghcr.io/<owner>/ws2m-remote` (new — see Added).
 
 **Data directory renamed** — the default data directory inside the container
@@ -102,7 +103,7 @@ files are migrated automatically on first start.
 - **Docker `HEALTHCHECK`** — the bridge writes and periodically touches
   `/tmp/ws2m_healthy` while running; removes it on failure. Container flips
   unhealthy within ~90 s of a dongle failure or process hang.
-- **Test suite** — 509 unit and integration tests covering all modules.
+- **Test suite** — 520 unit and integration tests covering all modules.
   Hardware smoke tests behind `pytest -m dongle`. Run with
   `bash scripts/run_tests.sh`.
 - **`cli/mqtt_tool.py`** — MQTT maintenance CLI: `cleanup-discovery` finds
@@ -150,7 +151,6 @@ files are migrated automatically on first start.
   `config.yaml` on first load.
 - Per-sensor `timeout` override removed from `sensors.yaml`; timeouts are now
   type-driven (V1: 8 h, V2: 4 h, Chime: 24 h); silently stripped on first load.
-- Docker Compose and environment variable examples are in `examples/hub/` and `examples/remote/`. Dockerfiles are `docker/Dockerfile.hub` and `docker/Dockerfile.remote`.
 
 ### Fixed
 
@@ -170,14 +170,8 @@ files are migrated automatically on first start.
 - **`invert_state` re-implemented** — present in `sensors.yaml` since v1.1 but
   dropped from bridge logic in v3.1.0. Now applied correctly: swaps
   `payload_on`/`payload_off` in HA discovery for contact and motion sensors.
-- Sensor name shown in online/offline log messages: `AABBCCDD (Front Door) is
-  back online`.
-- Scan `TimeoutError` now logged as a warning instead of swallowed silently.
 - Non-ASCII MAC bytes no longer crash event parsing; decoded via latin-1 with a
   warning.
-- Repeated "auto-added sensor" warnings suppressed after first occurrence per
-  session.
-- `clear_topics()` `AttributeError` on sensor removal fixed.
 
 ### Migration notes
 
@@ -210,4 +204,5 @@ migration runs; subsequent starts skip the migration.
   default setup in repository security settings.
 
 
-[Unreleased]: https://github.com/raetha/wyzesense2mqtt/compare/v3.0.2...HEAD
+[4.0.0]: https://github.com/raetha/wyzesense2mqtt/compare/v3.1.0...v4.0.0
+[3.1.0]: https://github.com/raetha/wyzesense2mqtt/compare/v3.0.2...v3.1.0

@@ -1,29 +1,86 @@
-name: Publish devel container images
+# Devel branch CI + publish pipeline.
+#
+# Runs entirely from the devel branch so that changes to this file take effect
+# immediately without requiring a sync to main.  The publish jobs depend on all
+# three CI jobs passing — same gate as the main branch CI, no workflow_run needed.
+
+name: Devel CI + publish
 
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches:
-      - devel
+  push:
+    branches: ["devel"]
+  pull_request:
+    branches: ["devel"]
 
 jobs:
-  # ── Hub image ──────────────────────────────────────────────────────────────
+  # ── Lint with ruff ──────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Run ruff check
+        run: ruff check hub/ remote/ tests/
+      - name: Run ruff format check
+        run: ruff format --check hub/ remote/ tests/
 
+  # ── Verify dependencies install and the app imports cleanly ────────────────
+  build:
+    name: Install & import check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r hub/requirements.txt -r remote/requirements.txt
+      - name: Byte-compile and syntax-check sources
+        run: |
+          python -m compileall -q hub/
+          python -m compileall -q remote/
+
+  # ── Test suite ──────────────────────────────────────────────────────────────
+  test:
+    name: Tests (pytest)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r hub/requirements.txt -r remote/requirements.txt
+          pip install pytest
+      - name: Run test suite
+        run: pytest
+
+  # ── Hub image ───────────────────────────────────────────────────────────────
   hub-ghcr-io:
     name: Hub → ghcr.io
-    if: github.event.workflow_run.conclusion == 'success'
+    needs: [lint, build, test]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       packages: write
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/checkout@v7
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -60,22 +117,17 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── Remote image ───────────────────────────────────────────────────────────
-
+  # ── Remote image ────────────────────────────────────────────────────────────
   remote-ghcr-io:
     name: Remote → ghcr.io
-    if: github.event.workflow_run.conclusion == 'success'
+    needs: [lint, build, test]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       packages: write
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/checkout@v7
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -112,21 +164,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── Post-publish notification ──────────────────────────────────────────────
-
+  # ── Post-publish notification ────────────────────────────────────────────────
   notify-ha-apps:
     name: Notify HA Apps repo
     needs: [hub-ghcr-io, remote-ghcr-io]
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/checkout@v7
 
       - name: Extract version from config.py
         id: version

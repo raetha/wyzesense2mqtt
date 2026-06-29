@@ -1,11 +1,11 @@
-# WyzeSense to MQTT Gateway
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge)](http://makeapullrequest.com)
+[![Release](https://img.shields.io/github/v/release/raetha/wyzesense2mqtt?style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/releases)
+[![Validation](https://img.shields.io/github/actions/workflow/status/raetha/wyzesense2mqtt/ci.yml?label=validation&style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/actions/workflows/ci.yml)
+[![Issues](https://img.shields.io/github/issues/raetha/wyzesense2mqtt?style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/issues)
+[![PRs](https://img.shields.io/github/issues-pr/raetha/wyzesense2mqtt?style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/pulls)
+[![License](https://img.shields.io/github/license/raetha/wyzesense2mqtt?style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/blob/main/LICENSE)
 
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](http://makeapullrequest.com)
-[![GitHub License](https://img.shields.io/github/license/raetha/wyzesense2mqtt)](https://github.com/raetha/wyzesense2mqtt/blob/master/LICENSE)
-[![GitHub Issues](https://img.shields.io/github/issues/raetha/wyzesense2mqtt)](https://github.com/raetha/wyzesense2mqtt/issues)
-[![GitHub PRs](https://img.shields.io/github/issues-pr/raetha/wyzesense2mqtt)](https://github.com/raetha/wyzesense2mqtt/pulls)
-[![GitHub Release](https://img.shields.io/github/v/release/raetha/wyzesense2mqtt)](https://github.com/raetha/wyzesense2mqtt/releases)
-[![Python Validation](https://github.com/raetha/wyzesense2mqtt/workflows/Python%20Validation/badge.svg)](https://github.com/raetha/wyzesense2mqtt/actions?query=workflow%3A%22Python+Validation%22)
+# WyzeSense to MQTT Gateway
 
 Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use the same MQTT discovery mechanisms. The gateway allows direct local access to [Wyze Sense](https://wyze.com/wyze-sense.html) products without the need for a Wyze Cam or cloud services. This project and its dependencies have no relation to Wyze Labs Inc.
 
