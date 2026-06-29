@@ -9,9 +9,17 @@ Users should not invoke any other module directly.  See README.md for
 Docker and systemd service usage.
 """
 
+import signal
 import sys
 
 from config import init_logging, load_config
+
+
+def _handle_sigterm(signum, frame):
+    raise KeyboardInterrupt
+
+
+signal.signal(signal.SIGTERM, _handle_sigterm)
 
 
 def main() -> None:

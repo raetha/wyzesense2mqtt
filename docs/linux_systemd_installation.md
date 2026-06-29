@@ -52,34 +52,16 @@ log_level: INFO
 
 Alternatively, set configuration via environment variables (`WS2M_MQTT_HOST`, etc.) in the systemd service file.
 
-### 6. Create the systemd service
+### 6. Install the systemd service
 
-An example service file is included in the release package. Copy and install it:
+An example service file is included in the release package at `ws2m-hub.service.example`
+(also available in [`examples/hub/`](../examples/hub/) in the repository). Copy and install it:
 
 ```bash
 sudo cp /opt/ws2m/hub/ws2m-hub.service.example /etc/systemd/system/ws2m-hub.service
 ```
 
 Review and edit the installed file if your installation path differs from `/opt/ws2m/hub`.
-
-The service file content:
-```ini
-[Unit]
-Description=WyzeSense2MQTT Hub
-Documentation=https://github.com/raetha/wyzesense2mqtt
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/ws2m/hub
-ExecStart=/opt/ws2m/hub/service.sh
-Restart=always
-KillSignal=SIGINT
-Environment=WS2M_DATA_DIR=/opt/ws2m/data
-
-[Install]
-WantedBy=multi-user.target
-```
 
 ### 7. Start and enable the service
 
@@ -133,36 +115,16 @@ pip3 install -r /opt/ws2m/remote/requirements.txt
 mkdir -p /opt/ws2m/remote-data
 ```
 
-### 5. Create the systemd service
+### 5. Install the systemd service
 
-An example service file is included in the release package. Copy and install it:
+An example service file is included in the release package at `ws2m-remote.service.example`
+(also available in [`examples/remote/`](../examples/remote/) in the repository). Copy and install it:
 
 ```bash
 sudo cp /opt/ws2m/remote/ws2m-remote.service.example /etc/systemd/system/ws2m-remote.service
 ```
 
 Review the installed file and uncomment/set `WS2M_HUB_URL` if mDNS discovery is not available on your network.
-
-The service file content:
-```ini
-[Unit]
-Description=WyzeSense2MQTT Remote Bridge
-Documentation=https://github.com/raetha/wyzesense2mqtt
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/ws2m/remote
-ExecStart=/opt/ws2m/remote/service.sh
-Restart=always
-KillSignal=SIGINT
-Environment=WS2M_DATA_DIR=/opt/ws2m/remote-data
-# Uncomment and set if mDNS discovery is not available:
-# Environment=WS2M_HUB_URL=ws://192.168.1.10:8765
-
-[Install]
-WantedBy=multi-user.target
-```
 
 ### 6. Start and enable the service
 
@@ -182,4 +144,3 @@ journalctl -u ws2m-remote -f
 ### 8. Adopt the remote
 
 Follow the [adoption instructions](../README.md#adopting-a-remote) in the main README. The hub must have `hub_ws_enabled: true` in its configuration.
-

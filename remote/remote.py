@@ -516,8 +516,9 @@ class Remote:
                         try:
                             parsed = json.loads(msg)
                             if parsed.get("type") == "restart":
-                                self._logger.warning("Restart requested by hub — shutting down")
+                                self._logger.warning("Restart requested by hub — shutting down cleanly")
                                 _HEALTH_FILE.unlink(missing_ok=True)
+                                self.stop()
                                 os._exit(0)
                         except Exception:
                             pass

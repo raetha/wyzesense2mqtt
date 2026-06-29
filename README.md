@@ -113,7 +113,7 @@ hub_remote_pairing_seconds: 60    # how long pairing mode stays active (default 
 hub_ws_mdns: true                 # advertise via mDNS for auto-discovery (default true)
 ```
 
-These settings can also be toggled live from the hub device page in Home Assistant.
+These settings can also be toggled live from the hub device page in Home Assistant. The hub device page also has a **Restart** button that performs a clean shutdown — publishing all devices offline, saving state, and disconnecting MQTT — before exiting so Docker or systemd restarts the process automatically.
 
 ### Adopting a remote
 
@@ -137,7 +137,7 @@ These settings can also be toggled live from the hub device page in Home Assista
 Each adopted remote appears in HA as a **WyzeSense Remote `<UUID>`** device linked to the hub. The device shows as **available** (online) when the ws2m-remote service is connected to the hub, and **unavailable** (offline) when the WebSocket connection drops — this is the remote's connectivity indicator, mirroring how the hub device's availability tracks its MQTT connection. The remote device includes:
 - **Health** — `healthy` / `degraded` based on the remote process's self-reported health.
 - **Connected dongles** — count of WyzeSense dongles currently being relayed by this remote.
-- **Restart** — button to restart the remote container.
+- **Restart** — performs a clean shutdown of the remote process (closes the HID connection, closes the WebSocket) and exits so Docker or systemd restarts it automatically. Use this to pick up config changes or recover from a degraded state without touching the machine the remote runs on.
 - **Remove remote** — button that clears all MQTT topics for this remote and its entire dongle and sensor chain, and deletes the remote's token so it cannot reconnect without re-pairing. Use this after permanently decommissioning a remote so HA removes all related devices cleanly.
 - **Cleanup disconnected dongles** — button that clears MQTT topics and data for dongles relayed by this remote that have failed or disconnected, leaving healthy dongles untouched. Use this when a remote's dongle was physically removed but the remote itself is still running.
 

@@ -8,7 +8,6 @@ Type=simple
 WorkingDirectory=/opt/ws2m/hub
 ExecStart=/opt/ws2m/hub/service.sh
 Restart=always
-KillSignal=SIGINT
 Environment=WS2M_DATA_DIR=/opt/ws2m/data
 
 [Install]

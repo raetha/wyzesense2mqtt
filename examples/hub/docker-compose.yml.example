@@ -9,8 +9,6 @@ services:
     image: ghcr.io/raetha/ws2m-hub:${IMAGE_TAG:-latest}
     network_mode: bridge
     restart: unless-stopped  # Required: the hub Restart button uses os._exit(0); Docker will restart it
-    tty: true
-    stop_signal: SIGINT
     environment:
       TZ: "${TZ:-UTC}"
       WS2M_MQTT_HOST: "${WS2M_MQTT_HOST}"

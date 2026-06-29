@@ -27,7 +27,15 @@ import argparse
 import logging
 import os
 import pathlib
+import signal
 import sys
+
+
+def _handle_sigterm(signum, frame):
+    raise KeyboardInterrupt
+
+
+signal.signal(signal.SIGTERM, _handle_sigterm)
 
 
 def _env(key: str, default: str | None = None) -> str | None:

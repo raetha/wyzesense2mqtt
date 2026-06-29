@@ -1127,10 +1127,9 @@ def test_on_mqtt_remote_pair_activates_pairing_and_deactivates(tmp_config_dir, s
 # ---------------------------------------------------------------------------
 
 
-def test_on_mqtt_hub_restart_calls_os_exit(tmp_config_dir, sample_config):
-    """_on_mqtt_hub_restart calls os._exit(0) after publishing offline."""
-    import os
-    from unittest.mock import MagicMock, patch
+def test_on_mqtt_hub_restart_sets_restart_event(tmp_config_dir, sample_config):
+    """_on_mqtt_hub_restart sets _restart_requested so run() can exit cleanly."""
+    import threading
 
     from bridge import Bridge
 
@@ -1139,41 +1138,31 @@ def test_on_mqtt_hub_restart_calls_os_exit(tmp_config_dir, sample_config):
     bridge._hub_id = "test-hub-id"
     bridge._logger = logging.getLogger("test.bridge")
     bridge._gateway = MagicMock()
-    bridge._gateway.publish.return_value = MagicMock(rc=0)
+    bridge._restart_requested = threading.Event()
+
+    bridge._on_mqtt_hub_restart(None, None, MagicMock())
+
+    assert bridge._restart_requested.is_set()
+
+
+def test_on_mqtt_hub_restart_does_not_call_os_exit_directly(tmp_config_dir, sample_config):
+    """_on_mqtt_hub_restart must not call os._exit() — clean exit is handled by run()."""
+    import os
+    import threading
+    from unittest.mock import patch
+
+    from bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._config = sample_config
+    bridge._hub_id = "test-hub-id"
+    bridge._logger = logging.getLogger("test.bridge")
+    bridge._gateway = MagicMock()
+    bridge._restart_requested = threading.Event()
 
     with patch.object(os, "_exit") as mock_exit:
         bridge._on_mqtt_hub_restart(None, None, MagicMock())
-        mock_exit.assert_called_once_with(0)
-
-
-def test_on_mqtt_hub_restart_publishes_offline_before_exit(tmp_config_dir, sample_config):
-    """_on_mqtt_hub_restart publishes 'offline' to hub health topic before exiting."""
-    import os
-    from unittest.mock import MagicMock, patch
-
-    from bridge import Bridge
-
-    bridge = Bridge.__new__(Bridge)
-    bridge._config = sample_config
-    bridge._hub_id = "test-hub-id"
-    bridge._logger = logging.getLogger("test.bridge")
-    bridge._gateway = MagicMock()
-    bridge._gateway.publish.return_value = MagicMock(rc=0)
-
-    published_topics = []
-
-    def capture_publish(topic, payload, **kwargs):
-        published_topics.append((topic, payload))
-        return MagicMock(rc=0)
-
-    bridge._gateway.publish = capture_publish
-
-    with patch.object(os, "_exit"):
-        bridge._on_mqtt_hub_restart(None, None, MagicMock())
-
-    assert any("hub/test-hub-id/health" in t and p == "offline" for t, p in published_topics), (
-        f"Expected offline on hub health topic; got {published_topics}"
-    )
+        mock_exit.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

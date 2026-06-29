@@ -77,7 +77,6 @@ MQTT topics (v2 schema)
 """
 
 import logging
-import os
 import pathlib
 import shutil
 import threading
@@ -1090,6 +1089,9 @@ class Bridge:
         self._remote_pairing_expires: float = 0.0
         self._remote_pairing_lock = threading.Lock()
 
+        # Set by the MQTT restart callback to wake run() and trigger a clean exit
+        self._restart_requested = threading.Event()
+
     @property
     def _is_remote_pairing_active(self) -> bool:
         """Return True if pairing mode is currently active."""
@@ -1462,25 +1464,13 @@ class Bridge:
     def _on_mqtt_hub_restart(self, client, userdata, msg) -> None:
         """Handle a hub restart button press from HA.
 
-        Publishes offline to hub health topic so HA immediately shows the hub
-        as offline, then exits the process so the container restart policy
-        (restart: unless-stopped) restarts it.
+        Signals the main run() loop to perform a clean shutdown, then exit
+        so the container restart policy brings the process back up.  The
+        actual stop() call happens on the main thread to avoid deadlocking
+        paho-mqtt's network loop.
         """
-        self._logger.warning("Restart requested via MQTT — shutting down")
-        if self._gateway and self._config and self._hub_id:
-            cfg = self._config
-            try:
-                self._gateway.publish(
-                    f"{cfg['self_topic_root']}/hub/{self._hub_id}/health",
-                    "offline",
-                    is_json=False,
-                    wait=True,
-                    qos=QOS_STATUS,
-                    retain=RETAIN_STATUS,
-                )
-            except Exception:
-                pass
-        os._exit(0)
+        self._logger.warning("Restart requested via MQTT — signalling main thread")
+        self._restart_requested.set()
 
     def _on_mqtt_remote_restart(self, remote_id: str, transport: dongle_protocol.RemoteTransport):
         """Return an MQTT callback that forwards a restart command to the named remote."""
@@ -2020,7 +2010,12 @@ class Bridge:
         """Run the main availability-check loop until interrupted."""
         try:
             while True:
-                time.sleep(5)
+                # Use wait() instead of sleep() so a restart request wakes us immediately.
+                self._restart_requested.wait(timeout=5)
+
+                if self._restart_requested.is_set():
+                    self._logger.warning("Restart requested — performing clean shutdown")
+                    raise KeyboardInterrupt
 
                 with self._workers_lock:
                     workers = list(self._workers)
