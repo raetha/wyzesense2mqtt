@@ -33,9 +33,3 @@ services:
       - "${WS2M_HUB_WS_PORT:-8765}:${WS2M_HUB_WS_PORT:-8765}"
     volumes:
       - "${VOL_DATA}:/app/data"
-    healthcheck:
-      test: ["CMD", "test", "-f", "/tmp/ws2m_healthy"]
-      interval: 30s
-      timeout: 5s
-      start_period: 30s
-      retries: 3
