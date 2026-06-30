@@ -72,7 +72,7 @@ files are migrated automatically on first start.
   (count of relayed dongles), a `Restart` button, and a **Remove remote** button
   that clears all MQTT topics for the remote and its entire dongle and sensor chain.
   See `examples/hub/` and `examples/remote/` for compose and service file examples.
-- **Multi-dongle support** — `usb_dongle: auto` (the default) connects to all
+- **Multi-dongle support** — `dongle: auto` (the default) connects to all
   WyzeSense bridge dongles at startup. Each gets its own worker with independent
   sensor registry and dongle-scoped MQTT topics. Explicit paths (`/dev/hidrawN`)
   remain supported.
@@ -103,7 +103,7 @@ files are migrated automatically on first start.
 - **Docker `HEALTHCHECK`** — the bridge writes and periodically touches
   `/tmp/ws2m_healthy` while running; removes it on failure. Container flips
   unhealthy within ~90 s of a dongle failure or process hang.
-- **Test suite** — 520 unit and integration tests covering all modules.
+- **Test suite** — 540 unit and integration tests covering all modules.
   Hardware smoke tests behind `pytest -m dongle`. Run with
   `bash scripts/run_tests.sh`.
 - **`cli/mqtt_tool.py`** — MQTT maintenance CLI: `cleanup-discovery` finds

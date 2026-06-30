@@ -126,11 +126,11 @@ These settings can also be toggled live from the hub device page in Home Assista
 | Variable | Default | Description |
 |---|---|---|
 | `WS2M_HUB_URL` | *(auto)* | Hub WebSocket URL, e.g. `ws://192.168.1.10:8765`. Optional when hub and remote are on the same network and mDNS is available. |
-| `WS2M_DEVICE` | `auto` | HID device path, e.g. `/dev/hidraw0`. `auto` detects all matching dongles. |
-| `WS2M_REMOTE_ID` | *(from data dir)* | Override the remote's stable UUID. |
+| `WS2M_DONGLE` | `auto` | HID device path, e.g. `/dev/hidraw0`. `auto` detects all matching dongles. |
 | `WS2M_DATA_DIR` | `/app/data` | Directory for persistent state (`remote_id`, `hub_token`). |
 | `WS2M_HUB_ID` | *(none)* | Preferred hub UUID when multiple hubs are discoverable via mDNS. |
 | `WS2M_DISCOVERY_TIMEOUT` | `30` | mDNS discovery timeout in seconds. |
+| `WS2M_LOG_LEVEL` | `INFO` | Log verbosity: `DEBUG`, `INFO`, `WARNING`, or `ERROR`. Also adjustable live from the remote device page in HA. |
 
 ### HA entities (remote)
 
@@ -159,7 +159,7 @@ mqtt_keepalive: 60
 self_topic_root: ws2m
 hass_topic_root: homeassistant
 hass_discovery: true
-usb_dongle: auto
+dongle: auto
 hub_ws_enabled: false
 hub_ws_port: 8765
 hub_remote_pairing_seconds: 60
@@ -178,7 +178,7 @@ log_level: INFO
 | `self_topic_root` | `ws2m` | Topic prefix for all ws2m data topics. Change when running multiple instances on the same broker. |
 | `hass_topic_root` | `homeassistant` | HA MQTT discovery prefix. Only change if you have set `mqtt: discovery_prefix` in HA's `configuration.yaml`. |
 | `hass_discovery` | `true` | Publish HA MQTT discovery config. When false, ws2m clears all retained discovery config topics on startup. All `ws2m/` state and data topics continue to function normally — only the `homeassistant/` discovery payloads are suppressed. |
-| `usb_dongle` | `auto` | USB dongle path. `auto` detects all connected dongles automatically; `/dev/hidrawN` pins to one specific device. |
+| `dongle` | `auto` | Dongle path. `auto` detects all connected dongles automatically; `/dev/hidrawN` pins to one specific device. |
 | `hub_ws_enabled` | `false` | Enable the WebSocket listener to accept connections from `ws2m-remote` instances. |
 | `hub_ws_port` | `8765` | WebSocket listener port for remote connections. |
 | `hub_remote_pairing_seconds` | `60` | How long remote pairing mode remains active after pressing Enable Remote Pairing. |

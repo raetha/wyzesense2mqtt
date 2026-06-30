@@ -9,7 +9,7 @@ DongleWorker  — owns one physical dongle + its SensorRegistry; handles all
                 sensor events and dongle-scoped MQTT commands (scan, remove, sensor config).
 
 Each DongleWorker runs independently against the shared MqttGateway.  When
-usb_dongle is "auto", all detected dongles get a worker; when it is an explicit
+dongle is "auto", all detected dongles get a worker; when it is an explicit
 path, exactly one worker is created for that device.
 
 Startup sequence
@@ -34,8 +34,8 @@ MQTT topics (v2 schema)
   <self_topic_root>/hub/<uuid>/cleanup_removed_dongles    — hub cleanup command
   <self_topic_root>/hub/<uuid>/remote_pair                       — enable remote pairing mode command
   <self_topic_root>/hub/<uuid>/remote_pairing               — pairing mode state (retained)
-  <self_topic_root>/hub/<uuid>/usb_dongle                   — USB dongle config state (retained)
-  <self_topic_root>/hub/<uuid>/usb_dongle/set               — USB dongle config command
+  <self_topic_root>/hub/<uuid>/dongle                   — USB dongle config state (retained)
+  <self_topic_root>/hub/<uuid>/dongle/set               — USB dongle config command
   <self_topic_root>/hub/<uuid>/ws_port                      — WebSocket port state (retained)
   <self_topic_root>/hub/<uuid>/ws_port/set                  — WebSocket port command
   <self_topic_root>/hub/<uuid>/remote_pairing_timeout       — Remote pairing timeout state (retained)
@@ -76,11 +76,13 @@ MQTT topics (v2 schema)
   <self_topic_root>/remote/<uuid>/cleanup_disconnected_dongles     — clear topics/data for failed remote dongles
 """
 
+import json
 import logging
 import pathlib
 import shutil
 import threading
 import time
+from collections import deque
 
 import config as _cfg_mod
 import dongle_protocol
@@ -107,6 +109,119 @@ from mqtt import (
 )
 from retrying import retry
 from sensors import DEVICE_CLASS_OPTIONS, INVERTIBLE_SENSOR_TYPES, SensorRegistry
+from sensors import SENSOR_TYPES as _SENSOR_TYPES
+
+# ---------------------------------------------------------------------------
+# Remote WebSocket transport
+#
+# RemoteTransport is a ws2m hub concern, not part of the standalone dongle_protocol
+# library.  It wraps an authenticated WebSocket connection from a ws2m-remote process
+# and presents the same Transport interface that Dongle uses for local HID fds.
+# ---------------------------------------------------------------------------
+
+
+class RemoteTransport(dongle_protocol.Transport):
+    """Transport backed by a WebSocket connection from a ws2m-remote process.
+
+    The remote sends raw HID reports as binary WebSocket messages (dongle→hub
+    direction) and receives raw protocol bytes as binary WebSocket messages
+    (hub→dongle direction).
+
+    Replay frames collected during the auth handshake are delivered first via
+    an in-memory deque before switching to live WebSocket reads.
+
+    JSON text control frames are intercepted and routed to callbacks:
+      - remote_unhealthy / remote_healthy → on_health_change(remote_id, bool)
+      - set_dongle                        → on_set_dongle(remote_id, value)
+      - set_log_level                     → on_set_log_level(remote_id, level)
+      - (all others are logged and discarded)
+    """
+
+    _log = logging.getLogger("ws2m.transport")
+
+    def __init__(
+        self,
+        ws_connection,
+        remote_id: str,
+        dongle_mac: str,
+        replay_frames: list[bytes],
+        on_health_change=None,
+        on_set_dongle=None,
+        on_set_log_level=None,
+    ):
+        self._ws = ws_connection
+        self._remote_id = remote_id
+        self._dongle_mac = dongle_mac
+        self._replay: deque[bytes] = deque(replay_frames)
+        self._on_health_change = on_health_change  # Callable[[str, bool], None] | None
+        self._on_set_dongle = on_set_dongle  # Callable[[str, str], None] | None
+        self._on_set_log_level = on_set_log_level  # Callable[[str, str], None] | None
+
+    @property
+    def remote_id(self) -> str:
+        return self._remote_id
+
+    @property
+    def dongle_mac(self) -> str:
+        return self._dongle_mac
+
+    def read(self) -> bytes:
+        if self._replay:
+            return self._replay.popleft()
+        msg = self._ws.recv()
+        if isinstance(msg, str):
+            self._handle_control(msg)
+            return b""
+        return bytes(msg)
+
+    def _handle_control(self, msg: str) -> None:
+        """Dispatch an incoming JSON text control frame."""
+        try:
+            parsed = json.loads(msg)
+        except Exception:
+            self._log.warning("RemoteTransport: non-JSON text from remote: %s", msg[:120])
+            return
+
+        msg_type = parsed.get("type", "")
+
+        if msg_type == "remote_unhealthy":
+            self._log.warning("RemoteTransport: remote reported unhealthy: %s", parsed.get("reason", ""))
+            if self._on_health_change is not None:
+                self._on_health_change(self._remote_id, False)
+
+        elif msg_type == "remote_healthy":
+            self._log.info("RemoteTransport: remote reported healthy")
+            if self._on_health_change is not None:
+                self._on_health_change(self._remote_id, True)
+
+        else:
+            self._log.warning("RemoteTransport: unexpected control message from remote: %s", msg[:120])
+
+    def write(self, data: bytes) -> None:
+        self._ws.send(data)
+
+    # ------------------------------------------------------------------
+    # Hub → remote control frames
+    # ------------------------------------------------------------------
+
+    def send_restart(self) -> None:
+        """Send a restart command to the remote."""
+        self._ws.send(json.dumps({"type": "restart"}))
+
+    def send_dongle(self, value: str) -> None:
+        """Send a dongle path update to the remote (effective after remote restart)."""
+        self._ws.send(json.dumps({"type": "set_dongle", "value": value}))
+
+    def send_log_level(self, level: str) -> None:
+        """Send a log level change to the remote (applied immediately by the remote)."""
+        self._ws.send(json.dumps({"type": "set_log_level", "level": level}))
+
+    def close(self) -> None:
+        try:
+            self._ws.close()
+        except Exception:
+            pass
+
 
 # ---------------------------------------------------------------------------
 # Health file
@@ -238,19 +353,13 @@ class DongleWorker:
     )
     def _open_dongle(self) -> None:
         if self._transport is not None:
-            # Remote dongle via WebSocket — transport already authenticated
+            # Remote dongle via WebSocket — transport already authenticated by ws_listener.
+            # Construct the Dongle directly from the existing RemoteTransport.
             remote_id = getattr(self._transport, "remote_id", "<unknown>")
             dongle_mac = getattr(self._transport, "dongle_mac", "<unknown>")
             self._logger.info(f"Opening remote dongle remote_id={remote_id!r} dongle_mac={dongle_mac!r}")
-            self._dongle = dongle_protocol.open_remote_dongle(
-                self._transport._ws,
-                remote_id,
-                dongle_mac,
-                list(self._transport._replay),
-                self._on_dongle_event,
-                self._logger,
-                on_health_change=self._on_remote_health_change,
-            )
+            dongle_protocol._logger = self._logger  # type: ignore[attr-defined]
+            self._dongle = dongle_protocol.Dongle(self._transport, self._on_dongle_event)
         else:
             self._logger.info(f"Opening dongle at {self._device_path}")
             try:
@@ -924,6 +1033,20 @@ class DongleWorker:
         payload = {}
         payload.update(registry.sensors.get(event.mac, {}))
         payload.update(vars(event))
+        # Compute battery percentage from voltage using per-sensor discharge curves.
+        # SensorEvent provides battery_voltage (V); the % conversion requires SENSOR_TYPES
+        # which lives in sensors.py (an application module, not the protocol library).
+        if "battery_voltage" in payload and payload["battery_voltage"] is not None:
+            sensor_type = payload.get("sensor_type")
+            type_meta = _SENSOR_TYPES.get(sensor_type, {})
+            v_min = type_meta.get("battery_v_min")
+            v_max = type_meta.get("battery_v_max")
+            voltage = payload["battery_voltage"]
+            if v_min is not None and v_max is not None:
+                pct = (voltage - v_min) / (v_max - v_min) * 100.0
+                payload["battery"] = max(0, min(100, round(pct)))
+            else:
+                payload["battery"] = None
         payload["ws2m_version"] = VERSION
         payload["ws2m_discovery_schema"] = DISCOVERY_SCHEMA_VERSION
         self._gateway.publish(f"{cfg['self_topic_root']}/sensor/{event.mac}", payload)
@@ -1072,14 +1195,13 @@ class Bridge:
         self._workers_lock = threading.Lock()
         self._ws_listener = None
         self._ws_listener_thread: threading.Thread | None = None
-        self._zeroconf = None  # Zeroconf instance for mDNS advertisement
 
         self._reload_topic = ""
         self._log_level_set_topic = ""
         self._cleanup_removed_dongles_topic = ""
         self._remote_pair_topic = ""
         self._hub_restart_topic = ""
-        self._hub_usb_dongle_topic = ""
+        self._hub_dongle_topic = ""
         self._hub_ws_port_topic = ""
         self._hub_remote_pairing_timeout_topic = ""
         self._hub_mdns_topic = ""
@@ -1129,7 +1251,7 @@ class Bridge:
         if not device_paths and not accept_remote:
             self._logger.warning(
                 "No WyzeSense dongles found and no remote connections enabled. "
-                "Hub is running with no active dongle. Configure usb_dongle via HA or config."
+                "Hub is running with no active dongle. Configure dongle via HA or config."
             )
 
         # Start a DongleWorker for each local device
@@ -1199,7 +1321,7 @@ class Bridge:
         self._cleanup_removed_dongles_topic = f"{hub}/cleanup_removed_dongles"
         self._remote_pair_topic = f"{hub}/remote_pair"
         self._hub_restart_topic = f"{hub}/restart/set"
-        self._hub_usb_dongle_topic = f"{hub}/usb_dongle/set"
+        self._hub_dongle_topic = f"{hub}/dongle/set"
         self._hub_ws_port_topic = f"{hub}/ws_port/set"
         self._hub_remote_pairing_timeout_topic = f"{hub}/remote_pairing_timeout/set"
         self._hub_mdns_topic = f"{hub}/mdns/set"
@@ -1211,28 +1333,30 @@ class Bridge:
         "auto"          → detect all local WyzeSense dongles.
         "/dev/hidrawN"  → single explicit device path.
         """
-        usb_dongle = str(self._config.get("usb_dongle", "auto"))
-        if usb_dongle.lower() == "auto":
+        dongle = str(self._config.get("dongle", "auto"))
+        if dongle.lower() == "auto":
             found = find_all_dongle_devices()
             if found:
                 self._logger.info(f"Auto-detect: found {len(found)} dongle(s): {found}")
             else:
                 self._logger.warning("Auto-detect: no WyzeSense dongles found")
             return found
-        if usb_dongle.startswith("/"):
-            self._logger.info(f"Using explicit dongle path: {usb_dongle}")
-            return [usb_dongle]
-        self._logger.warning(f"Unrecognized usb_dongle value {usb_dongle!r} — skipping")
+        if dongle.startswith("/"):
+            self._logger.info(f"Using explicit dongle path: {dongle}")
+            return [dongle]
+        self._logger.warning(f"Unrecognized dongle value {dongle!r} — skipping")
         return []
 
     def _start_ws_listener(self) -> None:
-        """Start the WebSocket listener for incoming remote connections."""
+        """Start the WebSocket listener and optional mDNS advertisement."""
         from ws_listener import WebSocketListener
 
         port = int(self._config.get("hub_ws_port", 8765))
         remotes_path = pathlib.Path(_cfg_mod.CONFIG_DIR) / "remotes"
         self._ws_listener = WebSocketListener(
             port=port,
+            hub_id=self._hub_id,
+            hub_version=VERSION,
             remotes_path=remotes_path,
             get_pairing_active=lambda: self._is_remote_pairing_active,
             on_connection=self._on_remote_connection,
@@ -1245,35 +1369,10 @@ class Bridge:
         )
         self._ws_listener_thread.start()
 
-        # Advertise hub via mDNS if enabled
         if self._config.get("hub_ws_mdns", True):
-            try:
-                import socket
+            self._ws_listener.start_mdns()
 
-                import zeroconf as _zc
-
-                svc_type = "_ws2m._tcp.local."
-                svc_name = f"ws2m-hub-{self._hub_id}.{svc_type}"
-                try:
-                    local_ip = socket.gethostbyname(socket.gethostname())
-                except OSError:
-                    local_ip = "127.0.0.1"
-                info = _zc.ServiceInfo(
-                    svc_type,
-                    svc_name,
-                    addresses=[socket.inet_aton(local_ip)],
-                    port=port,
-                    properties={"hub_id": self._hub_id, "version": VERSION},
-                )
-                self._zeroconf = _zc.Zeroconf()
-                self._zeroconf.register_service(info)
-                self._logger.info(f"Advertising hub via mDNS as ws2m-hub-{self._hub_id}._ws2m._tcp.local.")
-            except ImportError:
-                self._logger.warning(
-                    "zeroconf not installed — mDNS advertisement disabled. Install with: pip install zeroconf"
-                )
-
-    def _on_remote_connection(self, transport: dongle_protocol.RemoteTransport) -> None:
+    def _on_remote_connection(self, transport: RemoteTransport) -> None:
         """Called from the WS listener thread when a remote completes auth.
 
         Idempotent: if a worker for this dongle MAC already exists, the new
@@ -1290,10 +1389,12 @@ class Bridge:
             self._gateway.publish(remote_status_topic, "online", is_json=False, qos=QOS_STATUS, retain=RETAIN_STATUS)
             self._gateway.publish_remote_discovery(remote_id, self._hub_id)
 
-        # Subscribe to remote command topics (restart + remove + cleanup)
+        # Subscribe to remote command topics (restart + remove + cleanup + dongle + log_level)
         self._subscribe_remote_restart(remote_id, transport)
         self._subscribe_remote_remove(remote_id)
         self._subscribe_remote_cleanup(remote_id)
+        self._subscribe_remote_dongle(remote_id, transport)
+        self._subscribe_remote_log_level(remote_id, transport)
 
         with self._workers_lock:
             for worker in self._workers:
@@ -1339,8 +1440,8 @@ class Bridge:
                 client.message_callback_add(self._remote_pair_topic, self._on_mqtt_remote_pair)
                 client.subscribe(self._hub_restart_topic, QOS_COMMAND)
                 client.message_callback_add(self._hub_restart_topic, self._on_mqtt_hub_restart)
-                client.subscribe(self._hub_usb_dongle_topic, QOS_COMMAND)
-                client.message_callback_add(self._hub_usb_dongle_topic, self._on_mqtt_hub_usb_dongle)
+                client.subscribe(self._hub_dongle_topic, QOS_COMMAND)
+                client.message_callback_add(self._hub_dongle_topic, self._on_mqtt_hub_dongle)
                 client.subscribe(self._hub_ws_port_topic, QOS_COMMAND)
                 client.message_callback_add(self._hub_ws_port_topic, self._on_mqtt_hub_ws_port)
                 client.subscribe(self._hub_remote_pairing_timeout_topic, QOS_COMMAND)
@@ -1373,7 +1474,7 @@ class Bridge:
             client.message_callback_remove(self._cleanup_removed_dongles_topic)
             client.message_callback_remove(self._remote_pair_topic)
             client.message_callback_remove(self._hub_restart_topic)
-            client.message_callback_remove(self._hub_usb_dongle_topic)
+            client.message_callback_remove(self._hub_dongle_topic)
             client.message_callback_remove(self._hub_ws_port_topic)
             client.message_callback_remove(self._hub_remote_pairing_timeout_topic)
             client.message_callback_remove(self._hub_mdns_topic)
@@ -1472,7 +1573,7 @@ class Bridge:
         self._logger.warning("Restart requested via MQTT — signalling main thread")
         self._restart_requested.set()
 
-    def _on_mqtt_remote_restart(self, remote_id: str, transport: dongle_protocol.RemoteTransport):
+    def _on_mqtt_remote_restart(self, remote_id: str, transport: RemoteTransport):
         """Return an MQTT callback that forwards a restart command to the named remote."""
 
         def _handler(client, userdata, msg) -> None:
@@ -1484,7 +1585,7 @@ class Bridge:
 
         return _handler
 
-    def _subscribe_remote_restart(self, remote_id: str, transport: dongle_protocol.RemoteTransport) -> None:
+    def _subscribe_remote_restart(self, remote_id: str, transport: RemoteTransport) -> None:
         """Subscribe to the remote restart command topic for this remote."""
         if not (self._gateway and self._config):
             return
@@ -1592,6 +1693,87 @@ class Bridge:
         self._publish_remote_dongle_count(remote_id)
         self._logger.info(f"Cleanup remote {remote_id}: complete")
 
+    def _subscribe_remote_dongle(self, remote_id: str, transport: RemoteTransport) -> None:
+        """Subscribe to the remote dongle config command topic for this remote."""
+        if not (self._gateway and self._config):
+            return
+        cfg = self._config
+        topic = f"{cfg['self_topic_root']}/remote/{remote_id}/dongle/set"
+        try:
+            client = self._gateway.client
+            client.subscribe(topic, QOS_COMMAND)
+            client.message_callback_add(topic, self._on_mqtt_remote_dongle(remote_id, transport))
+        except Exception as exc:
+            self._logger.error(f"Failed to subscribe to remote dongle topic for {remote_id}: {exc}")
+
+    def _on_mqtt_remote_dongle(self, remote_id: str, transport: RemoteTransport):
+        """Return an MQTT callback that forwards a dongle path update to the named remote."""
+
+        def _handler(client, userdata, msg) -> None:
+            value = msg.payload.decode(errors="replace").strip()
+            self._logger.info(
+                f"Forwarding dongle config {value!r} to remote {remote_id} — effective after remote restart"
+            )
+            try:
+                transport.send_dongle(value)
+            except Exception as exc:
+                self._logger.error(f"Failed to send dongle config to remote {remote_id}: {exc}")
+            # Echo state back so HA entity stays in sync
+            if self._gateway and self._config:
+                cfg = self._config
+                self._gateway.publish(
+                    f"{cfg['self_topic_root']}/remote/{remote_id}/dongle",
+                    value,
+                    is_json=False,
+                    wait=False,
+                    qos=QOS_NUMBER,
+                    retain=RETAIN_NUMBER,
+                )
+
+        return _handler
+
+    def _subscribe_remote_log_level(self, remote_id: str, transport: RemoteTransport) -> None:
+        """Subscribe to the remote log level command topic for this remote."""
+        if not (self._gateway and self._config):
+            return
+        cfg = self._config
+        topic = f"{cfg['self_topic_root']}/remote/{remote_id}/log_level/set"
+        try:
+            client = self._gateway.client
+            client.subscribe(topic, QOS_COMMAND)
+            client.message_callback_add(topic, self._on_mqtt_remote_log_level(remote_id, transport))
+        except Exception as exc:
+            self._logger.error(f"Failed to subscribe to remote log level topic for {remote_id}: {exc}")
+
+    def _on_mqtt_remote_log_level(self, remote_id: str, transport: RemoteTransport):
+        """Return an MQTT callback that forwards a log level change to the named remote."""
+
+        def _handler(client, userdata, msg) -> None:
+            from mqtt import LOG_LEVEL_OPTIONS
+
+            level = msg.payload.decode(errors="replace").strip().upper()
+            if level not in LOG_LEVEL_OPTIONS:
+                self._logger.warning(f"Invalid log level {level!r} for remote {remote_id} — ignoring")
+                return
+            self._logger.info(f"Forwarding log level {level!r} to remote {remote_id}")
+            try:
+                transport.send_log_level(level)
+            except Exception as exc:
+                self._logger.error(f"Failed to send log level to remote {remote_id}: {exc}")
+            # Echo state back so HA select stays in sync
+            if self._gateway and self._config:
+                cfg = self._config
+                self._gateway.publish(
+                    f"{cfg['self_topic_root']}/remote/{remote_id}/log_level",
+                    level,
+                    is_json=False,
+                    wait=False,
+                    qos=QOS_NUMBER,
+                    retain=RETAIN_NUMBER,
+                )
+
+        return _handler
+
     def _remove_remote_chain(self, remote_id: str) -> None:
         """Clear all MQTT topics, stop all workers, and delete the token for the given remote.
 
@@ -1680,10 +1862,10 @@ class Bridge:
             return
         cfg = self._config
         hub = f"{cfg['self_topic_root']}/hub/{self._hub_id}"
-        # usb_dongle
+        # dongle
         self._gateway.publish(
-            f"{hub}/usb_dongle",
-            str(cfg.get("usb_dongle", "auto")),
+            f"{hub}/dongle",
+            str(cfg.get("dongle", "auto")),
             is_json=False,
             wait=False,
             qos=QOS_NUMBER,
@@ -1726,16 +1908,16 @@ class Bridge:
             retain=RETAIN_NUMBER,
         )
 
-    def _on_mqtt_hub_usb_dongle(self, client, userdata, msg) -> None:
-        """Handle USB dongle config update from HA."""
+    def _on_mqtt_hub_dongle(self, client, userdata, msg) -> None:
+        """Handle dongle config update from HA."""
         cfg = self._config
         value = msg.payload.decode(errors="replace").strip()
-        cfg["usb_dongle"] = value
+        cfg["dongle"] = value
         save_config(cfg, self._logger)
-        self._logger.info(f"USB dongle config updated to {value!r} — effective after restart")
+        self._logger.info(f"Dongle config updated to {value!r} — effective after restart")
         if self._gateway and self._hub_id:
             self._gateway.publish(
-                f"{cfg['self_topic_root']}/hub/{self._hub_id}/usb_dongle",
+                f"{cfg['self_topic_root']}/hub/{self._hub_id}/dongle",
                 value,
                 is_json=False,
                 wait=False,
@@ -1801,51 +1983,19 @@ class Bridge:
         cfg["hub_ws_mdns"] = enabled
         save_config(cfg, self._logger)
 
-        if enabled and self._zeroconf is None:
-            if self._ws_listener is None:
-                # mDNS advertising a hub that isn't listening is misleading —
-                # remotes that discover it would fail to connect.
+        if self._ws_listener is None:
+            if enabled:
+                # mDNS advertising a hub that isn't listening is misleading.
+                # Keep hub_ws_mdns persisted as True so it auto-starts when
+                # the listener is enabled later.
                 self._logger.warning(
                     "mDNS: WebSocket listener is not running (hub_ws_enabled=False). "
                     "Enable the WebSocket listener first, then toggle mDNS."
                 )
-                # Keep hub_ws_mdns persisted as True so it auto-starts mDNS when
-                # the listener is enabled later.
-            else:
-                # Start mDNS if not already advertising
-                try:
-                    import socket
-
-                    import zeroconf as _zc
-
-                    port = int(cfg.get("hub_ws_port", 8765))
-                    svc_type = "_ws2m._tcp.local."
-                    svc_name = f"ws2m-hub-{self._hub_id}.{svc_type}"
-                    try:
-                        local_ip = socket.gethostbyname(socket.gethostname())
-                    except OSError:
-                        local_ip = "127.0.0.1"
-                    info = _zc.ServiceInfo(
-                        svc_type,
-                        svc_name,
-                        addresses=[socket.inet_aton(local_ip)],
-                        port=port,
-                        properties={"hub_id": self._hub_id, "version": VERSION},
-                    )
-                    self._zeroconf = _zc.Zeroconf()
-                    self._zeroconf.register_service(info)
-                    self._logger.info(f"mDNS advertisement started: ws2m-hub-{self._hub_id}._ws2m._tcp.local.")
-                except ImportError:
-                    self._logger.warning("zeroconf not installed — mDNS advertisement disabled.")
-        elif not enabled and self._zeroconf is not None:
-            # Stop mDNS advertisement
-            try:
-                self._zeroconf.unregister_all_services()
-                self._zeroconf.close()
-                self._logger.info("mDNS advertisement stopped")
-            except Exception:
-                pass
-            self._zeroconf = None
+        elif enabled:
+            self._ws_listener.start_mdns()
+        else:
+            self._ws_listener.stop_mdns()
 
         if self._gateway and self._hub_id:
             self._gateway.publish(
@@ -1868,19 +2018,11 @@ class Bridge:
         if enabled and self._ws_listener is None:
             self._start_ws_listener()
         elif not enabled and self._ws_listener is not None:
+            # stop() also tears down mDNS advertisement
             self._ws_listener.stop()
             self._ws_listener = None
             self._ws_listener_thread = None
             self._logger.info("WebSocket listener stopped")
-            # Also stop mDNS — advertising a hub that isn't listening is misleading.
-            if self._zeroconf is not None:
-                try:
-                    self._zeroconf.unregister_all_services()
-                    self._zeroconf.close()
-                    self._logger.info("mDNS advertisement stopped (WebSocket listener disabled)")
-                except Exception:
-                    pass
-                self._zeroconf = None
             # Clean up all remote workers and their full topic chains.
             # When the listener is off, remotes can't connect, so clear everything
             # (sensor → dongle → remote) so HA doesn't show stale entities.
@@ -2068,15 +2210,8 @@ class Bridge:
     def stop(self) -> None:
         """Stop all workers, WebSocket listener, disconnect MQTT, save state."""
         self._logger.info("Shutting down...")
-        if self._zeroconf is not None:
-            try:
-                self._zeroconf.unregister_all_services()
-                self._zeroconf.close()
-                self._logger.debug("mDNS advertisement stopped")
-            except Exception:
-                pass
-            self._zeroconf = None
         if self._ws_listener is not None:
+            # stop() also tears down mDNS advertisement
             self._ws_listener.stop()
         with self._workers_lock:
             workers = list(self._workers)

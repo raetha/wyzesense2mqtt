@@ -1,5 +1,5 @@
 # ws2m remote — docker-compose example
-# Run this on the machine that physically holds the WyzeSense USB dongle.
+# Run this on a remote  machine that physically holds a WyzeSense USB dongle.
 # Copy this file to docker-compose.yml and edit to suit your environment.
 # Then copy .env.example to .env and fill in the required values.
 
@@ -9,20 +9,34 @@ services:
     hostname: ws2m-remote
     image: ghcr.io/raetha/ws2m-remote:${IMAGE_TAG:-latest}
     network_mode: bridge
-    restart: unless-stopped  # Required: the hub Restart button uses os._exit(0); Docker will restart it
+    restart: unless-stopped  # Required: if using Home Assistant restart button
     environment:
-      # Required
-      WS2M_HUB_URL: "${WS2M_HUB_URL}"
-      # Optional
-      WS2M_DATA_DIR: "${WS2M_DATA_DIR:-/app/data}"   # where remote_id / hub_token are stored
-      WS2M_REMOTE_ID: "${WS2M_REMOTE_ID:-}"           # override stable remote UUID
-      WS2M_DEVICE: "${WS2M_DEVICE:-auto}"             # HID device path or "auto"
-      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
-      TZ: "${TZ:-UTC}"
+      # ── Optional — core config ───────────────────────────────────────────────
+      # TZ: "${TZ:-UTC}"
+      # WS2M_DATA_DIR: "${WS2M_DATA_DIR:-/app/data}" # override data directory (default matches VOL_DATA below)
+
+      # ── Optional — hub connection ────────────────────────────────────────────
+      # Leave WS2M_HUB_URL unset to discover the hub automatically via mDNS.
+      # Set this if the remote cannot find the hub automatically (e.g. across VLANs,
+      # in Docker without host networking, or when mDNS is blocked).
+      # WS2M_HUB_URL: "${WS2M_HUB_URL}"
+      # WS2M_HUB_ID: "${WS2M_HUB_ID}"              # preferred hub_id for mDNS selection (multi-hub networks)
+      # WS2M_DISCOVERY_TIMEOUT: "${WS2M_DISCOVERY_TIMEOUT:-30}" # mDNS discovery timeout in seconds
+
+      # ── Optional — adjustable from Home Assistant ────────────────────────────
+      # These settings can be changed live from the remote device page in HA and
+      # are saved to config.yaml automatically. If set here, the env value takes
+      # precedence over any value saved by HA — changes made in HA will appear
+      # to have no effect until the env var is removed or updated. Only set
+      # these here if you need to pin them and do not want HA to control them.
+      # WS2M_DONGLE: "${WS2M_DONGLE:-auto}"         # HID device path or "auto"
+      # WS2M_LOG_LEVEL: "${WS2M_LOG_LEVEL:-INFO}"
+
+    # Pass through a WyzeSense USB dongle.
+    # If WS2M_DONGLE=auto, all hidraw devices matching VID 1a86 / PID e024
+    # are detected automatically — grant access to all or just the one you need.
+    devices:
+      - "${DEV_DONGLE:-/dev/hidraw0}:/dev/hidraw0"
+
     volumes:
       - "${VOL_DATA:-./data}:/app/data"
-    devices:
-      # Pass through the WyzeSense USB dongle.
-      # If WS2M_DEVICE=auto, all hidraw devices matching VID 1a86 / PID e024
-      # are detected automatically — grant access to all or just the one you need.
-      - "${DEV_WYZESENSE:-/dev/hidraw0}:/dev/hidraw0"

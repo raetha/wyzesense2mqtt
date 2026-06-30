@@ -82,7 +82,7 @@ DEFAULT_CONFIG: dict = {
     #   "auto"        — detect all connected WyzeSense dongles automatically
     #                   (multi-dongle supported when "auto" is used)
     #   "/dev/hidrawN" — use exactly this one device (single-dongle)
-    "usb_dongle": "auto",
+    "dongle": "auto",
     # Remote bridge — WebSocket listener for remote connections.
     # Adoption is token-less: enable pairing mode from HA or via the ws2m/hub/<uuid>/remote_pair
     # MQTT topic, then start the remote. The remote auto-adopts and saves the token.
@@ -102,6 +102,11 @@ DEFAULT_CONFIG: dict = {
 # Keys that were present in 3.x / early 4.0 configs but are no longer used.
 # Silently dropped when loading so they do not accumulate in saved config.yaml.
 _REMOVED_KEYS: frozenset[str] = frozenset(["mqtt_qos", "mqtt_retain", "publish_sensor_name"])
+
+# Keys renamed between versions; old name → new name.
+# On load, the value is copied to the new key and the old key is dropped so it
+# does not persist in saved config.yaml.  Handles 3.x config files gracefully.
+_RENAMED_KEYS: dict[str, str] = {"usb_dongle": "dongle"}
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +218,12 @@ def load_config(logger: logging.Logger | None = None) -> tuple[dict | None, dict
             # Drop keys that were removed in 4.0 so they don't persist
             for key in _REMOVED_KEYS:
                 config_from_file.pop(key, None)
+            # Migrate renamed keys: copy value to new name, drop old name
+            for old_key, new_key in _RENAMED_KEYS.items():
+                if old_key in config_from_file and new_key not in config_from_file:
+                    config_from_file[new_key] = config_from_file.pop(old_key)
+                else:
+                    config_from_file.pop(old_key, None)
             cfg.update(config_from_file)
 
     def _coerce(val: str):
@@ -257,7 +268,7 @@ def save_config(cfg: dict, logger: logging.Logger | None = None) -> bool:
 
     Removed keys are stripped before writing so they do not re-accumulate.
     """
-    clean = {k: v for k, v in cfg.items() if k not in _REMOVED_KEYS}
+    clean = {k: v for k, v in cfg.items() if k not in _REMOVED_KEYS and k not in _RENAMED_KEYS}
     return write_yaml(config_path(MAIN_CONFIG_FILE), clean, logger)
 
 
@@ -267,7 +278,7 @@ def init_logging(log_level: str | None = None) -> logging.Logger:
     Logging goes to stdout only so Docker and systemd both capture it through
     their standard mechanisms (docker logs / journalctl) without any additional
     configuration.  The log level can be set via the 'log_level' key in
-    config.yaml or the LOG_LEVEL environment variable.
+    config.yaml or the WS2M_LOG_LEVEL environment variable.
     """
     import logging.config
 

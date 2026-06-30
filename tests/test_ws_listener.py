@@ -13,6 +13,7 @@ import tempfile
 from unittest.mock import MagicMock
 
 import pytest
+from ws_listener import WebSocketListener
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -56,8 +57,6 @@ def _build_listener(
     on_connection=None,
     tmp_dir: pathlib.Path | None = None,
 ):
-    from ws_listener import WebSocketListener
-
     if remotes_path is None:
         # Use a temp dir if not provided
         _tmp = tempfile.mkdtemp()
@@ -71,6 +70,8 @@ def _build_listener(
         on_connection = MagicMock()
     listener = WebSocketListener(
         port=8765,
+        hub_id="test-hub-id",
+        hub_version="4.0.0",
         remotes_path=remotes_path,
         get_pairing_active=get_pairing_active,
         on_connection=on_connection,
@@ -109,7 +110,7 @@ class TestAuthSuccessWithToken:
         assert any('"auth_ok"' in m for m in text_sends)
 
     def test_on_connection_called_with_remote_transport(self):
-        from dongle_protocol import RemoteTransport
+        from bridge import RemoteTransport
 
         token = "my-valid-token"
         remote_id = "test-uuid-abc"
@@ -179,7 +180,7 @@ class TestAdoptionFlow:
         """No token + pairing active → auth_token sent, ack received, on_connection called."""
         import tempfile
 
-        from dongle_protocol import RemoteTransport
+        from bridge import RemoteTransport
 
         tmp = pathlib.Path(tempfile.mkdtemp())
         remotes_path = tmp / "remotes"
@@ -275,7 +276,7 @@ class TestReplayFrames:
 
     def test_replay_frames_received_before_replay_done(self):
         """With queue_depth=2, the listener reads 2 binary frames then replay_done."""
-        from dongle_protocol import RemoteTransport
+        from bridge import RemoteTransport
 
         token = "my-token"
         listener, on_conn, _ = _build_listener_with_stored_token(token)

@@ -8,28 +8,46 @@ services:
     hostname: ws2m-hub
     image: ghcr.io/raetha/ws2m-hub:${IMAGE_TAG:-latest}
     network_mode: bridge
-    restart: unless-stopped  # Required: the hub Restart button uses os._exit(0); Docker will restart it
+    restart: unless-stopped  # Required: if using Home Assistant restart button
     environment:
-      TZ: "${TZ:-UTC}"
+      # ── Optional — core config ──────────────────────────────────────────────
+      # TZ: "${TZ:-UTC}"
+      # WS2M_DATA_DIR: "${WS2M_DATA_DIR:-/app/data}"   # override data directory (default matches VOL_DATA below)
+
+      # ── Required — mqtt config ──────────────────────────────────────────────
+      # WS2M_MQTT_HOST is the only truly required setting — all others have
+      # sensible defaults. MQTT_USERNAME and MQTT_PASSWORD are only needed if
+      # your broker requires authentication.
       WS2M_MQTT_HOST: "${WS2M_MQTT_HOST}"
-      WS2M_MQTT_PORT: "${WS2M_MQTT_PORT:-1883}"
-      WS2M_MQTT_USERNAME: "${WS2M_MQTT_USERNAME}"
-      WS2M_MQTT_PASSWORD: "${WS2M_MQTT_PASSWORD}"
-      WS2M_MQTT_CLIENT_ID: "${WS2M_MQTT_CLIENT_ID:-ws2m}"
-      WS2M_SELF_TOPIC_ROOT: "${WS2M_SELF_TOPIC_ROOT:-ws2m}"
-      WS2M_HASS_TOPIC_ROOT: "${WS2M_HASS_TOPIC_ROOT:-homeassistant}"
-      WS2M_HASS_DISCOVERY: "${WS2M_HASS_DISCOVERY:-true}"
-      WS2M_USB_DONGLE: "${WS2M_USB_DONGLE:-auto}"
-      WS2M_HUB_WS_ENABLED: "${WS2M_HUB_WS_ENABLED:-false}"
-      WS2M_HUB_WS_PORT: "${WS2M_HUB_WS_PORT:-8765}"
-      WS2M_HUB_REMOTE_PAIRING_SECONDS: "${WS2M_HUB_REMOTE_PAIRING_SECONDS:-60}"
-      WS2M_LOG_LEVEL: "${WS2M_LOG_LEVEL:-INFO}"
-    # Include if the hub has a local USB dongle:
+      # WS2M_MQTT_PORT: "${WS2M_MQTT_PORT:-1883}"
+      # WS2M_MQTT_USERNAME: "${WS2M_MQTT_USERNAME}"
+      # WS2M_MQTT_PASSWORD: "${WS2M_MQTT_PASSWORD}"
+
+      # ── Optional — mqtt config  ──────────────────────────────────────────────
+      # WS2M_MQTT_CLIENT_ID: "${WS2M_MQTT_CLIENT_ID:-ws2m}"
+      # WS2M_SELF_TOPIC_ROOT: "${WS2M_SELF_TOPIC_ROOT:-ws2m}"
+      # WS2M_HASS_TOPIC_ROOT: "${WS2M_HASS_TOPIC_ROOT:-homeassistant}"
+      # WS2M_HASS_DISCOVERY: "${WS2M_HASS_DISCOVERY:-true}"
+
+      # ── Optional — adjustable from Home Assistant ────────────────────────────
+      # These settings can be changed live from the hub device page in HA and
+      # are saved to config.yaml automatically. If set here, the env value takes
+      # precedence over any value saved by HA — changes made in HA will appear
+      # to have no effect until the env var is removed or updated. Only set
+      # these here if you need to pin them and do not want HA to control them.
+      # WS2M_DONGLE: "${WS2M_DONGLE:-auto}"         # HID device path or "auto"
+      # WS2M_LOG_LEVEL: "${WS2M_LOG_LEVEL:-INFO}"
+      # WS2M_HUB_WS_ENABLED: "${WS2M_HUB_WS_ENABLED:-false}"
+      # WS2M_HUB_WS_PORT: "${WS2M_HUB_WS_PORT:-8765}"
+      # WS2M_HUB_REMOTE_PAIRING_SECONDS: "${WS2M_HUB_REMOTE_PAIRING_SECONDS:-60}"
+
+    # Uncomment if hub has a local USB dongle:
     # devices:
-    #   - "${DEV_WYZESENSE:-/dev/hidraw0}:/dev/hidraw0"
-    ports:
-      # Expose the remote WebSocket port when accepting remote connections.
-      # Remove this section if running local-only.
-      - "${WS2M_HUB_WS_PORT:-8765}:${WS2M_HUB_WS_PORT:-8765}"
+    #   - "${DEV_DONGLE:-/dev/hidraw0}:/dev/hidraw0"
+
+    # Include the remote WebSocket port if using a remote bridge.
+    # ports:
+    #  - "${WS2M_HUB_WS_PORT:-8765}:${WS2M_HUB_WS_PORT:-8765}"
+
     volumes:
-      - "${VOL_DATA}:/app/data"
+      - "${VOL_DATA:-./data}:/app/data"

@@ -5,6 +5,7 @@ DongleWorker is tested with mocked MqttGateway, SensorRegistry, and Dongle
 so no real hardware or broker is required.
 """
 
+import json
 import logging
 import os
 import pathlib
@@ -693,7 +694,7 @@ def test_removed_config_keys_not_written_by_save_config(tmp_config_dir):
         "self_topic_root": "ws2m",
         "hass_topic_root": "homeassistant",
         "hass_discovery": True,
-        "usb_dongle": "auto",
+        "dongle": "auto",
         "log_level": "INFO",
         # Removed keys that must not appear in output:
         "mqtt_qos": 0,
@@ -864,7 +865,7 @@ def test_start_ws_listener_passes_callable_get_pairing_active(tmp_config_dir, sa
     mock_listener_instance = MagicMock()
     mock_listener_instance.serve_forever = MagicMock()
 
-    def fake_ws_listener(port, remotes_path, get_pairing_active, on_connection, logger):
+    def fake_ws_listener(port, hub_id, hub_version, remotes_path, get_pairing_active, on_connection, logger):
         captured["get_pairing_active"] = get_pairing_active
         return mock_listener_instance
 
@@ -892,8 +893,7 @@ def test_reconnect_remote_stops_old_and_opens_new(tmp_config_dir, sample_config)
     """reconnect_remote stops the existing dongle and opens a new one via the new transport."""
     from unittest.mock import MagicMock, patch
 
-    import dongle_protocol
-    from bridge import DongleWorker
+    from bridge import DongleWorker, RemoteTransport
 
     gateway = MagicMock()
     gateway.is_connected = True
@@ -923,7 +923,7 @@ def test_reconnect_remote_stops_old_and_opens_new(tmp_config_dir, sample_config)
     worker._scan_topic = ""
     worker._remove_topic = ""
 
-    new_transport = MagicMock(spec=dongle_protocol.RemoteTransport)
+    new_transport = MagicMock(spec=RemoteTransport)
     new_transport.remote_id = "remote-uuid"
     new_transport.dongle_mac = TEST_DONGLE_MAC
     new_transport._ws = MagicMock()
@@ -938,7 +938,7 @@ def test_reconnect_remote_stops_old_and_opens_new(tmp_config_dir, sample_config)
     registry_mock.sensors = {}
     registry_mock.state = {}
 
-    with patch("dongle_protocol.open_remote_dongle", return_value=new_dongle):
+    with patch("dongle_protocol.Dongle", return_value=new_dongle):
         with patch("sensors.SensorRegistry", return_value=registry_mock):
             worker.reconnect_remote(new_transport)
 
@@ -1434,8 +1434,7 @@ def test_on_mqtt_remote_restart_calls_send_restart(tmp_config_dir, sample_config
     """_on_mqtt_remote_restart sends restart JSON frame to the remote transport."""
     from unittest.mock import MagicMock
 
-    import dongle_protocol
-    from bridge import Bridge
+    from bridge import Bridge, RemoteTransport
 
     bridge = Bridge.__new__(Bridge)
     bridge._config = sample_config
@@ -1443,7 +1442,7 @@ def test_on_mqtt_remote_restart_calls_send_restart(tmp_config_dir, sample_config
     bridge._logger = logging.getLogger("test.bridge")
     bridge._gateway = MagicMock()
 
-    transport = MagicMock(spec=dongle_protocol.RemoteTransport)
+    transport = MagicMock(spec=RemoteTransport)
 
     handler = bridge._on_mqtt_remote_restart("remote-xyz", transport)
     handler(None, None, MagicMock())
@@ -1471,7 +1470,7 @@ def _make_bridge_for_config_handlers(tmp_config_dir, sample_config):
             "hub_ws_port": 8765,
             "hub_remote_pairing_seconds": 60,
             "hub_ws_mdns": True,
-            "usb_dongle": "auto",
+            "dongle": "auto",
         }
     )
     bridge._hub_id = TEST_HUB_ID
@@ -1484,8 +1483,8 @@ def _make_bridge_for_config_handlers(tmp_config_dir, sample_config):
     return bridge
 
 
-def test_on_mqtt_hub_usb_dongle_updates_config(tmp_config_dir, sample_config):
-    """_on_mqtt_hub_usb_dongle updates config and publishes state."""
+def test_on_mqtt_hub_dongle_updates_config(tmp_config_dir, sample_config):
+    """_on_mqtt_hub_dongle updates config and publishes state."""
     from unittest.mock import MagicMock, patch
 
     bridge = _make_bridge_for_config_handlers(tmp_config_dir, sample_config)
@@ -1494,10 +1493,10 @@ def test_on_mqtt_hub_usb_dongle_updates_config(tmp_config_dir, sample_config):
     msg.payload.decode.return_value = "/dev/hidraw1"
 
     with patch("bridge.save_config") as mock_save:
-        bridge._on_mqtt_hub_usb_dongle(None, None, msg)
+        bridge._on_mqtt_hub_dongle(None, None, msg)
         mock_save.assert_called_once()
 
-    assert bridge._config["usb_dongle"] == "/dev/hidraw1"
+    assert bridge._config["dongle"] == "/dev/hidraw1"
     # Should publish the new value back
     bridge._gateway.publish.assert_called()
     call_args = bridge._gateway.publish.call_args
@@ -1554,13 +1553,13 @@ def test_on_mqtt_hub_remote_pairing_timeout_updates_immediately(tmp_config_dir, 
 
 
 def test_on_mqtt_hub_mdns_toggle(tmp_config_dir, sample_config):
-    """_on_mqtt_hub_mdns 'false' stops mDNS when zeroconf is active."""
+    """_on_mqtt_hub_mdns 'false' delegates stop_mdns() to the ws listener."""
     from unittest.mock import MagicMock, patch
 
     bridge = _make_bridge_for_config_handlers(tmp_config_dir, sample_config)
 
-    mock_zc = MagicMock()
-    bridge._zeroconf = mock_zc
+    mock_ws = MagicMock()
+    bridge._ws_listener = mock_ws
 
     msg = MagicMock()
     msg.payload.decode.return_value = "false"
@@ -1568,10 +1567,27 @@ def test_on_mqtt_hub_mdns_toggle(tmp_config_dir, sample_config):
     with patch("bridge.save_config"):
         bridge._on_mqtt_hub_mdns(None, None, msg)
 
-    mock_zc.unregister_all_services.assert_called_once()
-    mock_zc.close.assert_called_once()
-    assert bridge._zeroconf is None
+    mock_ws.stop_mdns.assert_called_once()
     assert bridge._config["hub_ws_mdns"] is False
+
+
+def test_on_mqtt_hub_mdns_toggle_true(tmp_config_dir, sample_config):
+    """_on_mqtt_hub_mdns 'true' delegates start_mdns() to the ws listener."""
+    from unittest.mock import MagicMock, patch
+
+    bridge = _make_bridge_for_config_handlers(tmp_config_dir, sample_config)
+
+    mock_ws = MagicMock()
+    bridge._ws_listener = mock_ws
+
+    msg = MagicMock()
+    msg.payload.decode.return_value = "true"
+
+    with patch("bridge.save_config"):
+        bridge._on_mqtt_hub_mdns(None, None, msg)
+
+    mock_ws.start_mdns.assert_called_once()
+    assert bridge._config["hub_ws_mdns"] is True
 
 
 def test_on_mqtt_hub_mdns_warns_when_ws_listener_not_running(tmp_config_dir, sample_config):
@@ -1580,7 +1596,6 @@ def test_on_mqtt_hub_mdns_warns_when_ws_listener_not_running(tmp_config_dir, sam
 
     bridge = _make_bridge_for_config_handlers(tmp_config_dir, sample_config)
     bridge._ws_listener = None  # WS listener not running
-    bridge._zeroconf = None
 
     msg = MagicMock()
     msg.payload.decode.return_value = "true"
@@ -1589,21 +1604,18 @@ def test_on_mqtt_hub_mdns_warns_when_ws_listener_not_running(tmp_config_dir, sam
         bridge._on_mqtt_hub_mdns(None, None, msg)
 
     # mDNS must NOT be started — no point advertising a non-listening hub
-    assert bridge._zeroconf is None
     # Config is still saved as True so that enabling WS later auto-starts mDNS
     assert bridge._config["hub_ws_mdns"] is True
 
 
 def test_on_mqtt_hub_ws_enabled_false_also_stops_mdns(tmp_config_dir, sample_config):
-    """Disabling WS listener also tears down any active mDNS advertisement."""
+    """Disabling WS listener calls ws_listener.stop() which also tears down mDNS."""
     from unittest.mock import MagicMock, patch
 
     bridge = _make_bridge_for_config_handlers(tmp_config_dir, sample_config)
 
     mock_ws = MagicMock()
     bridge._ws_listener = mock_ws
-    mock_zc = MagicMock()
-    bridge._zeroconf = mock_zc
 
     msg = MagicMock()
     msg.payload.decode.return_value = "false"
@@ -1611,11 +1623,9 @@ def test_on_mqtt_hub_ws_enabled_false_also_stops_mdns(tmp_config_dir, sample_con
     with patch("bridge.save_config"):
         bridge._on_mqtt_hub_ws_enabled(None, None, msg)
 
+    # stop() on WebSocketListener also handles mDNS teardown internally
     mock_ws.stop.assert_called_once()
     assert bridge._ws_listener is None
-    mock_zc.unregister_all_services.assert_called_once()
-    mock_zc.close.assert_called_once()
-    assert bridge._zeroconf is None
 
 
 def test_hub_starts_without_dongle(tmp_config_dir, sample_config):
@@ -1637,7 +1647,7 @@ def test_hub_starts_without_dongle(tmp_config_dir, sample_config):
         "hub_ws_port": 8765,
         "hub_ws_mdns": False,
         "hub_remote_pairing_seconds": 60,
-        "usb_dongle": "auto",
+        "dongle": "auto",
         "log_level": "INFO",
     }
     bridge._hub_id = "test-hub-no-dongle"
@@ -1653,7 +1663,7 @@ def test_hub_starts_without_dongle(tmp_config_dir, sample_config):
     bridge._log_level_set_topic = ""
     bridge._cleanup_removed_dongles_topic = ""
     bridge._hub_restart_topic = ""
-    bridge._hub_usb_dongle_topic = ""
+    bridge._hub_dongle_topic = ""
     bridge._hub_ws_port_topic = ""
     bridge._hub_remote_pairing_timeout_topic = ""
     bridge._hub_mdns_topic = ""
@@ -1689,7 +1699,7 @@ def test_hub_starts_without_dongle(tmp_config_dir, sample_config):
                         if not device_paths and not accept_remote:
                             bridge._logger.warning(
                                 "No WyzeSense dongles found and no remote connections enabled. "
-                                "Hub is running with no active dongle. Configure usb_dongle via HA or config."
+                                "Hub is running with no active dongle. Configure dongle via HA or config."
                             )
                         # No exception was raised — test passes
 
@@ -1956,3 +1966,413 @@ def test_on_mqtt_hub_ws_enabled_updates_config(tmp_config_dir, sample_config):
 
     assert bridge._config["hub_ws_enabled"] is True
     bridge._gateway.publish.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# Remote dongle and log_level config forwarding
+# ---------------------------------------------------------------------------
+
+
+def test_on_mqtt_remote_dongle_calls_send_dongle(tmp_config_dir, sample_config):
+    """_on_mqtt_remote_dongle forwards the value to the remote via send_dongle."""
+    from unittest.mock import MagicMock
+
+    from bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._config = sample_config
+    bridge._hub_id = "test-hub-id"
+    bridge._logger = logging.getLogger("test.bridge")
+    bridge._gateway = MagicMock()
+    bridge._gateway.publish.return_value = MagicMock(rc=0)
+
+    transport = MagicMock()
+    msg = MagicMock()
+    msg.payload.decode.return_value = "/dev/hidraw2"
+
+    handler = bridge._on_mqtt_remote_dongle("remote-xyz", transport)
+    handler(None, None, msg)
+
+    transport.send_dongle.assert_called_once_with("/dev/hidraw2")
+
+
+def test_on_mqtt_remote_dongle_echoes_state_to_mqtt(tmp_config_dir, sample_config):
+    """_on_mqtt_remote_dongle publishes the new value back to the state topic."""
+    from unittest.mock import MagicMock
+
+    from bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._config = sample_config
+    bridge._hub_id = "test-hub-id"
+    bridge._logger = logging.getLogger("test.bridge")
+    bridge._gateway = MagicMock()
+    bridge._gateway.publish.return_value = MagicMock(rc=0)
+
+    transport = MagicMock()
+    msg = MagicMock()
+    msg.payload.decode.return_value = "auto"
+
+    handler = bridge._on_mqtt_remote_dongle("remote-xyz", transport)
+    handler(None, None, msg)
+
+    published_topics = [c.args[0] for c in bridge._gateway.publish.call_args_list]
+    assert any("remote-xyz/dongle" in t for t in published_topics)
+
+
+def test_on_mqtt_remote_log_level_calls_send_log_level(tmp_config_dir, sample_config):
+    """_on_mqtt_remote_log_level forwards a valid level to the remote via send_log_level."""
+    from unittest.mock import MagicMock
+
+    from bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._config = sample_config
+    bridge._hub_id = "test-hub-id"
+    bridge._logger = logging.getLogger("test.bridge")
+    bridge._gateway = MagicMock()
+    bridge._gateway.publish.return_value = MagicMock(rc=0)
+
+    transport = MagicMock()
+    msg = MagicMock()
+    msg.payload.decode.return_value = "DEBUG"
+
+    handler = bridge._on_mqtt_remote_log_level("remote-xyz", transport)
+    handler(None, None, msg)
+
+    transport.send_log_level.assert_called_once_with("DEBUG")
+
+
+def test_on_mqtt_remote_log_level_rejects_invalid_level(tmp_config_dir, sample_config):
+    """_on_mqtt_remote_log_level ignores unknown log levels."""
+    from unittest.mock import MagicMock
+
+    from bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._config = sample_config
+    bridge._hub_id = "test-hub-id"
+    bridge._logger = logging.getLogger("test.bridge")
+    bridge._gateway = MagicMock()
+
+    transport = MagicMock()
+    msg = MagicMock()
+    msg.payload.decode.return_value = "VERBOSE"
+
+    handler = bridge._on_mqtt_remote_log_level("remote-xyz", transport)
+    handler(None, None, msg)
+
+    transport.send_log_level.assert_not_called()
+
+
+def test_on_mqtt_remote_log_level_echoes_state_to_mqtt(tmp_config_dir, sample_config):
+    """_on_mqtt_remote_log_level publishes the new level back to the state topic."""
+    from unittest.mock import MagicMock
+
+    from bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._config = sample_config
+    bridge._hub_id = "test-hub-id"
+    bridge._logger = logging.getLogger("test.bridge")
+    bridge._gateway = MagicMock()
+    bridge._gateway.publish.return_value = MagicMock(rc=0)
+
+    transport = MagicMock()
+    msg = MagicMock()
+    msg.payload.decode.return_value = "WARNING"
+
+    handler = bridge._on_mqtt_remote_log_level("remote-xyz", transport)
+    handler(None, None, msg)
+
+    published_topics = [c.args[0] for c in bridge._gateway.publish.call_args_list]
+    assert any("remote-xyz/log_level" in t for t in published_topics)
+
+
+# ---------------------------------------------------------------------------
+# Battery percentage computation in _on_dongle_event
+# ---------------------------------------------------------------------------
+
+
+def test_on_dongle_event_computes_battery_pct_from_voltage(tmp_config_dir, sample_config):
+    """_on_dongle_event adds battery pct to the published payload using SENSOR_TYPES curves."""
+    from dongle_protocol import SensorEvent
+
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._registry.sensors = {"AAAAAAAA": {"sensor_type": "switch"}}
+    worker._registry.state = {"AAAAAAAA": {"online": True}}
+    worker._registry.is_valid_mac = lambda mac: True
+
+    published_payloads = []
+
+    def capture_publish(topic, payload=None, **kwargs):
+        if isinstance(payload, dict):
+            published_payloads.append((topic, payload))
+        return MagicMock(rc=0)
+
+    worker._gateway.publish.side_effect = capture_publish
+
+    # raw=80, switch (CR1632 2.4–3.2V): voltage=80/32.0=2.5V → ~13%
+    event = SensorEvent(
+        "alarm",
+        "AAAAAAAA",
+        __import__("time").time(),
+        sensor_type="switch",
+        battery_raw=80,
+        signal_strength=50,
+        state="open",
+    )
+    worker._on_dongle_event(None, event)
+
+    data_payloads = [p for t, p in published_payloads if "sensor/AAAAAAAA" in t and "status" not in t]
+    assert data_payloads, "Expected at least one data payload"
+    payload = data_payloads[0]
+    assert "battery_voltage" in payload
+    assert abs(payload["battery_voltage"] - 2.5) < 0.001
+    assert payload["battery"] == 13
+
+
+def test_on_dongle_event_battery_pct_none_for_unknown_type(tmp_config_dir, sample_config):
+    """battery is None when no discharge curve exists for the sensor type."""
+    from dongle_protocol import SensorEvent
+
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._registry.sensors = {"AAAAAAAA": {"sensor_type": "chime"}}
+    worker._registry.state = {"AAAAAAAA": {"online": True}}
+    worker._registry.is_valid_mac = lambda mac: True
+
+    published_payloads = []
+
+    def capture_publish(topic, payload=None, **kwargs):
+        if isinstance(payload, dict):
+            published_payloads.append((topic, payload))
+        return MagicMock(rc=0)
+
+    worker._gateway.publish.side_effect = capture_publish
+
+    event = SensorEvent(
+        "alarm",
+        "AAAAAAAA",
+        __import__("time").time(),
+        sensor_type="chime",
+        battery_raw=80,
+        signal_strength=50,
+        state="open",
+    )
+    worker._on_dongle_event(None, event)
+
+    data_payloads = [p for t, p in published_payloads if "sensor/AAAAAAAA" in t and "status" not in t]
+    if data_payloads:
+        assert data_payloads[0].get("battery") is None
+
+
+# ---------------------------------------------------------------------------
+# RemoteTransport (defined in bridge.py)
+# ---------------------------------------------------------------------------
+
+
+def _make_ws_mock(recv_frames: list) -> MagicMock:
+    """Build a mock WebSocket that yields frames from recv_frames in order."""
+    ws = MagicMock()
+    ws.recv.side_effect = recv_frames
+    ws.send = MagicMock()
+    ws.close = MagicMock()
+    return ws
+
+
+class TestRemoteTransport:
+    """RemoteTransport drains the replay deque before switching to live recv()."""
+
+    def test_remote_id_property(self):
+        from bridge import RemoteTransport
+
+        ws = _make_ws_mock([])
+        t = RemoteTransport(ws, remote_id="pi-floor2", dongle_mac="AABBCCDD", replay_frames=[])
+        assert t.remote_id == "pi-floor2"
+
+    def test_dongle_mac_property(self):
+        from bridge import RemoteTransport
+
+        ws = _make_ws_mock([])
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="AABBCCDD", replay_frames=[])
+        assert t.dongle_mac == "AABBCCDD"
+
+    def test_replay_frames_drained_before_live(self):
+        from bridge import RemoteTransport
+
+        replay = [b"\x01" * 64, b"\x02" * 64]
+        live = b"\x03" * 64
+        ws = _make_ws_mock([live])
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=list(replay))
+
+        assert t.read() == replay[0]
+        assert t.read() == replay[1]
+        assert t.read() == live  # now switches to ws.recv()
+        ws.recv.assert_called_once()
+
+    def test_empty_replay_goes_straight_to_ws(self):
+        from bridge import RemoteTransport
+
+        live = b"\xaa" * 64
+        ws = _make_ws_mock([live])
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=[])
+        result = t.read()
+        assert result == live
+        ws.recv.assert_called_once()
+
+    def test_write_calls_ws_send(self):
+        from bridge import RemoteTransport
+
+        ws = _make_ws_mock([])
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=[])
+        data = b"\xaa\x55\x43\x03\x04\x01\x49"
+        t.write(data)
+        ws.send.assert_called_once_with(data)
+
+    def test_close_calls_ws_close(self):
+        from bridge import RemoteTransport
+
+        ws = _make_ws_mock([])
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=[])
+        t.close()
+        ws.close.assert_called_once()
+
+    def test_close_swallows_exceptions(self):
+        from bridge import RemoteTransport
+
+        ws = MagicMock()
+        ws.close.side_effect = RuntimeError("already closed")
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=[])
+        t.close()  # must not raise
+
+    def test_text_messages_from_ws_skipped_and_returns_empty(self):
+        """Unexpected JSON control messages during forwarding are skipped."""
+        from bridge import RemoteTransport
+
+        text_msg = '{"type": "ping"}'
+        binary_msg = b"\x05" * 64
+        ws = _make_ws_mock([text_msg, binary_msg])
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=[])
+
+        result1 = t.read()  # receives text → returns b""
+        assert result1 == b""
+        result2 = t.read()  # receives binary → returns it
+        assert result2 == binary_msg
+
+    def test_remote_unhealthy_triggers_callback_and_returns_empty(self):
+        """remote_unhealthy JSON text frame triggers on_health_change(remote_id, False)."""
+        from bridge import RemoteTransport
+
+        health_calls = []
+
+        def callback(rid, healthy):
+            health_calls.append((rid, healthy))
+
+        unhealthy_msg = json.dumps({"type": "remote_unhealthy", "reason": "dongle_lost"})
+        binary_msg = b"\xaa" * 64
+        ws = _make_ws_mock([unhealthy_msg, binary_msg])
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=[], on_health_change=callback)
+
+        result1 = t.read()  # health message → b""
+        assert result1 == b""
+        assert health_calls == [("r1", False)]
+
+        result2 = t.read()  # binary frame passes through
+        assert result2 == binary_msg
+
+    def test_remote_healthy_triggers_callback_and_returns_empty(self):
+        """remote_healthy JSON text frame triggers on_health_change(remote_id, True)."""
+        from bridge import RemoteTransport
+
+        health_calls = []
+
+        def callback(rid, healthy):
+            health_calls.append((rid, healthy))
+
+        healthy_msg = json.dumps({"type": "remote_healthy"})
+        ws = _make_ws_mock([healthy_msg])
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=[], on_health_change=callback)
+
+        result = t.read()
+        assert result == b""
+        assert health_calls == [("r1", True)]
+
+    def test_health_message_without_callback_does_not_raise(self):
+        """Health messages with no callback set are silently ignored."""
+        import json
+
+        from bridge import RemoteTransport
+
+        unhealthy_msg = json.dumps({"type": "remote_unhealthy", "reason": "dongle_lost"})
+        ws = _make_ws_mock([unhealthy_msg])
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=[])
+        result = t.read()  # must not raise
+        assert result == b""
+
+    def test_send_restart_sends_correct_json_frame(self):
+        """send_restart() sends {"type": "restart"} as a JSON text frame."""
+        import json
+
+        from bridge import RemoteTransport
+
+        ws = _make_ws_mock([])
+        ws.send = MagicMock()
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=[])
+        t.send_restart()
+
+        ws.send.assert_called_once()
+        sent = ws.send.call_args.args[0]
+        assert isinstance(sent, str)
+        assert json.loads(sent) == {"type": "restart"}
+
+    def test_send_dongle_sends_correct_json_frame(self):
+        """send_dongle() sends {\"type\": \"set_dongle\", \"value\": ...} as a JSON text frame."""
+        import json
+
+        from bridge import RemoteTransport
+
+        ws = _make_ws_mock([])
+        ws.send = MagicMock()
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=[])
+        t.send_dongle("/dev/hidraw1")
+
+        ws.send.assert_called_once()
+        sent = ws.send.call_args.args[0]
+        assert isinstance(sent, str)
+        assert json.loads(sent) == {"type": "set_dongle", "value": "/dev/hidraw1"}
+
+    def test_send_log_level_sends_correct_json_frame(self):
+        """send_log_level() sends {\"type\": \"set_log_level\", \"level\": ...} as a JSON text frame."""
+        import json
+
+        from bridge import RemoteTransport
+
+        ws = _make_ws_mock([])
+        ws.send = MagicMock()
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=[])
+        t.send_log_level("DEBUG")
+
+        ws.send.assert_called_once()
+        sent = ws.send.call_args.args[0]
+        assert isinstance(sent, str)
+        assert json.loads(sent) == {"type": "set_log_level", "level": "DEBUG"}
+
+    def test_unexpected_control_message_is_logged_not_raised(self):
+        """An unknown text control message from the remote logs a warning and returns b\"\"."""
+        import json
+
+        from bridge import RemoteTransport
+
+        ws = _make_ws_mock([json.dumps({"type": "unknown_future_message"})])
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=[])
+        result = t.read()
+        assert result == b""
+
+    def test_non_json_text_from_remote_is_logged_not_raised(self):
+        """A non-JSON text message from the remote logs a warning and returns b\"\"."""
+        from bridge import RemoteTransport
+
+        ws = _make_ws_mock(["not valid json"])
+        t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=[])
+        result = t.read()
+        assert result == b""

@@ -85,7 +85,7 @@ if [ -f "$OPTIONS" ]; then
     export WS2M_SELF_TOPIC_ROOT=$(_jq '.self_topic_root')
     export WS2M_HASS_TOPIC_ROOT=$(_jq '.hass_topic_root')
     export WS2M_HASS_DISCOVERY=$(_jq '.hass_discovery')
-    export WS2M_USB_DONGLE=$(_jq '.usb_dongle')
+    export WS2M_DONGLE=$(_jq '.dongle')
     export WS2M_LOG_LEVEL=$(_jq '.log_level')
 
     # Point ws2m at the Supervisor persistent data volume

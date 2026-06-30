@@ -1,6 +1,13 @@
 """
 WyzeSense USB dongle protocol library.
 
+A standalone library for communicating with the Wyze Sense USB bridge dongle
+(HID device, vendor 1a86 / product e024).  This module has no dependency on
+other ws2m-specific modules and can be used independently by other projects.
+
+Transport (ABC) and LocalTransport are defined here.  RemoteTransport (WebSocket
+relay for the ws2m remote bridge) is a ws2m-specific concern in bridge.py.
+
 Handles low-level communication with the Wyze Sense USB bridge dongle
 (HID device, vendor 1a86 / product e024).  This module was originally
 derived from HclX/WyzeSensePy and has since diverged significantly.
@@ -10,23 +17,16 @@ Public API
 open_dongle(device, event_handler, logger) -> Dongle
     Open the dongle at *device* path and return a connected Dongle instance.
 
-open_remote_dongle(ws_connection, remote_id, dongle_mac, replay_frames, event_handler, logger) -> Dongle
-    Open a dongle via a remote WebSocket connection.
-
 Transport (ABC)
-    Abstract transport layer; concrete implementations below.
+    Abstract I/O interface.
 
 LocalTransport
     Wraps a local USB HID file descriptor.
-
-RemoteTransport
-    Wraps an accepted WebSocket connection from a remote.
 
 Dongle
     .mac         – dongle MAC address string
     .version     – firmware version string
     .enr         – ENR bytes
-    .remote_id   – remote identifier (None for local dongles)
     .list()      – list paired sensor MACs
     .scan()      – pair a new sensor (blocks up to 60 s)
     .delete(mac) – remove a paired sensor
@@ -44,7 +44,6 @@ import struct
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections import deque
 
 # ---------------------------------------------------------------------------
 # Default logger; overridden when open_dongle() is called with a logger argument.
@@ -54,27 +53,36 @@ _logger = logging.getLogger("ws2m.dongle")
 
 
 # ---------------------------------------------------------------------------
-# Transport layer abstraction
+# Transport abstraction
+#
+# dongle_protocol defines the abstract interface and LocalTransport, the concrete
+# implementation for a local USB HID fd.  RemoteTransport (WebSocket relay) is a
+# ws2m-specific concern and lives in bridge.py, which imports Transport from here.
 # ---------------------------------------------------------------------------
 
 
 class Transport(ABC):
-    """Abstract I/O transport between the hub and a dongle (local or remote)."""
+    """Abstract I/O transport between a caller and a dongle."""
 
     @abstractmethod
     def read(self) -> bytes:
-        """Return the next raw HID report bytes (64-byte report including the length prefix).
+        """Return the next raw HID report bytes.
 
-        Blocks until data is available.  Returns an empty bytes object on EOF/disconnect.
+        Blocks until data is available.  Returns b"" on EOF/disconnect.
         """
 
     @abstractmethod
     def write(self, data: bytes) -> None:
-        """Write raw protocol bytes to the dongle (no HID framing required for writes)."""
+        """Write raw protocol bytes to the dongle."""
 
     @abstractmethod
     def close(self) -> None:
         """Close the transport and release resources."""
+
+
+# ---------------------------------------------------------------------------
+# Local USB HID transport
+# ---------------------------------------------------------------------------
 
 
 class LocalTransport(Transport):
@@ -94,86 +102,6 @@ class LocalTransport(Transport):
         if self._fd is not None:
             os.close(self._fd)
             self._fd = None
-
-
-class RemoteTransport(Transport):
-    """Transport backed by a WebSocket connection from a remote.
-
-    The remote sends raw HID reports as binary WebSocket messages (dongle→hub direction)
-    and receives raw protocol bytes as binary WebSocket messages (hub→dongle direction).
-
-    Replay frames collected during the auth handshake are delivered first via an
-    in-memory deque before switching to live WebSocket reads.
-
-    Health messages (JSON text frames with type "remote_unhealthy" / "remote_healthy")
-    are intercepted and routed to an optional on_health_change callback; they return
-    b"" so the read loop does not treat them as HID data.
-    """
-
-    def __init__(
-        self,
-        ws_connection,
-        remote_id: str,
-        dongle_mac: str,
-        replay_frames: list[bytes],
-        on_health_change=None,
-    ):
-        self._ws = ws_connection
-        self._remote_id = remote_id
-        self._dongle_mac = dongle_mac
-        self._replay: deque[bytes] = deque(replay_frames)
-        self._on_health_change = on_health_change  # Callable[[str, bool], None] | None
-
-    @property
-    def remote_id(self) -> str:
-        return self._remote_id
-
-    @property
-    def dongle_mac(self) -> str:
-        return self._dongle_mac
-
-    def read(self) -> bytes:
-        if self._replay:
-            return self._replay.popleft()
-        msg = self._ws.recv()
-        if isinstance(msg, str):
-            # Intercept health messages; route to callback, return empty bytes.
-            try:
-                import json
-
-                parsed = json.loads(msg)
-                msg_type = parsed.get("type", "")
-                if msg_type == "remote_unhealthy":
-                    _logger.warning("RemoteTransport: remote reported unhealthy: %s", parsed.get("reason", ""))
-                    if self._on_health_change is not None:
-                        self._on_health_change(self._remote_id, False)
-                    return b""
-                if msg_type == "remote_healthy":
-                    _logger.info("RemoteTransport: remote reported healthy")
-                    if self._on_health_change is not None:
-                        self._on_health_change(self._remote_id, True)
-                    return b""
-            except Exception:
-                pass
-            # Other control messages are unexpected during normal forwarding; log and skip.
-            _logger.warning("RemoteTransport: unexpected text message from remote: %s", msg[:120])
-            return b""
-        return bytes(msg)
-
-    def write(self, data: bytes) -> None:
-        self._ws.send(data)
-
-    def send_restart(self) -> None:
-        """Send a restart command to the remote as a JSON text frame."""
-        import json
-
-        self._ws.send(json.dumps({"type": "restart"}))
-
-    def close(self) -> None:
-        try:
-            self._ws.close()
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -523,18 +451,8 @@ class SensorEvent:
                     raw = raw * 2
                 voltage = raw / 32.0
                 self.battery_voltage = round(voltage, 3)
-                # Approximate percentage from per-type discharge range stored in SENSOR_TYPES.
-                # Import deferred to avoid a circular dependency at module load.
-                from sensors import SENSOR_TYPES as _ST
-
-                type_meta = _ST.get(sensor_type, {})
-                v_min = type_meta.get("battery_v_min")
-                v_max = type_meta.get("battery_v_max")
-                if v_min is not None and v_max is not None:
-                    pct = (voltage - v_min) / (v_max - v_min) * 100.0
-                    self.battery = max(0, min(100, round(pct)))
-                else:
-                    self.battery = None
+                # battery_pct is computed by the caller using per-sensor discharge curves
+                # from sensors.SENSOR_TYPES.  dongle_protocol does not depend on sensors.py.
 
         if "signal_strength" in self.__dict__:
             self.signal_strength = -self.signal_strength  # dongle reports positive RSSI; negate for dBm
@@ -816,13 +734,6 @@ class Dongle:
     mac: str
     version: str
     enr: bytes
-
-    @property
-    def remote_id(self) -> str | None:
-        """Return the remote identifier for remote dongles, or None for local dongles."""
-        if isinstance(self._transport, RemoteTransport):
-            return self._transport.remote_id
-        return None
 
     # ------------------------------------------------------------------
     # Async notification handlers
@@ -1205,39 +1116,3 @@ def open_dongle(device: str, event_handler, logger: logging.Logger | None = None
     else:
         _logger = logging.getLogger("ws2m.dongle")
     return Dongle(LocalTransport(device), event_handler)
-
-
-def open_remote_dongle(
-    ws_connection,
-    remote_id: str,
-    dongle_mac: str,
-    replay_frames: list[bytes],
-    event_handler,
-    logger: logging.Logger | None = None,
-    on_health_change=None,
-) -> Dongle:
-    """Return a connected :class:`Dongle` backed by a remote WebSocket connection.
-
-    This is called by the hub's WebSocket listener after completing the auth
-    handshake with a remote.  The remote has already supplied ``remote_id``,
-    ``dongle_mac``, and any buffered ``replay_frames`` during the auth exchange.
-
-    The :class:`RemoteTransport` delivers replay frames first (allowing the hub's
-    HID handshake to consume them), then switches to live WebSocket reads.
-
-    Args:
-        ws_connection:   Accepted WebSocket connection (``websockets.sync.server.Connection``).
-        remote_id:       Remote UUID from the auth message.
-        dongle_mac:      Dongle MAC string from the auth message.
-        replay_frames:   Ordered list of raw HID report bytes buffered by the remote.
-        event_handler:   Callable ``(dongle, event)`` invoked for each sensor event.
-        logger:          Optional logger; falls back to the module logger.
-        on_health_change: Optional callable ``(remote_id, is_healthy)`` for health messages.
-    """
-    global _logger
-    if logger is not None:
-        _logger = logger
-    else:
-        _logger = logging.getLogger("ws2m.dongle")
-    transport = RemoteTransport(ws_connection, remote_id, dongle_mac, replay_frames, on_health_change=on_health_change)
-    return Dongle(transport, event_handler)

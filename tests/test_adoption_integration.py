@@ -82,6 +82,8 @@ def _build_hub(remotes_path: pathlib.Path, pairing_active: bool = False):
     on_conn_calls = []
     listener = WebSocketListener(
         port=8765,
+        hub_id="test-hub-id",
+        hub_version="4.0.0",
         remotes_path=remotes_path,
         get_pairing_active=lambda: pairing_active,
         on_connection=lambda t: on_conn_calls.append(t),
@@ -104,7 +106,7 @@ def _build_remote(data_dir: pathlib.Path, remote_id: str = "test-remote-uuid", d
     return r
 
 
-def _run_pipe_auth(listener, remote, hub_ws, remote_ws):
+def _run_pipe_auth(listener, remote, hub_ws, ws_listener):
     """Run hub._authenticate and remote._authenticate concurrently over the piped WS pair."""
     errors: list = []
 
@@ -116,7 +118,7 @@ def _run_pipe_auth(listener, remote, hub_ws, remote_ws):
 
     def remote_side():
         try:
-            remote._authenticate(remote_ws)
+            remote._authenticate(ws_listener)
         except Exception as exc:
             errors.append(("remote", exc))
 
@@ -148,8 +150,8 @@ class TestAdoptionIntegration:
         listener, on_conn_calls = _build_hub(hub_remotes, pairing_active=True)
         remote = _build_remote(remote_data, remote_id, dongle_mac)
 
-        hub_ws, remote_ws = _make_pipe()
-        errors = _run_pipe_auth(listener, remote, hub_ws, remote_ws)
+        hub_ws, ws_listener = _make_pipe()
+        errors = _run_pipe_auth(listener, remote, hub_ws, ws_listener)
 
         assert errors == [], f"Protocol errors: {errors}"
 
@@ -192,8 +194,8 @@ class TestAdoptionIntegration:
         listener, on_conn_calls = _build_hub(hub_remotes, pairing_active=False)
         remote = _build_remote(remote_data, remote_id, dongle_mac)
 
-        hub_ws, remote_ws = _make_pipe()
-        errors = _run_pipe_auth(listener, remote, hub_ws, remote_ws)
+        hub_ws, ws_listener = _make_pipe()
+        errors = _run_pipe_auth(listener, remote, hub_ws, ws_listener)
 
         assert errors == [], f"Protocol errors: {errors}"
         assert len(on_conn_calls) == 1
@@ -217,8 +219,8 @@ class TestAdoptionIntegration:
         listener, on_conn_calls = _build_hub(hub_remotes, pairing_active=False)
         remote = _build_remote(remote_data, remote_id, dongle_mac)
 
-        hub_ws, remote_ws = _make_pipe()
-        errors = _run_pipe_auth(listener, remote, hub_ws, remote_ws)
+        hub_ws, ws_listener = _make_pipe()
+        errors = _run_pipe_auth(listener, remote, hub_ws, ws_listener)
 
         # Hub side should raise ValueError (invalid token)
         hub_errors = [e for side, e in errors if side == "hub"]
@@ -244,8 +246,8 @@ class TestAdoptionIntegration:
         listener, on_conn_calls = _build_hub(hub_remotes, pairing_active=False)
         remote = _build_remote(remote_data)
 
-        hub_ws, remote_ws = _make_pipe()
-        errors = _run_pipe_auth(listener, remote, hub_ws, remote_ws)
+        hub_ws, ws_listener = _make_pipe()
+        errors = _run_pipe_auth(listener, remote, hub_ws, ws_listener)
 
         hub_errors = [e for side, e in errors if side == "hub"]
         assert len(hub_errors) == 1
@@ -268,8 +270,8 @@ class TestAdoptionIntegration:
         listener, _ = _build_hub(hub_remotes, pairing_active=True)
         remote = _build_remote(remote_data)
 
-        hub_ws, remote_ws = _make_pipe()
-        errors = _run_pipe_auth(listener, remote, hub_ws, remote_ws)
+        hub_ws, ws_listener = _make_pipe()
+        errors = _run_pipe_auth(listener, remote, hub_ws, ws_listener)
 
         assert errors == []
 
@@ -297,8 +299,8 @@ class TestAdoptionIntegration:
         listener, _ = _build_hub(hub_remotes, pairing_active=False)
         remote = _build_remote(remote_data, remote_id)
 
-        hub_ws, remote_ws = _make_pipe()
-        errors = _run_pipe_auth(listener, remote, hub_ws, remote_ws)
+        hub_ws, ws_listener = _make_pipe()
+        errors = _run_pipe_auth(listener, remote, hub_ws, ws_listener)
 
         assert errors == []
 

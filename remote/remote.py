@@ -346,7 +346,7 @@ class Remote:
             devices = _find_dongle_devices()
             if not devices:
                 raise RuntimeError(
-                    "No WyzeSense dongle found. Set WS2M_DEVICE=/dev/hidrawN or pass --device /dev/hidrawN."
+                    "No WyzeSense dongle found. Set WS2M_DONGLE=/dev/hidrawN or pass --dongle /dev/hidrawN."
                 )
             device = devices[0]
             self._logger.info(f"Auto-detected dongle: {device}")
@@ -515,14 +515,26 @@ class Remote:
                         # Text control messages from the hub
                         try:
                             parsed = json.loads(msg)
-                            if parsed.get("type") == "restart":
+                            msg_type = parsed.get("type")
+                            if msg_type == "restart":
                                 self._logger.warning("Restart requested by hub — shutting down cleanly")
                                 _HEALTH_FILE.unlink(missing_ok=True)
                                 self.stop()
                                 os._exit(0)
+                            elif msg_type == "set_dongle":
+                                value = str(parsed.get("value", "auto"))
+                                self._logger.info(
+                                    f"Dongle config updated to {value!r} by hub — effective after restart"
+                                )
+                                self._device = value
+                            elif msg_type == "set_log_level":
+                                level = str(parsed.get("level", "INFO")).upper()
+                                self._logger.info(f"Log level changed to {level} by hub")
+                                logging.getLogger().setLevel(getattr(logging, level, logging.INFO))
+                            else:
+                                self._logger.debug(f"Unexpected control message from hub: {msg[:80]!r}")
                         except Exception:
-                            pass
-                        self._logger.debug(f"Unexpected text from hub: {msg[:80]!r}")
+                            self._logger.debug(f"Unexpected text from hub: {msg[:80]!r}")
             except websockets.exceptions.ConnectionClosed:
                 self._logger.debug("Hub WebSocket closed")
             except Exception as exc:

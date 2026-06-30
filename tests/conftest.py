@@ -65,7 +65,7 @@ def sample_config(tmp_config_dir):
         "self_topic_root": "wyzesense2mqtt",
         "hass_topic_root": "homeassistant",
         "hass_discovery": True,
-        "usb_dongle": "auto",
+        "dongle": "auto",
     }
     cfg_path = os.path.join(cfg_module.CONFIG_DIR, cfg_module.MAIN_CONFIG_FILE)
     with open(cfg_path, "w") as f:

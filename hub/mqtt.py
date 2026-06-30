@@ -589,12 +589,12 @@ def _build_hub_components(self_root: str, hub_id: str) -> dict:
             "icon": "mdi:restart",
             "entity_category": "config",
         },
-        "usb_dongle": {
+        "dongle": {
             "platform": "text",
-            "name": "USB dongle",
+            "name": "Dongle",
             "entity_category": "config",
-            "state_topic": f"{self_root}/hub/{hub_id}/usb_dongle",
-            "command_topic": f"{self_root}/hub/{hub_id}/usb_dongle/set",
+            "state_topic": f"{self_root}/hub/{hub_id}/dongle",
+            "command_topic": f"{self_root}/hub/{hub_id}/dongle/set",
             "icon": "mdi:usb",
         },
         "ws_port": {
@@ -741,6 +741,22 @@ def _build_remote_components(self_root: str, remote_id: str) -> dict:
             "entity_category": "config",
             "command_topic": f"{self_root}/remote/{remote_id}/cleanup_disconnected_dongles",
             "payload_press": "cleanup",
+        },
+        "dongle": {
+            "platform": "text",
+            "name": "Dongle",
+            "entity_category": "config",
+            "state_topic": f"{self_root}/remote/{remote_id}/dongle",
+            "command_topic": f"{self_root}/remote/{remote_id}/dongle/set",
+            "icon": "mdi:usb",
+        },
+        "log_level": {
+            "platform": "select",
+            "name": "Log level",
+            "entity_category": "config",
+            "state_topic": f"{self_root}/remote/{remote_id}/log_level",
+            "command_topic": f"{self_root}/remote/{remote_id}/log_level/set",
+            "options": LOG_LEVEL_OPTIONS,
         },
     }
 

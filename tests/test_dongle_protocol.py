@@ -5,7 +5,9 @@ All tests are pure (no USB hardware required).  Byte payloads are constructed
 synthetically using the same struct layouts as the production code.
 """
 
+import os
 import struct
+from unittest.mock import patch
 
 import pytest
 from conftest import (
@@ -209,7 +211,6 @@ def test_sensor_event_contact_open():
     assert ev.state == "open"
     # raw=80, switch (CR1632 3V): voltage=80/32.0=2.5V; range 2.4–3.2V → ~13%
     assert ev.battery_voltage == pytest.approx(2.5, abs=0.001)
-    assert ev.battery == 13
     assert ev.signal_strength == -50  # negated
     assert abs(ev.timestamp - 1_700_000_000.0) < 0.001
 
@@ -253,7 +254,6 @@ def test_sensor_event_heartbeat():
     assert ev.event == "status"
     # raw=65, switch (3V): voltage=65/32.0=2.03V; below v_min 2.4V → 0%
     assert ev.battery_voltage == pytest.approx(2.03125, abs=0.001)
-    assert ev.battery == 0
     assert ev.signal_strength == -40
     assert not hasattr(ev, "state")
 
@@ -275,7 +275,6 @@ def test_sensor_event_v2_contact_open():
     assert ev.state == "open"
     # raw=50, switchv2 (AAA 1.5V, doubled→100): voltage=100/32.0=3.125V; range 1.8–3.2V → ~95%
     assert ev.battery_voltage == pytest.approx(3.125, abs=0.001)
-    assert ev.battery == 95
 
 
 def test_sensor_event_v2_contact_battery_capped_at_100():
@@ -283,8 +282,8 @@ def test_sensor_event_v2_contact_battery_capped_at_100():
 
     payload = make_alarm_payload(mac="CCCCCCCC", sensor_type=0x0E, battery=90)
     ev = SensorEvent.from_packet(payload)
-    # raw=90, doubled→180: voltage=180/32.0=5.625V; above v_max → capped at 100%
-    assert ev.battery == 100
+    # raw=90, switchv2 doubles→180: voltage=180/32.0=5.625V (above typical max — pct capped by bridge)
+    assert abs(ev.battery_voltage - 5.625) < 0.001
 
 
 def test_sensor_event_motion_v2():
@@ -323,7 +322,6 @@ def test_sensor_event_climate():
     assert ev.humidity == 55
     # raw=90, climate (CR2450 3V): voltage=90/32.0=2.8125V; range 2.4–3.2V → ~52%
     assert ev.battery_voltage == pytest.approx(2.8125, abs=0.001)
-    assert ev.battery == 52
     assert ev.signal_strength == -60  # now correctly from offset 9
 
 
@@ -363,7 +361,6 @@ def test_sensor_event_leak_dry():
     assert ev.probe_available is True
     # raw=75, leak (CR2450 3V): voltage=75/32.0=2.34375V; below v_min 2.4V → 0%
     assert ev.battery_voltage == pytest.approx(2.34375, abs=0.001)
-    assert ev.battery == 0
     assert ev.signal_strength == -45
 
 
@@ -655,20 +652,6 @@ def test_keypad_pin_confirm_empty_pin():
     assert ev.pin == ""
 
 
-def test_keypad_battery_normalised():
-    """Raw battery value 155 → 100%; 78 → ~50%."""
-    from conftest import make_keypad_hms_payload
-    from dongle_protocol import SensorEvent
-
-    payload_full = make_keypad_hms_payload(sub_event=0x02, state_byte=1, battery=155)
-    ev_full = SensorEvent.from_packet_v2(payload_full)
-    assert ev_full.battery == 100
-
-    payload_half = make_keypad_hms_payload(sub_event=0x02, state_byte=1, battery=78)
-    ev_half = SensorEvent.from_packet_v2(payload_half)
-    assert ev_half.battery == 50
-
-
 def test_keypad_short_payload_returns_unknown():
     """A payload too short to parse produces an 'unknown:*' event rather than crashing."""
     from dongle_protocol import SENSOR_TYPE_KEYPAD, SensorEvent
@@ -775,7 +758,6 @@ def test_battery_voltage_none_for_keypad():
     payload = make_keypad_hms_payload(sub_event=0x02, state_byte=0x01, battery=155)
     ev = SensorEvent.from_packet_v2(payload)
     assert ev.battery_voltage is None
-    assert ev.battery == 100
 
 
 def test_battery_voltage_none_for_chime_type():
@@ -785,34 +767,6 @@ def test_battery_voltage_none_for_chime_type():
     # Construct minimal event directly — chime doesn't send alarm packets normally
     ev = SensorEvent("status", "CHIMCHIM", 0.0, sensor_type="chime", battery_raw=64)
     assert ev.battery_voltage == pytest.approx(2.0, abs=0.001)
-    assert ev.battery is None
-
-
-def test_battery_voltage_below_min_gives_zero_percent():
-    """Voltage below v_min clamps to 0%."""
-    from dongle_protocol import SensorEvent
-
-    # raw=70, switch: voltage=70/32.0=2.1875V; below v_min=2.4V → 0%
-    payload = make_alarm_payload(sensor_type=0x01, battery=70)
-    ev = SensorEvent.from_packet(payload)
-    assert ev.battery_voltage == pytest.approx(2.1875, abs=0.001)
-    assert ev.battery == 0
-
-
-def test_battery_voltage_above_max_gives_100_percent():
-    """Voltage above v_max clamps to 100%."""
-    from dongle_protocol import SensorEvent
-
-    # raw=104, switch: voltage=104/32.0=3.25V; above v_max=3.2V → 100%
-    payload = make_alarm_payload(sensor_type=0x01, battery=104)
-    ev = SensorEvent.from_packet(payload)
-    assert ev.battery_voltage == pytest.approx(3.25, abs=0.001)
-    assert ev.battery == 100
-
-
-# ---------------------------------------------------------------------------
-# mqtt.py — new diagnostic entities and probe gating
-# ---------------------------------------------------------------------------
 
 
 def test_diagnostic_components_include_battery_voltage():
@@ -856,3 +810,59 @@ def test_leak_components_exclude_probe_state_when_no_probe():
     assert "state" in components
     assert "temperature" in components
     assert "humidity" in components
+
+
+# ---------------------------------------------------------------------------
+# LocalTransport (defined in dongle_protocol.py)
+# ---------------------------------------------------------------------------
+
+
+class TestLocalTransport:
+    """LocalTransport wraps an OS file descriptor obtained via os.open."""
+
+    def test_open_calls_os_open(self, monkeypatch):
+        from dongle_protocol import LocalTransport
+
+        with patch("dongle_protocol.os.open", return_value=7) as mock_open:
+            t = LocalTransport("/dev/hidraw0")
+            mock_open.assert_called_once_with("/dev/hidraw0", os.O_RDWR | os.O_NONBLOCK)
+            assert t._fd == 7
+
+    def test_read_delegates_to_os_read(self, monkeypatch):
+        from dongle_protocol import LocalTransport
+
+        payload = b"\xaa" * 64
+        with patch("dongle_protocol.os.open", return_value=5):
+            t = LocalTransport("/dev/hidraw0")
+        with patch("dongle_protocol.os.read", return_value=payload) as mock_read:
+            result = t.read()
+        mock_read.assert_called_once_with(5, 0x40)
+        assert result == payload
+
+    def test_write_delegates_to_os_write(self, monkeypatch):
+        from dongle_protocol import LocalTransport
+
+        data = b"\xaa\x55\x43\x03\x04\x01\x49"
+        with patch("dongle_protocol.os.open", return_value=5):
+            t = LocalTransport("/dev/hidraw0")
+        with patch("dongle_protocol.os.write", return_value=len(data)) as mock_write:
+            t.write(data)
+        mock_write.assert_called_once_with(5, data)
+
+    def test_close_calls_os_close_once(self):
+        from dongle_protocol import LocalTransport
+
+        with patch("dongle_protocol.os.open", return_value=5):
+            t = LocalTransport("/dev/hidraw0")
+        with patch("dongle_protocol.os.close") as mock_close:
+            t.close()
+            t.close()  # second call is a no-op
+        mock_close.assert_called_once_with(5)
+
+    def test_remote_id_is_none(self):
+        from dongle_protocol import LocalTransport
+
+        with patch("dongle_protocol.os.open", return_value=5):
+            t = LocalTransport("/dev/hidraw0")
+        # LocalTransport has no remote_id attribute — that lives on RemoteTransport
+        assert not hasattr(t, "remote_id")

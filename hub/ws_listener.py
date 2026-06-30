@@ -1,10 +1,15 @@
 """
-WebSocket listener for incoming remote connections (hub side).
+WebSocket server and mDNS advertisement for incoming remote connections.
 
-Accepts connections from ws2m-remote processes, validates the per-remote token
-(or performs token-less adoption when pairing mode is active), collects any
-replay frames, and hands off an authenticated RemoteTransport to the hub's
-Bridge via the on_connection callback.
+WebSocketListener manages the hub side of the ws2m remote bridge protocol:
+
+  - Runs a WebSocket server that accepts connections from ws2m-remote processes
+  - Authenticates each connection (token validation or pairing-mode adoption)
+  - Collects replay frames from the remote's ring buffer
+  - Hands off an authenticated RemoteTransport to the hub's Bridge via the
+    on_connection callback
+  - Optionally advertises the hub via mDNS (_ws2m._tcp.local.) so remotes on
+    the same network can discover the hub URL automatically
 
 Auth sequence (hub side)
 ------------------------
@@ -35,33 +40,44 @@ import json
 import logging
 import pathlib
 import secrets
+import threading
 
-import dongle_protocol
 import websockets.sync.server
+from bridge import RemoteTransport
 
 
 class WebSocketListener:
-    """Runs a WebSocket server that authenticates and hands off remote connections.
+    """WebSocket server and mDNS advertisement for ws2m remote connections.
 
-    Each accepted connection is handled in its own thread by the websockets
-    library; on_connection is called from that thread and is expected to return
-    quickly (the DongleWorker it creates runs its own threads).
+    Lifecycle: call start() to begin accepting connections and optionally
+    advertise via mDNS.  Call stop() to shut down both.  mDNS can be toggled
+    independently while the server is running via start_mdns() / stop_mdns().
     """
 
     def __init__(
         self,
         port: int,
+        hub_id: str,
+        hub_version: str,
         remotes_path: pathlib.Path,
         get_pairing_active,
         on_connection,
         logger: logging.Logger,
     ):
         self._port = port
+        self._hub_id = hub_id
+        self._hub_version = hub_version
         self._remotes_path = remotes_path
         self._get_pairing_active = get_pairing_active
         self._on_connection = on_connection
         self._logger = logger.getChild("ws_listener")
         self._server: websockets.sync.server.WebSocketServer | None = None
+        self._zeroconf = None
+        self._zeroconf_lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Server lifecycle
+    # ------------------------------------------------------------------
 
     def serve_forever(self) -> None:
         """Block and serve incoming connections; call stop() to shut down."""
@@ -71,9 +87,66 @@ class WebSocketListener:
             server.serve_forever()
 
     def stop(self) -> None:
+        """Stop the WebSocket server and any active mDNS advertisement."""
+        self.stop_mdns()
         if self._server is not None:
             self._server.shutdown()
             self._server = None
+
+    # ------------------------------------------------------------------
+    # mDNS advertisement
+    # ------------------------------------------------------------------
+
+    def start_mdns(self) -> None:
+        """Start mDNS advertisement for this hub.
+
+        No-op if already advertising or if zeroconf is not installed.
+        """
+        with self._zeroconf_lock:
+            if self._zeroconf is not None:
+                return
+            try:
+                import socket
+
+                import zeroconf as _zc
+
+                svc_type = "_ws2m._tcp.local."
+                svc_name = f"ws2m-hub-{self._hub_id}.{svc_type}"
+                try:
+                    local_ip = socket.gethostbyname(socket.gethostname())
+                except OSError:
+                    local_ip = "127.0.0.1"
+                info = _zc.ServiceInfo(
+                    svc_type,
+                    svc_name,
+                    addresses=[socket.inet_aton(local_ip)],
+                    port=self._port,
+                    properties={"hub_id": self._hub_id, "version": self._hub_version},
+                )
+                self._zeroconf = _zc.Zeroconf()
+                self._zeroconf.register_service(info)
+                self._logger.info(f"mDNS advertisement started: ws2m-hub-{self._hub_id}._ws2m._tcp.local.")
+            except ImportError:
+                self._logger.warning("zeroconf not installed — mDNS advertisement disabled.")
+
+    def stop_mdns(self) -> None:
+        """Stop mDNS advertisement if active.  No-op if not advertising."""
+        with self._zeroconf_lock:
+            if self._zeroconf is None:
+                return
+            try:
+                self._zeroconf.unregister_all_services()
+                self._zeroconf.close()
+                self._logger.info("mDNS advertisement stopped")
+            except Exception:
+                pass
+            self._zeroconf = None
+
+    @property
+    def mdns_active(self) -> bool:
+        """True if mDNS advertisement is currently running."""
+        with self._zeroconf_lock:
+            return self._zeroconf is not None
 
     # ------------------------------------------------------------------
     # Per-connection handler (runs in websockets worker thread)
@@ -185,5 +258,5 @@ class WebSocketListener:
                 self._logger.warning(f"Expected replay_done text message from {remote_id!r}, got binary")
 
         # Step 5: build transport and hand off
-        transport = dongle_protocol.RemoteTransport(ws, remote_id, dongle_mac, replay_frames)
-        self._on_connection(transport)
+        transport_obj = RemoteTransport(ws, remote_id, dongle_mac, replay_frames)
+        self._on_connection(transport_obj)

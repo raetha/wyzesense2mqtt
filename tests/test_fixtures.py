@@ -46,7 +46,6 @@ EXPECTED_EVENTS: list[dict] = [
         "state": "open",
         # raw=80, switch (CR1632 3V): voltage=2.5V; range 2.4–3.2V → ~13%
         "battery_voltage": 2.5,
-        "battery": 13,
         "signal_strength": -50,
     },
     {
@@ -54,7 +53,6 @@ EXPECTED_EVENTS: list[dict] = [
         "event": "status",
         "sensor_type": "switch",
         "battery_voltage": 2.5,
-        "battery": 13,
         "signal_strength": -50,
     },
 ]

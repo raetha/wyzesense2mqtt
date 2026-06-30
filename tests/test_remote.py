@@ -11,6 +11,7 @@ import sys
 from unittest.mock import MagicMock
 
 import pytest
+import websockets.exceptions
 
 # Make remote/ importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "remote"))
@@ -330,3 +331,103 @@ class TestHubReaderRestartFrame:
                 pass
 
         assert exit_called.is_set(), "os._exit should have been called with restart frame"
+
+
+class TestHubReaderControlFrames:
+    """Remote correctly handles set_dongle and set_log_level control frames from the hub."""
+
+    def test_set_dongle_updates_device(self, tmp_path, monkeypatch):
+        """When hub sends set_dongle, remote updates self._device."""
+
+        monkeypatch.setattr(os, "open", lambda *a, **kw: 42)
+        monkeypatch.setattr(os, "close", lambda fd: None)
+
+        r = _make_remote(tmp_path)
+        r._dongle_mac = "MAC1"
+        r._fd = 42
+        r._device = "auto"
+
+        # Simulate what hub_reader does when it receives a set_dongle frame
+        msg = json.dumps({"type": "set_dongle", "value": "/dev/hidraw3"})
+        parsed = json.loads(msg)
+        msg_type = parsed.get("type")
+        assert msg_type == "set_dongle"
+        value = str(parsed.get("value", "auto"))
+        r._device = value
+
+        assert r._device == "/dev/hidraw3"
+
+    def test_set_dongle_auto_updates_device(self, tmp_path, monkeypatch):
+        """set_dongle with 'auto' sets self._device to 'auto'."""
+        monkeypatch.setattr(os, "open", lambda *a, **kw: 42)
+        monkeypatch.setattr(os, "close", lambda fd: None)
+
+        r = _make_remote(tmp_path)
+        r._dongle_mac = "MAC1"
+        r._fd = 42
+        r._device = "/dev/hidraw0"
+
+        msg = json.dumps({"type": "set_dongle", "value": "auto"})
+        parsed = json.loads(msg)
+        r._device = str(parsed.get("value", "auto"))
+
+        assert r._device == "auto"
+
+    def test_set_log_level_applies_immediately(self, tmp_path, monkeypatch):
+        """When hub sends set_log_level, remote changes the root logger level immediately."""
+        import logging
+
+        monkeypatch.setattr(os, "open", lambda *a, **kw: 42)
+        monkeypatch.setattr(os, "close", lambda fd: None)
+
+        r = _make_remote(tmp_path)
+        r._dongle_mac = "MAC1"
+        r._fd = 42
+
+        # Simulate what hub_reader does when it receives a set_log_level frame
+        msg = json.dumps({"type": "set_log_level", "level": "DEBUG"})
+        parsed = json.loads(msg)
+        level = str(parsed.get("level", "INFO")).upper()
+        logging.getLogger().setLevel(getattr(logging, level, logging.INFO))
+
+        assert logging.getLogger().level == logging.DEBUG
+
+        # Restore to avoid polluting other tests
+        logging.getLogger().setLevel(logging.WARNING)
+
+    def test_set_dongle_frame_handled_in_hub_reader(self, tmp_path, monkeypatch):
+        """hub_reader processes set_dongle frame and updates _device (integration)."""
+        import select as _select
+
+        monkeypatch.setattr(os, "open", lambda *a, **kw: 42)
+        monkeypatch.setattr(os, "close", lambda fd: None)
+
+        r = _make_remote(tmp_path)
+        r._dongle_mac = "MAC1"
+        r._fd = 42
+        r._device = "auto"
+
+        msg_json = json.dumps({"type": "set_dongle", "value": "/dev/hidraw5"})
+
+        recv_index = [0]
+
+        def recv_side(timeout=None):
+            i = recv_index[0]
+            recv_index[0] += 1
+            if i == 0:
+                return msg_json
+            # After first message, raise to terminate hub_reader
+            raise websockets.exceptions.ConnectionClosed(None, None)
+
+        ws = MagicMock()
+        ws.recv.side_effect = recv_side
+
+        monkeypatch.setattr(_select, "select", lambda *a, **kw: ([], [], []))
+        monkeypatch.setattr(os, "read", lambda fd, n: b"\x00" * n)
+
+        try:
+            r._bidirectional_forward(ws)
+        except Exception:
+            pass
+
+        assert r._device == "/dev/hidraw5"

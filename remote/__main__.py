@@ -13,14 +13,13 @@ Environment variables
 WS2M_HUB_URL            Hub WebSocket URL                       [optional; auto-discovered via mDNS if unset]
 WS2M_DISCOVERY_TIMEOUT  mDNS discovery timeout in seconds        [default: 30]
 WS2M_HUB_ID             Preferred hub_id for mDNS selection      [optional]
-WS2M_REMOTE_ID          Override stable remote UUID             [default: loaded from data dir]
 WS2M_HUB_TOKEN          Hub token (set automatically after adoption)
 WS2M_DATA_DIR           Data directory for remote_id/hub_token  [default: /app/data]
-WS2M_DEVICE             HID device path or "auto"               [default: auto]
+WS2M_DONGLE             HID device path or "auto"               [default: auto]
 WS2M_QUEUE_MAX_SECONDS  Event frame TTL in seconds              [default: 10]
 WS2M_QUEUE_MAX_FRAMES   Ring buffer maximum size                [default: 500]
 WS2M_HANDSHAKE_FRAMES   Frames to classify as handshake         [default: 10]
-LOG_LEVEL               Logging level (DEBUG/INFO/WARNING/...)  [default: INFO]
+WS2M_LOG_LEVEL          Logging level (DEBUG/INFO/WARNING/...)  [default: INFO]
 """
 
 import argparse
@@ -48,28 +47,22 @@ def main() -> None:
         description="ws2m remote — forward a local USB WyzeSense dongle to a ws2m hub over WebSocket",
     )
     parser.add_argument(
-        "--hub",
+        "--hub-url",
         default=_env("WS2M_HUB_URL"),
         metavar="URL",
         help="Hub WebSocket URL (e.g. ws://192.168.1.10:8765)  [env: WS2M_HUB_URL]",
     )
     parser.add_argument(
-        "--remote-id",
-        default=_env("WS2M_REMOTE_ID"),
-        metavar="UUID",
-        help="Override stable remote UUID  [env: WS2M_REMOTE_ID]",
-    )
-    parser.add_argument(
-        "--device",
-        default=_env("WS2M_DEVICE", "auto"),
+        "--dongle",
+        default=_env("WS2M_DONGLE", "auto"),
         metavar="PATH",
-        help='HID device path or "auto"  [env: WS2M_DEVICE]',
+        help='HID device path or "auto"  [env: WS2M_DONGLE]',
     )
     parser.add_argument(
         "--log-level",
-        default=_env("LOG_LEVEL", "INFO"),
+        default=_env("WS2M_LOG_LEVEL", "INFO"),
         metavar="LEVEL",
-        help="Logging level  [env: LOG_LEVEL]",
+        help="Logging level  [env: WS2M_LOG_LEVEL]",
     )
     args = parser.parse_args()
 
@@ -86,7 +79,7 @@ def main() -> None:
 
     from remote import Remote, _discover_hub_via_mdns, _load_or_create_remote_id
 
-    hub_url = args.hub
+    hub_url = args.hub_url
     if not hub_url:
         logger.info("Discovering hub via mDNS...")
         timeout = float(_env("WS2M_DISCOVERY_TIMEOUT", "30") or 30)
@@ -100,7 +93,7 @@ def main() -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
 
     # Load or create the stable remote UUID (unless overridden via env/flag)
-    remote_id = args.remote_id or _load_or_create_remote_id(data_dir)
+    remote_id = _load_or_create_remote_id(data_dir)
     logger.info(f"Remote ID: {remote_id}")
 
     queue = InMemoryFrameQueue(
@@ -112,7 +105,7 @@ def main() -> None:
         hub_url=hub_url,
         remote_id=remote_id,
         data_dir=data_dir,
-        device=args.device or "auto",
+        device=args.dongle or "auto",
         queue=queue,
         handshake_frame_count=int(_env("WS2M_HANDSHAKE_FRAMES", "10") or 10),
         logger=logger,

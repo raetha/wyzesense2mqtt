@@ -526,3 +526,57 @@ def test_hub_ws_enabled_in_default_config():
 
     assert "hub_ws_enabled" in cfg_module.DEFAULT_CONFIG
     assert cfg_module.DEFAULT_CONFIG["hub_ws_enabled"] is False
+
+
+def test_renamed_key_usb_dongle_migrates_to_dongle(tmp_config_dir):
+    """load_config migrates 3.x 'usb_dongle' key to 'dongle' transparently."""
+    import os
+
+    import config as cfg_module
+    import yaml
+
+    # Write a 3.x-style config with the old key name
+    cfg_data = {
+        "mqtt_host": "testbroker.local",
+        "usb_dongle": "/dev/hidraw1",
+    }
+    cfg_path = os.path.join(cfg_module.CONFIG_DIR, cfg_module.MAIN_CONFIG_FILE)
+    with open(cfg_path, "w") as f:
+        yaml.safe_dump(cfg_data, f)
+
+    cfg, _ = cfg_module.load_config()
+
+    # Old key migrated to new key
+    assert cfg["dongle"] == "/dev/hidraw1"
+    # Old key must not appear in loaded config
+    assert "usb_dongle" not in cfg
+
+
+def test_renamed_key_not_written_back_to_file(tmp_config_dir):
+    """After migrating usb_dongle → dongle, save_config must not write usb_dongle back."""
+    import os
+
+    import config as cfg_module
+    import yaml
+
+    cfg_data = {"mqtt_host": "testbroker.local", "usb_dongle": "/dev/hidraw2"}
+    cfg_path = os.path.join(cfg_module.CONFIG_DIR, cfg_module.MAIN_CONFIG_FILE)
+    with open(cfg_path, "w") as f:
+        yaml.safe_dump(cfg_data, f)
+
+    cfg, _ = cfg_module.load_config()
+    cfg_module.save_config(cfg)
+
+    with open(cfg_path) as f:
+        saved = yaml.safe_load(f)
+
+    assert "dongle" in saved
+    assert "usb_dongle" not in saved
+
+
+def test_dongle_key_in_default_config():
+    """DEFAULT_CONFIG should have 'dongle', not 'usb_dongle'."""
+    import config as cfg_module
+
+    assert "dongle" in cfg_module.DEFAULT_CONFIG
+    assert "usb_dongle" not in cfg_module.DEFAULT_CONFIG

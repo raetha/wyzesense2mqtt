@@ -35,7 +35,7 @@ def _make_gateway(config=None):
         "self_topic_root": "wyzesense2mqtt",
         "hass_topic_root": "homeassistant",
         "hass_discovery": True,
-        "usb_dongle": "auto",
+        "dongle": "auto",
     }
     gw = MqttGateway(cfg)
     gw._client = MagicMock()
@@ -1583,16 +1583,16 @@ def test_publish_hub_discovery_has_restart_button(tmp_config_dir):
 # ---------------------------------------------------------------------------
 
 
-def test_build_hub_components_has_usb_dongle_entity():
-    """_build_hub_components includes usb_dongle text entity with correct platform and topics."""
+def test_build_hub_components_has_dongle_entity():
+    """_build_hub_components includes dongle text entity with correct platform and topics."""
     from mqtt import _build_hub_components
 
     components = _build_hub_components("ws2m", TEST_HUB_ID)
-    assert "usb_dongle" in components, f"usb_dongle not in {list(components)}"
-    e = components["usb_dongle"]
+    assert "dongle" in components, f"dongle not in {list(components)}"
+    e = components["dongle"]
     assert e["platform"] == "text"
-    assert e["state_topic"].endswith("/usb_dongle")
-    assert e["command_topic"].endswith("/usb_dongle/set")
+    assert e["state_topic"].endswith("/dongle")
+    assert e["command_topic"].endswith("/dongle/set")
     assert e["entity_category"] == "config"
 
 
@@ -1822,3 +1822,68 @@ def test_clear_all_hass_discovery_does_not_clear_state_topics(tmp_config_dir):
     # None of the ws2m/ state/status topics should appear
     ws2m_state_topics = [t for t in published_topics if t.startswith(cfg["self_topic_root"])]
     assert not ws2m_state_topics, f"State topics should not be cleared: {ws2m_state_topics}"
+
+
+# ---------------------------------------------------------------------------
+# Remote device config entities
+# ---------------------------------------------------------------------------
+
+
+def test_build_remote_components_has_dongle_entity():
+    """_build_remote_components includes a dongle text entity."""
+    from mqtt import _build_remote_components
+
+    components = _build_remote_components("ws2m", "test-remote-uuid")
+    assert "dongle" in components
+    e = components["dongle"]
+    assert e["platform"] == "text"
+    assert e["state_topic"].endswith("/dongle")
+    assert e["command_topic"].endswith("/dongle/set")
+
+
+def test_build_remote_components_has_log_level_entity():
+    """_build_remote_components includes a log_level select entity."""
+    from mqtt import LOG_LEVEL_OPTIONS, _build_remote_components
+
+    components = _build_remote_components("ws2m", "test-remote-uuid")
+    assert "log_level" in components
+    e = components["log_level"]
+    assert e["platform"] == "select"
+    assert e["state_topic"].endswith("/log_level")
+    assert e["command_topic"].endswith("/log_level/set")
+    assert e["options"] == LOG_LEVEL_OPTIONS
+
+
+def test_publish_remote_discovery_has_dongle_entity(tmp_config_dir):
+    """publish_remote_discovery publishes a dongle entity in the components payload."""
+    import json
+
+    gw, cfg = _make_gateway()
+    remote_id = "test-remote-uuid"
+    gw.publish_remote_discovery(remote_id, TEST_HUB_ID)
+
+    call = gw._client.publish.call_args_list[0]
+    payload = json.loads(call.kwargs["payload"])
+    components = payload["components"]
+    assert "dongle" in components, f"dongle not in {list(components)}"
+    assert components["dongle"]["platform"] == "text"
+    assert components["dongle"]["state_topic"].endswith("/dongle")
+    assert components["dongle"]["command_topic"].endswith("/dongle/set")
+
+
+def test_publish_remote_discovery_has_log_level_entity(tmp_config_dir):
+    """publish_remote_discovery publishes a log_level entity in the components payload."""
+    import json
+
+    from mqtt import LOG_LEVEL_OPTIONS
+
+    gw, cfg = _make_gateway()
+    remote_id = "test-remote-uuid"
+    gw.publish_remote_discovery(remote_id, TEST_HUB_ID)
+
+    call = gw._client.publish.call_args_list[0]
+    payload = json.loads(call.kwargs["payload"])
+    components = payload["components"]
+    assert "log_level" in components, f"log_level not in {list(components)}"
+    assert components["log_level"]["platform"] == "select"
+    assert components["log_level"]["options"] == LOG_LEVEL_OPTIONS
