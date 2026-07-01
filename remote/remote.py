@@ -117,19 +117,58 @@ def _parse_mac_from_hid_frame(hid_frame: bytes) -> str | None:
 
 def _find_dongle_devices() -> list[str]:
     """Scan /sys/class/hidraw for WyzeSense dongles (USB vendor 1a86, product e024)."""
-    import subprocess
+    import glob
+    import stat
 
-    devices: list[str] = []
-    try:
-        raw = subprocess.check_output(["ls", "-la", "/sys/class/hidraw"]).decode().lower()
-        for line in raw.splitlines():
-            if "e024" in line and "1a86" in line:
-                for part in line.split():
-                    if "hidraw" in part:
-                        devices.append(f"/dev/{part}")
-                        break
-    except (subprocess.CalledProcessError, OSError):
-        pass
+    devices = []
+
+    for hidraw in glob.glob("/sys/class/hidraw/hidraw*"):
+        try:
+            # Walk upward until idVendor exists
+            path = os.path.realpath(hidraw)
+            while path != "/" and not os.path.exists(os.path.join(path, "idVendor")):
+                path = os.path.dirname(path)
+            if path == "/":
+                continue
+
+            # Check vendor/product
+            vendor = open(os.path.join(path, "idVendor")).read().strip().lower()
+            product = open(os.path.join(path, "idProduct")).read().strip().lower()
+            if vendor != "1a86" or product != "e024":
+                continue
+
+            # Read major/minor
+            major, minor = map(int, open(os.path.join(hidraw, "dev")).read().split(":"))
+
+            # Optimized recursive scan
+            stack = ["/dev"]
+
+            while stack:
+                try:
+                    for entry in os.scandir(stack.pop()):
+                        if entry.is_dir(follow_symlinks=False):
+                            # Skip irrelevant dirs
+                            if not entry.name.startswith(("pts", "shm", "mqueue")):
+                                stack.append(entry.path)
+                            continue
+
+                        # Skip non-character devices immediately
+                        try:
+                            st = entry.stat(follow_symlinks=False)
+                        except OSError:
+                            continue
+
+                        if stat.S_ISCHR(st.st_mode):
+                            # Match major/minor
+                            if os.major(st.st_rdev) == major and os.minor(st.st_rdev) == minor:
+                                devices.append(entry.path)
+
+                except OSError:
+                    pass
+
+        except OSError:
+            continue
+
     return devices
 
 

@@ -1,0 +1,2 @@
+# /etc/udev/rules.d/99-wyzesense-dongles.rules
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="e024", RUN+="/usr/bin/mkdir -p /dev/wyzesense", RUN+="/usr/bin/mknod -m 0660 /dev/wyzesense/%k c %M %m"

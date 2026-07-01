@@ -382,7 +382,7 @@ def pass2_payload_sweep(
     With payload_len=3 this is 16,777,216 — not practical; use targeted ranges.
     """
     mac_bytes = mac.encode("ascii")
-    total = 256 ** payload_len
+    total = 256**payload_len
     sent = 0
 
     logger.info("=" * 60)
@@ -467,63 +467,85 @@ def main() -> None:
     )
 
     parser.add_argument(
-        "--device", default="/dev/hidraw0", metavar="PATH",
+        "--device",
+        default="/dev/hidraw0",
+        metavar="PATH",
         help="HID device path [default: /dev/hidraw0]",
     )
     parser.add_argument(
-        "--mac", required=True, metavar="MAC",
-        help="Keypad MAC address (8 alphanumeric chars, e.g. KPADKPAD). "
-             "Run 'python3 -m wyzesense2mqtt bridge_tool list' to find it.",
+        "--mac",
+        required=True,
+        metavar="MAC",
+        help="Keypad MAC address (8 alphanumeric chars, e.g. KPADKPAD). Run 'python3 -m wyzesense2mqtt bridge_tool list' to find it.",
     )
     parser.add_argument(
-        "--log-file", default="fuzz_keypad.log", metavar="PATH",
+        "--log-file",
+        default="fuzz_keypad.log",
+        metavar="PATH",
         help="Log file for all commands sent [default: fuzz_keypad.log]",
     )
     parser.add_argument(
-        "--delay", type=float, default=0.4, metavar="SECONDS",
-        help="Delay between commands in seconds [default: 0.4]. "
-             "Increase if the dongle stops responding.",
+        "--delay",
+        type=float,
+        default=0.4,
+        metavar="SECONDS",
+        help="Delay between commands in seconds [default: 0.4]. Increase if the dongle stops responding.",
     )
     parser.add_argument(
-        "--probe-interval", type=int, default=20, metavar="N",
+        "--probe-interval",
+        type=int,
+        default=20,
+        metavar="N",
         help="Check dongle health every N commands [default: 20]",
     )
     parser.add_argument(
-        "--no-skip", action="store_true",
-        help="Do not skip known command IDs in Pass 1. "
-             "Useful if you want to observe known-command responses for comparison. "
-             "CMD_DEL_ALL_SENSORS is always skipped regardless.",
+        "--no-skip",
+        action="store_true",
+        help="Do not skip known command IDs in Pass 1. Useful if you want to observe known-command responses for comparison. CMD_DEL_ALL_SENSORS is always skipped regardless.",
     )
 
     # Pass 1 options
     pass1 = parser.add_argument_group("Pass 1 options (cmd_id sweep, default mode)")
     pass1.add_argument(
-        "--id-start", type=lambda x: int(x, 0), default=0x00, metavar="HEX",
+        "--id-start",
+        type=lambda x: int(x, 0),
+        default=0x00,
+        metavar="HEX",
         help="First cmd_id to try [default: 0x00]",
     )
     pass1.add_argument(
-        "--id-end", type=lambda x: int(x, 0), default=0xFF, metavar="HEX",
+        "--id-end",
+        type=lambda x: int(x, 0),
+        default=0xFF,
+        metavar="HEX",
         help="Last cmd_id to try [default: 0xFF]",
     )
 
     # Pass 2 options
     pass2 = parser.add_argument_group("Pass 2 options (payload sweep for a specific command)")
     pass2.add_argument(
-        "--pass2", action="store_true",
+        "--pass2",
+        action="store_true",
         help="Run Pass 2 instead of Pass 1",
     )
     pass2.add_argument(
-        "--cmd-type", type=lambda x: int(x, 0), metavar="HEX",
+        "--cmd-type",
+        type=lambda x: int(x, 0),
+        metavar="HEX",
         help="Command type byte: 0x43 (SYNC) or 0x53 (ASYNC)",
     )
     pass2.add_argument(
-        "--cmd-id", type=lambda x: int(x, 0), metavar="HEX",
+        "--cmd-id",
+        type=lambda x: int(x, 0),
+        metavar="HEX",
         help="Command ID byte to sweep payloads for",
     )
     pass2.add_argument(
-        "--payload-len", type=int, default=1, metavar="N",
-        help="Number of payload bytes after the MAC to sweep [default: 1]. "
-             "1 = 256 combos, 2 = 65536, 3 = 16M (impractical).",
+        "--payload-len",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Number of payload bytes after the MAC to sweep [default: 1]. 1 = 256 combos, 2 = 65536, 3 = 16M (impractical).",
     )
 
     args = parser.parse_args()

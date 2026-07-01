@@ -92,7 +92,10 @@ class LocalTransport(Transport):
         self._fd = os.open(device, os.O_RDWR | os.O_NONBLOCK)
 
     def read(self) -> bytes:
-        return os.read(self._fd, 0x40)
+        try:
+            return os.read(self._fd, 0x40)
+        except BlockingIOError:
+            return b""
 
     def write(self, data: bytes) -> None:
         written = os.write(self._fd, data)

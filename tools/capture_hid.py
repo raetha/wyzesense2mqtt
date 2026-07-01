@@ -104,7 +104,7 @@ def find_macs_in_frames(frames: list[bytes]) -> list[str]:
                 mac = candidate.decode("ascii")
             except UnicodeDecodeError:
                 continue
-            if re.match(r'^[A-Za-z0-9]{8}$', mac) and mac not in seen:
+            if re.match(r"^[A-Za-z0-9]{8}$", mac) and mac not in seen:
                 # Exclude obvious non-MACs (firmware version strings etc.)
                 if not mac.startswith("Ok5HPNQ") and mac != "00000000":
                     seen.append(mac)
@@ -146,14 +146,21 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__.split("Usage")[0].strip(),
     )
-    parser.add_argument("--device", default="/dev/hidraw0", metavar="PATH",
-                        help="HID device path [default: /dev/hidraw0]")
-    parser.add_argument("--duration", type=int, default=60, metavar="SECONDS",
-                        help="Capture duration in seconds [default: 60]")
-    parser.add_argument("--output", default="tests/fixtures/hid_capture.bin", metavar="PATH",
-                        help="Output file [default: tests/fixtures/hid_capture.bin]")
-    parser.add_argument("--no-obfuscate", action="store_true",
-                        help="Skip MAC obfuscation prompts (not recommended for commits)")
+    parser.add_argument(
+        "--device", default="/dev/hidraw0", metavar="PATH", help="HID device path [default: /dev/hidraw0]"
+    )
+    parser.add_argument(
+        "--duration", type=int, default=60, metavar="SECONDS", help="Capture duration in seconds [default: 60]"
+    )
+    parser.add_argument(
+        "--output",
+        default="tests/fixtures/hid_capture.bin",
+        metavar="PATH",
+        help="Output file [default: tests/fixtures/hid_capture.bin]",
+    )
+    parser.add_argument(
+        "--no-obfuscate", action="store_true", help="Skip MAC obfuscation prompts (not recommended for commits)"
+    )
     args = parser.parse_args()
 
     frames = read_frames(args.device, args.duration)
@@ -171,8 +178,16 @@ def main() -> None:
             print()
 
             # Build replacement map interactively
-            placeholders = ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD",
-                            "EEEEEEEE", "FFFFFFFF", "GGGGGGGG", "HHHHHHHH"]
+            placeholders = [
+                "AAAAAAAA",
+                "BBBBBBBB",
+                "CCCCCCCC",
+                "DDDDDDDD",
+                "EEEEEEEE",
+                "FFFFFFFF",
+                "GGGGGGGG",
+                "HHHHHHHH",
+            ]
             replacements: dict[str, str] = {}
 
             print("For each MAC, press Enter to replace it with the next placeholder,")
@@ -180,7 +195,11 @@ def main() -> None:
 
             placeholder_idx = 0
             for mac in detected:
-                default = placeholders[placeholder_idx] if placeholder_idx < len(placeholders) else f"SENSOR{placeholder_idx:02d}"
+                default = (
+                    placeholders[placeholder_idx]
+                    if placeholder_idx < len(placeholders)
+                    else f"SENSOR{placeholder_idx:02d}"
+                )
                 response = input(f"  Replace {mac!r} with [{default}]: ").strip()
                 if response.lower() == "skip":
                     print(f"    Keeping {mac!r} as-is")
