@@ -18,6 +18,7 @@ services:
       # WS2M_MQTT_HOST is the only truly required setting — all others have
       # sensible defaults. MQTT_USERNAME and MQTT_PASSWORD are only needed if
       # your broker requires authentication.
+      #
       WS2M_MQTT_HOST: "${WS2M_MQTT_HOST}"
       # WS2M_MQTT_PORT: "${WS2M_MQTT_PORT:-1883}"
       # WS2M_MQTT_USERNAME: "${WS2M_MQTT_USERNAME}"
@@ -35,19 +36,33 @@ services:
       # precedence over any value saved by HA — changes made in HA will appear
       # to have no effect until the env var is removed or updated. Only set
       # these here if you need to pin them and do not want HA to control them.
+      #
       # WS2M_DONGLE: "${WS2M_DONGLE:-auto}"         # HID device path or "auto"
       # WS2M_LOG_LEVEL: "${WS2M_LOG_LEVEL:-INFO}"
       # WS2M_HUB_WS_ENABLED: "${WS2M_HUB_WS_ENABLED:-false}"
       # WS2M_HUB_WS_PORT: "${WS2M_HUB_WS_PORT:-8765}"
       # WS2M_HUB_REMOTE_PAIRING_SECONDS: "${WS2M_HUB_REMOTE_PAIRING_SECONDS:-60}"
 
-    # Uncomment if hub has a local USB dongle:
-    # devices:
-    #   - "${DEV_DONGLE:-/dev/hidraw0}:/dev/hidraw0"
+    # Pass through a WyzeSense USB dongle.
+    # If WS2M_DONGLE=auto, all hidraw devices matching VID 1a86 / PID e024
+    # are detected automatically — grant access to all or just the one you need.
+    # If using the example udev rule, comment out devices section and uncomment
+    # the volume below instead.
+    #
+    devices:
+      - "${DEV_DONGLE:-/dev/hidraw0}:/dev/hidraw0"
 
     # Include the remote WebSocket port if using a remote bridge.
+    #
     # ports:
-    #  - "${WS2M_HUB_WS_PORT:-8765}:${WS2M_HUB_WS_PORT:-8765}"
+    #   - "${WS2M_HUB_WS_PORT:-8765}:${WS2M_HUB_WS_PORT:-8765}"
 
     volumes:
       - "${VOL_DATA:-./data}:/app/data"
+    #   - "${VOL_DEV_WS2M_DONGLES:-/dev/ws2m-dongles}:/dev/ws2m-dongles"  # udev rule
+
+    # Uncomment when using the example udev rule in order to access hardware via
+    # the volume bind mount. Grants read, write, modify access to HIDRAW devices.
+    #
+    # device_cgroup_rules:
+    #   - 'c 239:* rwm'

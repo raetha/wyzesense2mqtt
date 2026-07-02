@@ -1,0 +1,17 @@
+# /etc/udev/rules.d/99-ws2m-dongles.rules
+#
+# This udev rule allows for creating a folder of all Wyze Sense and
+# NEOS dongles that can be bind mounted into a docker container.
+# It simplifies passing multiple devices to a single instance.
+#
+# Create node on add
+SUBSYSTEM=="hidraw", ACTION=="add", \
+  ENV{ID_VENDOR_ID}=="1a86", ENV{ID_MODEL_ID}=="e024", \
+  RUN+="/usr/bin/mkdir -p /dev/ws2m-dongles", \
+  RUN+="/usr/bin/mknod -m 0660 /dev/ws2m-dongles/%k c %M %m"
+
+# Remove node on unplug
+SUBSYSTEM=="hidraw", ACTION=="remove", \
+  ENV{ID_VENDOR_ID}=="1a86", ENV{ID_MODEL_ID}=="e024", \
+  RUN+="/usr/bin/unlink /dev/ws2m-dongles/%k", \
+  RUN+="/usr/bin/rmdir --ignore-fail-on-non-empty /dev/ws2m-dongles"

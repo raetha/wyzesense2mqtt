@@ -19,8 +19,9 @@ services:
       # Leave WS2M_HUB_URL unset to discover the hub automatically via mDNS.
       # Set this if the remote cannot find the hub automatically (e.g. across VLANs,
       # in Docker without host networking, or when mDNS is blocked).
+      #
       # WS2M_HUB_URL: "${WS2M_HUB_URL}"
-      # WS2M_HUB_ID: "${WS2M_HUB_ID}"              # preferred hub_id for mDNS selection (multi-hub networks)
+      # WS2M_HUB_ID: "${WS2M_HUB_ID}"  # preferred hub_id for mDNS selection (multi-hub networks)
       # WS2M_DISCOVERY_TIMEOUT: "${WS2M_DISCOVERY_TIMEOUT:-30}" # mDNS discovery timeout in seconds
 
       # ── Optional — adjustable from Home Assistant ────────────────────────────
@@ -29,14 +30,25 @@ services:
       # precedence over any value saved by HA — changes made in HA will appear
       # to have no effect until the env var is removed or updated. Only set
       # these here if you need to pin them and do not want HA to control them.
+      #
       # WS2M_DONGLE: "${WS2M_DONGLE:-auto}"         # HID device path or "auto"
       # WS2M_LOG_LEVEL: "${WS2M_LOG_LEVEL:-INFO}"
 
     # Pass through a WyzeSense USB dongle.
     # If WS2M_DONGLE=auto, all hidraw devices matching VID 1a86 / PID e024
     # are detected automatically — grant access to all or just the one you need.
+    # If using the example udev rule, comment out devices section and uncomment
+    # the volume below instead.
+    #
     devices:
       - "${DEV_DONGLE:-/dev/hidraw0}:/dev/hidraw0"
 
     volumes:
       - "${VOL_DATA:-./data}:/app/data"
+    #   - "${VOL_DEV_WS2M_DONGLES:-/dev/ws2m-dongles}:/dev/ws2m-dongles"  # udev rule
+
+    # Uncomment when using the example udev rule in order to access hardware via
+    # the volume bind mount. Grants read, write, modify access to HIDRAW devices.
+    #
+    # device_cgroup_rules:
+    #   - 'c 239:* rwm'
