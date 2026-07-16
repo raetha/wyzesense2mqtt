@@ -2,8 +2,7 @@
 WyzeSense2MQTT — entry point.
 
 Run as:
-    python3 -m wyzesense2mqtt          (from package parent directory)
-    python3 __main__.py                (from within the wyzesense2mqtt/ directory)
+    python3 __main__.py                (from within the hub/ directory)
 
 Users should not invoke any other module directly.  See README.md for
 Docker and systemd service usage.
@@ -11,8 +10,16 @@ Docker and systemd service usage.
 
 import signal
 import sys
+from pathlib import Path
 
-from config import init_logging, load_config
+# Dev/git-clone convenience: shared modules (dongle_protocol, device_discovery)
+# live in ../shared when running from the repo tree.  Docker images and release
+# packages flatten shared/ into the app directory, making this a no-op there.
+_shared = Path(__file__).resolve().parent.parent / "shared"
+if _shared.is_dir():
+    sys.path.insert(0, str(_shared))
+
+from config import init_logging, load_config  # noqa: E402
 
 
 def _handle_sigterm(signum, frame):

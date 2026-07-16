@@ -26,25 +26,35 @@ import argparse
 import json
 import logging
 import os
-import shutil
 import sys
 import time
 
 # Allow running from the wyzesense2mqtt/ directory directly
-sys.path.insert(0, __file__.rsplit("/cli", 1)[0])
+_pkg_root = __file__.rsplit("/cli", 1)[0]
+sys.path.insert(0, _pkg_root)
+# shared/ holds dongle_protocol and device_discovery in a git clone; Docker
+# images and release packages flatten it into the app dir (no-op there).
+import os as _os  # noqa: E402
 
-import paho.mqtt.client as mqtt
-from config import (
-    CONFIG_DIR,
-    DONGLES_DIR,
+_shared = _os.path.join(_os.path.dirname(_pkg_root), "shared")
+if _os.path.isdir(_shared):
+    sys.path.insert(0, _shared)
+
+import paho.mqtt.client as mqtt  # noqa: E402
+from config import (  # noqa: E402
+    SENSOR_STATE_FILE,
     SENSORS_CONFIG_FILE,
     config_path,
-    dongle_data_path,
-    list_known_dongle_macs,
     load_config,
     read_yaml,
+    write_yaml,
 )
-from mqtt import _publish, clear_dongle_topics, clear_sensor_discovery_topics, clear_sensor_state_topics
+from mqtt import (  # noqa: E402
+    _publish,
+    clear_dongle_topics,
+    clear_sensor_discovery_topics,
+    clear_sensor_state_topics,
+)
 
 LOGGER = logging.getLogger("ws2m.mqtt_tool")
 
@@ -70,13 +80,16 @@ def _is_our_topic(topic: str, device_id: str, payload: dict) -> str | None:
     """Return the sensor MAC if this topic belongs to a wyzesense sensor, otherwise None.
 
     A topic is ours if:
-      - the device_id segment starts with 'wyzesense_' (but not 'wyzesense_bridge_')
+      - the device_id segment starts with 'ws2m_sensor_' (v2 device topics) or
+        'wyzesense_' (v1 per-entity topics, excluding 'wyzesense_bridge_')
       - at least one component unique_id starts with 'wyzesense_<mac>_'
     """
-    if not device_id.startswith("wyzesense_") or device_id.startswith("wyzesense_bridge_"):
+    if device_id.startswith("ws2m_sensor_"):
+        mac = device_id.removeprefix("ws2m_sensor_")
+    elif device_id.startswith("wyzesense_") and not device_id.startswith("wyzesense_bridge_"):
+        mac = device_id.removeprefix("wyzesense_")
+    else:
         return None
-
-    mac = device_id.removeprefix("wyzesense_")
 
     # v2 device payload: unique_ids are inside components dict
     if "components" in payload:
@@ -88,6 +101,17 @@ def _is_our_topic(topic: str, device_id: str, payload: dict) -> str | None:
         return None
 
     return mac
+
+
+def _schema_from_topic(topic: str, hass_root: str) -> str:
+    """Derive the discovery schema version from the topic path.
+
+    v2 topics live under <hass_topic_root>/device/…; v1 topics are the legacy
+    per-entity <hass_topic_root>/<platform>/…/<entity>/config form.  The schema
+    version is not carried in the payload — HA rejects unknown keys in device
+    discovery payloads.
+    """
+    return "v2" if topic.startswith(f"{hass_root}/device/") else "v1 (legacy per-entity)"
 
 
 # ---------------------------------------------------------------------------
@@ -138,26 +162,13 @@ def run_cleanup_discovery(apply: bool = False, listen_seconds: int = 5) -> None:
     LOGGER.info(f"Listening for retained discovery topics for {listen_seconds}s…")
     time.sleep(listen_seconds)
 
-    # Load known sensors from all per-dongle subdirectories.
-    # With multi-dongle support, sensors.yaml now lives under
-    # <data>/dongles/<dongle_mac>/sensors.yaml rather than at the data root.
-    # We also check the legacy flat path so this tool works during the
-    # migration window before the bridge has had a chance to move the files.
+    # Load known sensors from the flat registry file (<data>/sensors.yaml —
+    # one file for the whole fleet; dongle ownership lives in state.yaml).
     known_macs: set[str] = set()
-
-    dongles_dir = os.path.join(CONFIG_DIR, DONGLES_DIR)
-    if os.path.isdir(dongles_dir):
-        for dongle_mac in os.listdir(dongles_dir):
-            sensors_path = dongle_data_path(dongle_mac, SENSORS_CONFIG_FILE)
-            if os.path.isfile(sensors_path):
-                sensors_config = read_yaml(sensors_path, LOGGER) or {}
-                known_macs.update(sensors_config.keys())
-
-    # Legacy flat path (pre-4.0 layout or mid-migration)
-    legacy_sensors_path = config_path(SENSORS_CONFIG_FILE)
-    if os.path.isfile(legacy_sensors_path):
-        legacy_config = read_yaml(legacy_sensors_path, LOGGER) or {}
-        known_macs.update(legacy_config.keys())
+    sensors_path = config_path(SENSORS_CONFIG_FILE)
+    if os.path.isfile(sensors_path):
+        sensors_config = read_yaml(sensors_path, LOGGER) or {}
+        known_macs.update(sensors_config.keys())
 
     # Identify orphans
     orphans: list[tuple[str, str, dict]] = []
@@ -183,9 +194,9 @@ def run_cleanup_discovery(apply: bool = False, listen_seconds: int = 5) -> None:
     print(f"Found {len(orphans)} orphaned discovery topic(s) not present in any dongle sensors.yaml:")
     for topic, mac, payload in orphans:
         device_name = payload.get("device", {}).get("name", "unknown")
-        schema_ver = payload.get("schema_version", "v1 (legacy, untagged)")
+        schema_ver = _schema_from_topic(topic, cfg["hass_topic_root"])
         print(f"  {topic}")
-        print(f"    mac={mac}  name={device_name!r}  schema_version={schema_ver}")
+        print(f"    mac={mac}  name={device_name!r}  schema={schema_ver}")
 
     if not apply:
         print("\nDry run – nothing cleared.  Re-run with --apply to remove these topics.")
@@ -223,7 +234,9 @@ def run_remove_dongle(dongle_mac: str, apply: bool = False) -> None:
 
     Connects to the MQTT broker, clears all retained discovery and status
     topics for the dongle and every sensor it owns, then (if ``--apply`` is
-    passed) deletes the ``data/dongles/<mac>/`` directory tree.
+    passed) removes those sensors from the registry files (sensors.yaml and
+    state.yaml).  A dongle's sensors are the state entries whose ``dongle``
+    key names it.
 
     Dry-run by default; pass ``--apply`` to make changes.
     """
@@ -232,32 +245,26 @@ def run_remove_dongle(dongle_mac: str, apply: bool = False) -> None:
         LOGGER.error("Could not load config – is config/config.yaml present and valid?")
         return
 
-    known_macs = list_known_dongle_macs(LOGGER)
+    sensors_config: dict = read_yaml(config_path(SENSORS_CONFIG_FILE), LOGGER) or {}
+    state: dict = read_yaml(config_path(SENSOR_STATE_FILE), LOGGER) or {}
+    known_macs = sorted({e["dongle"] for e in state.values() if isinstance(e, dict) and e.get("dongle")})
     if dongle_mac not in known_macs:
-        LOGGER.error(f"Dongle MAC {dongle_mac!r} not found in data/dongles/. Known MACs: {known_macs or ['(none)']}")
+        LOGGER.error(f"Dongle MAC {dongle_mac!r} not found in state.yaml. Known MACs: {known_macs or ['(none)']}")
         return
 
-    # Load sensor list for this dongle
-    sensors_path = dongle_data_path(dongle_mac, SENSORS_CONFIG_FILE)
-    sensors_config: dict = {}
-    if os.path.isfile(sensors_path):
-        sensors_config = read_yaml(sensors_path, LOGGER) or {}
-
-    sensor_macs = list(sensors_config.keys())
+    sensor_macs = [mac for mac, entry in state.items() if isinstance(entry, dict) and entry.get("dongle") == dongle_mac]
 
     print(f"Dongle: {dongle_mac}")
     print(f"Sensors ({len(sensor_macs)}):")
     for mac in sensor_macs:
-        s = sensors_config[mac]
-        print(f"  {mac}  type={s.get('sensor_type', 'unknown')}  name={s.get('sensor_name', '')!r}")
+        s = sensors_config.get(mac, {})
+        print(f"  {mac}  type={s.get('sensor_type', 'unknown')}  name={s.get('name', '')!r}")
 
-    dongle_dir = dongle_data_path(dongle_mac)
-    print(f"\nData directory: {dongle_dir}")
     print(f"\nActions that {'WILL' if apply else 'WOULD'} be taken:")
     print(f"  • Clear retained MQTT discovery topic for dongle {dongle_mac}")
     for mac in sensor_macs:
         print(f"  • Clear retained MQTT topics for sensor {mac}")
-    print(f"  • Delete {dongle_dir}/")
+    print(f"  • Remove {len(sensor_macs)} sensor(s) from sensors.yaml and state.yaml")
 
     if not apply:
         print("\nDry run — nothing changed.  Re-run with --apply to make these changes.")
@@ -274,7 +281,7 @@ def run_remove_dongle(dongle_mac: str, apply: bool = False) -> None:
 
     # Clear sensor topics
     for mac in sensor_macs:
-        sensor_type = sensors_config[mac].get("sensor_type", "unknown")
+        sensor_type = sensors_config.get(mac, {}).get("sensor_type", "unknown")
         LOGGER.info(f"Clearing sensor topics: {mac}")
         clear_sensor_state_topics(client, cfg, LOGGER, mac, sensor_type, wait=False)
         clear_sensor_discovery_topics(client, cfg, LOGGER, mac, sensor_type, wait=False)
@@ -287,12 +294,13 @@ def run_remove_dongle(dongle_mac: str, apply: bool = False) -> None:
     client.loop_stop()
     client.disconnect()
 
-    # Delete data directory
-    try:
-        shutil.rmtree(dongle_dir)
-        print(f"\nDeleted {dongle_dir}/")
-    except OSError as exc:
-        LOGGER.warning(f"Could not delete {dongle_dir}: {exc}")
+    # Remove the dongle's sensors from the registry files
+    for mac in sensor_macs:
+        sensors_config.pop(mac, None)
+        state.pop(mac, None)
+    write_yaml(config_path(SENSORS_CONFIG_FILE), sensors_config, LOGGER)
+    write_yaml(config_path(SENSOR_STATE_FILE), state, LOGGER)
+    print(f"\nRemoved {len(sensor_macs)} sensor(s) from the registry files.")
 
     print(f"\nDone.  Dongle {dongle_mac} removed.")
 
@@ -327,7 +335,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     remove_p.add_argument(
         "mac",
-        help="MAC address of the dongle to remove (as it appears in data/dongles/)",
+        help="MAC address of the dongle to remove (as recorded in state.yaml)",
     )
     remove_p.add_argument(
         "--apply",

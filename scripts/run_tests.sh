@@ -87,12 +87,12 @@ echo ""
 FAILED=0
 
 # ── Step 1: ruff check ────────────────────────────────────────────────────────
-echo "[ 1/$STEPS ] ruff check hub/ remote/ tests/..."
-ruff check hub/ remote/ tests/ && echo "        PASS" || { echo "        FAIL"; FAILED=1; }
+echo "[ 1/$STEPS ] ruff check hub/ remote/ shared/ tests/ tools/..."
+ruff check hub/ remote/ shared/ tests/ tools/ && echo "        PASS" || { echo "        FAIL"; FAILED=1; }
 
 # ── Step 2: ruff format check ─────────────────────────────────────────────────
-echo "[ 2/$STEPS ] ruff format --check hub/ remote/ tests/..."
-ruff format --check hub/ remote/ tests/ && echo "        PASS" || { echo "        FAIL"; FAILED=1; }
+echo "[ 2/$STEPS ] ruff format --check hub/ remote/ shared/ tests/ tools/..."
+ruff format --check hub/ remote/ shared/ tests/ tools/ && echo "        PASS" || { echo "        FAIL"; FAILED=1; }
 
 # ── Step 3: pytest unit / integration tests ───────────────────────────────────
 echo "[ 3/$STEPS ] pytest (unit + integration tests)..."

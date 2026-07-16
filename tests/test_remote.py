@@ -71,9 +71,9 @@ class TestLoadOrCreateRemoteId:
 
 
 def _make_remote(data_dir: pathlib.Path, remote_id: str = "test-uuid") -> object:
-    from remote import Remote
+    from remote import DongleRelay
 
-    return Remote(
+    return DongleRelay(
         hub_url="ws://localhost:8765",
         remote_id=remote_id,
         data_dir=data_dir,
@@ -430,4 +430,144 @@ class TestHubReaderControlFrames:
         except Exception:
             pass
 
-        assert r._device == "/dev/hidraw5"
+        # The selector is persisted for the next start; the running relay
+        # keeps its current dongle.
+        from remote import load_saved_setting
+
+        assert load_saved_setting(r._data_dir, "dongle") == "/dev/hidraw5"
+
+
+# ---------------------------------------------------------------------------
+# Persisted HA-adjustable settings (load_saved_setting / save_setting)
+# ---------------------------------------------------------------------------
+
+
+class TestSavedSettings:
+    def test_round_trip(self, tmp_path):
+        import logging
+
+        from remote import load_saved_setting, save_setting
+
+        save_setting(tmp_path, "dongle", "/dev/hidraw2", logging.getLogger("test"))
+        assert load_saved_setting(tmp_path, "dongle") == "/dev/hidraw2"
+
+    def test_missing_returns_none(self, tmp_path):
+        from remote import load_saved_setting
+
+        assert load_saved_setting(tmp_path, "dongle") is None
+
+    def test_empty_file_returns_none(self, tmp_path):
+        from remote import load_saved_setting
+
+        (tmp_path / "log_level").write_text("  \n")
+        assert load_saved_setting(tmp_path, "log_level") is None
+
+    def test_set_dongle_control_frame_persists(self, tmp_path):
+        """A set_dongle control frame from the hub must survive a restart —
+        the value is written to <data_dir>/dongle."""
+        r = _make_remote(tmp_path)
+        assert hasattr(r, "_data_dir")
+        # Simulate what the hub_reader thread does on set_dongle
+        from remote import save_setting
+
+        r._device = "/dev/hidraw5"
+        save_setting(r._data_dir, "dongle", "/dev/hidraw5", r._logger)
+
+        from remote import load_saved_setting
+
+        assert load_saved_setting(tmp_path, "dongle") == "/dev/hidraw5"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_device — auto / directory / explicit path
+# ---------------------------------------------------------------------------
+
+
+def _make_supervisor(data_dir, device="auto"):
+    from remote import Remote
+
+    return Remote(
+        hub_url="ws://localhost:8765",
+        remote_id="test-uuid",
+        data_dir=data_dir,
+        device=device,
+    )
+
+
+class TestResolveDevices:
+    """Remote (supervisor) resolves the selector to ALL matching devices —
+    one DongleRelay is run per dongle."""
+
+    def test_explicit_path_used_as_is(self, tmp_path):
+        sup = _make_supervisor(tmp_path, device="/dev/hidraw3")
+        assert sup._resolve_devices() == ["/dev/hidraw3"]
+
+    def test_auto_returns_all_detected(self, tmp_path, monkeypatch):
+        import remote as remote_mod
+
+        sup = _make_supervisor(tmp_path, device="auto")
+        monkeypatch.setattr(remote_mod, "find_all_dongle_devices", lambda: ["/dev/hidraw1", "/dev/hidraw2"])
+        assert sup._resolve_devices() == ["/dev/hidraw1", "/dev/hidraw2"]
+
+    def test_auto_raises_when_none_found(self, tmp_path, monkeypatch):
+        import remote as remote_mod
+
+        sup = _make_supervisor(tmp_path, device="auto")
+        monkeypatch.setattr(remote_mod, "find_all_dongle_devices", lambda: [])
+        with pytest.raises(RuntimeError):
+            sup._resolve_devices()
+
+    def test_directory_returns_all_char_devices(self, tmp_path, monkeypatch):
+        import remote as remote_mod
+
+        dongle_dir = tmp_path / "ws2m-dongles"
+        dongle_dir.mkdir()
+        sup = _make_supervisor(tmp_path, device=str(dongle_dir))
+        monkeypatch.setattr(remote_mod, "list_char_devices", lambda d: [f"{d}/hidraw0", f"{d}/hidraw1"])
+        assert sup._resolve_devices() == [f"{dongle_dir}/hidraw0", f"{dongle_dir}/hidraw1"]
+
+    def test_directory_raises_when_empty(self, tmp_path, monkeypatch):
+        import remote as remote_mod
+
+        dongle_dir = tmp_path / "ws2m-dongles"
+        dongle_dir.mkdir()
+        sup = _make_supervisor(tmp_path, device=str(dongle_dir))
+        monkeypatch.setattr(remote_mod, "list_char_devices", lambda d: [])
+        with pytest.raises(RuntimeError):
+            sup._resolve_devices()
+
+
+class TestSupervisorRelays:
+    def test_one_relay_per_device(self, tmp_path, monkeypatch):
+        import remote as remote_mod
+
+        sup = _make_supervisor(tmp_path, device="auto")
+        monkeypatch.setattr(remote_mod, "find_all_dongle_devices", lambda: ["/dev/hidraw1", "/dev/hidraw2"])
+        relays = [sup._make_relay(p) for p in sup._resolve_devices()]
+        assert [r._device for r in relays] == ["/dev/hidraw1", "/dev/hidraw2"]
+        # Each relay gets its own queue instance
+        assert relays[0]._queue is not relays[1]._queue
+
+    def test_unclaimed_candidates_excludes_live_relays(self, tmp_path, monkeypatch):
+        """Rediscovery must never hand a relay a sibling's active dongle —
+        probing it would inject GET_MAC into the sibling's frame stream."""
+        import remote as remote_mod
+
+        sup = _make_supervisor(tmp_path, device="auto")
+        monkeypatch.setattr(
+            remote_mod, "find_all_dongle_devices", lambda: ["/dev/hidraw1", "/dev/hidraw2", "/dev/hidraw3"]
+        )
+        healthy = sup._make_relay("/dev/hidraw1")
+        healthy.dongle_ok = True
+        lost = sup._make_relay("/dev/hidraw2")
+        lost.dongle_ok = False
+        sup._relays = [healthy, lost]
+
+        assert sup._unclaimed_candidates() == ["/dev/hidraw2", "/dev/hidraw3"]
+
+    def test_stop_stops_all_relays(self, tmp_path):
+        sup = _make_supervisor(tmp_path)
+        sup._relays = [MagicMock(), MagicMock()]
+        sup.stop()
+        for relay in sup._relays:
+            relay.stop.assert_called_once()

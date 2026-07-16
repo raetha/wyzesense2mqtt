@@ -43,10 +43,22 @@ def _make_worker(tmp_config_dir, sample_config):
     worker._remove_topic = f"{sample_config['self_topic_root']}/dongle/{TEST_DONGLE_MAC}/remove"
     worker._dongle_status_topic = f"{sample_config['self_topic_root']}/dongle/{TEST_DONGLE_MAC}/status"
 
+    worker._paired_macs = []
+    worker._on_ownership_transfer = None
     worker._registry = MagicMock()
     worker._registry.sensors = {}
     worker._registry.state = {}
     worker._registry.is_valid_mac = MagicMock(side_effect=lambda mac: len(mac) == 8 and mac != "00000000")
+    # Ownership defaults: unless a test sets a 'dongle' key in a state entry,
+    # sensors behave as owned by this worker's dongle (no handoff side effects).
+    worker._registry.owner_of = MagicMock(
+        side_effect=lambda mac: worker._registry.state.get(mac, {}).get("dongle", TEST_DONGLE_MAC)
+    )
+    worker._registry.macs_owned_by = MagicMock(
+        side_effect=lambda dmac: [
+            m for m, e in worker._registry.state.items() if e.get("dongle", TEST_DONGLE_MAC) == dmac
+        ]
+    )
 
     worker._dongle = MagicMock()
     worker._dongle.mac = TEST_DONGLE_MAC
@@ -114,7 +126,7 @@ def test_on_dongle_event_auto_adds_new_sensor(tmp_config_dir, sample_config):
     event = _make_event(mac="AAAAAAAA", sensor_type="switch")
     worker._on_dongle_event(worker._dongle, event)
 
-    worker._registry.add_sensor.assert_called_once_with("AAAAAAAA", "switch")
+    worker._registry.add_sensor.assert_called_once_with("AAAAAAAA", "switch", dongle_mac=TEST_DONGLE_MAC)
 
 
 def test_on_dongle_event_publishes_sensor_data(tmp_config_dir, sample_config):
@@ -226,7 +238,9 @@ def test_on_dongle_event_payload_includes_version_fields(tmp_config_dir, sample_
 def test_check_availability_marks_timed_out_sensor_offline(tmp_config_dir, sample_config):
     worker = _make_worker(tmp_config_dir, sample_config)
     worker._registry.sensors = {"AAAAAAAA": {"sensor_type": "motion"}}
-    worker._registry.state = {"AAAAAAAA": {"last_seen": time.time() - 10 * 3600, "online": True}}
+    worker._registry.state = {
+        "AAAAAAAA": {"last_seen": time.time() - 10 * 3600, "online": True, "dongle": TEST_DONGLE_MAC}
+    }
     worker._registry.timeout_for = MagicMock(return_value=8 * 3600)
 
     worker.check_sensor_availability()
@@ -600,7 +614,7 @@ def test_on_mqtt_keypad_clear_pins_clears_registry(tmp_config_dir, sample_config
 
     worker = _make_worker(tmp_config_dir, sample_config)
     # Use a real SensorRegistry so clear_pins() actually works
-    worker._registry = SensorRegistry(TEST_DONGLE_MAC)
+    worker._registry = SensorRegistry()
     worker._registry.sensors["KPADKPAD"] = {"sensor_type": "keypad", "pins": ["1234", "5678"]}
     worker._registry.state["KPADKPAD"] = {"online": True, "last_seen": 0}
 
@@ -622,7 +636,7 @@ def test_pin_capture_absorbed_on_pin_confirm_event(tmp_config_dir, sample_config
     from sensors import SensorRegistry
 
     worker = _make_worker(tmp_config_dir, sample_config)
-    worker._registry = SensorRegistry(TEST_DONGLE_MAC)
+    worker._registry = SensorRegistry()
     worker._registry.sensors["KPADKPAD"] = {"sensor_type": "keypad", "pins": []}
     worker._registry.state["KPADKPAD"] = {"online": True, "last_seen": __import__("time").time()}
 
@@ -654,7 +668,7 @@ def test_pin_capture_not_armed_does_not_add_pin(tmp_config_dir, sample_config):
     from sensors import SensorRegistry
 
     worker = _make_worker(tmp_config_dir, sample_config)
-    worker._registry = SensorRegistry(TEST_DONGLE_MAC)
+    worker._registry = SensorRegistry()
     worker._registry.sensors["KPADKPAD"] = {"sensor_type": "keypad", "pins": []}
     worker._registry.state["KPADKPAD"] = {"online": True, "last_seen": __import__("time").time()}
 
@@ -738,31 +752,36 @@ def test_load_config_drops_removed_keys_from_file(tmp_config_dir, sample_config)
 
 
 def _make_bridge_for_cleanup(tmp_config_dir, sample_config, worker_mac=TEST_DONGLE_MAC):
-    """Return a minimal Bridge instance with one mocked DongleWorker."""
+    """Return a minimal Bridge instance with one mocked DongleWorker and a real registry."""
     import threading
 
     from bridge import Bridge
+    from sensors import SensorRegistry
 
     bridge = Bridge.__new__(Bridge)
     bridge._config = sample_config
+    bridge._hub_id = TEST_HUB_ID
     bridge._logger = logging.getLogger("test.bridge")
     bridge._gateway = MagicMock()
     bridge._gateway.clear_sensor = MagicMock()
     bridge._gateway.clear_dongle = MagicMock()
+    bridge._gateway.publish.return_value = MagicMock(rc=0)
     bridge._workers_lock = threading.Lock()
+    bridge._registry = SensorRegistry()
 
     worker = MagicMock()
     worker.dongle_mac = worker_mac
+    worker.failed = False
+    worker._stopped = False
+    worker._paired_macs = []
     bridge._workers = [worker]
     return bridge
 
 
 def test_cleanup_removed_dongles_noop_when_all_active(tmp_config_dir, sample_config):
     """Handler is a no-op when all recorded dongles match active workers."""
-    import config as cfg_module
-
-    cfg_module.ensure_dongle_dir(TEST_DONGLE_MAC)
     bridge = _make_bridge_for_cleanup(tmp_config_dir, sample_config, worker_mac=TEST_DONGLE_MAC)
+    bridge._registry.add_sensor("AAAAAAAA", "switch", dongle_mac=TEST_DONGLE_MAC)
 
     msg = MagicMock()
     bridge._on_mqtt_cleanup_removed_dongles(None, None, msg)
@@ -782,14 +801,10 @@ def test_cleanup_removed_dongles_noop_when_no_known_macs(tmp_config_dir, sample_
 
 
 def test_cleanup_removed_dongles_clears_missing_dongle(tmp_config_dir, sample_config):
-    """Handler clears MQTT topics for a dongle that has data but no active worker."""
-    import config as cfg_module
-
+    """Handler clears MQTT topics for a dongle that owns sensors but has no active worker."""
     missing_mac = "BBBBBBBB"
-    cfg_module.ensure_dongle_dir(missing_mac)
-
-    # Active worker has a different MAC — missing_mac is absent
     bridge = _make_bridge_for_cleanup(tmp_config_dir, sample_config, worker_mac=TEST_DONGLE_MAC)
+    bridge._registry.add_sensor("CCCCCCCC", "switch", dongle_mac=missing_mac)
 
     msg = MagicMock()
     bridge._on_mqtt_cleanup_removed_dongles(None, None, msg)
@@ -797,37 +812,28 @@ def test_cleanup_removed_dongles_clears_missing_dongle(tmp_config_dir, sample_co
     bridge._gateway.clear_dongle.assert_called_once_with(missing_mac, wait=False)
 
 
-def test_cleanup_removed_dongles_deletes_data_directory(tmp_config_dir, sample_config):
-    """Handler deletes the data directory for the removed dongle."""
-    import config as cfg_module
-
+def test_cleanup_removed_dongles_removes_registry_entries(tmp_config_dir, sample_config):
+    """Handler removes the missing dongle's sensors from the registry."""
     missing_mac = "BBBBBBBB"
-    dongle_dir = cfg_module.ensure_dongle_dir(missing_mac)
-    assert os.path.isdir(dongle_dir)
-
     bridge = _make_bridge_for_cleanup(tmp_config_dir, sample_config, worker_mac=TEST_DONGLE_MAC)
+    bridge._registry.add_sensor("CCCCCCCC", "switch", dongle_mac=missing_mac)
+    bridge._registry.add_sensor("DDDDDDDD", "motion", dongle_mac=TEST_DONGLE_MAC)
 
     msg = MagicMock()
     bridge._on_mqtt_cleanup_removed_dongles(None, None, msg)
 
-    assert not os.path.exists(dongle_dir), "Data directory should have been deleted"
+    assert "CCCCCCCC" not in bridge._registry.sensors
+    assert "CCCCCCCC" not in bridge._registry.state
+    # The active dongle's sensor is untouched
+    assert "DDDDDDDD" in bridge._registry.sensors
 
 
 def test_cleanup_removed_dongles_clears_sensors(tmp_config_dir, sample_config):
-    """Handler clears sensor topics for each sensor in the removed dongle."""
-    import config as cfg_module
-    import yaml
-
+    """Handler clears sensor topics for each sensor owned by the removed dongle."""
     missing_mac = "BBBBBBBB"
     sensor_mac = "CCCCCCCC"
-    dongle_dir = cfg_module.ensure_dongle_dir(missing_mac)
-
-    # Write a sensors.yaml with one sensor
-    sensors_data = {sensor_mac: {"sensor_type": "switch", "sensor_name": "Test"}}
-    with open(os.path.join(dongle_dir, "sensors.yaml"), "w") as f:
-        yaml.safe_dump(sensors_data, f)
-
     bridge = _make_bridge_for_cleanup(tmp_config_dir, sample_config, worker_mac=TEST_DONGLE_MAC)
+    bridge._registry.add_sensor(sensor_mac, "switch", dongle_mac=missing_mac)
 
     msg = MagicMock()
     bridge._on_mqtt_cleanup_removed_dongles(None, None, msg)
@@ -913,7 +919,6 @@ def test_reconnect_remote_stops_old_and_opens_new(tmp_config_dir, sample_config)
     worker._dongle = old_dongle
     worker._transport = None
     worker._remote_id = "remote-uuid"
-    worker._on_remote_health_change = None
     worker._dongle_status_topic = f"{sample_config['self_topic_root']}/dongle/{TEST_DONGLE_MAC}/status"
     worker._keypad_command_topics = {}
     worker._keypad_pin_capture = {}
@@ -964,7 +969,8 @@ def test_on_remote_health_change_publishes_health_unhealthy(tmp_config_dir, samp
     bridge._gateway = MagicMock()
     bridge._gateway.publish.return_value = MagicMock(rc=0)
 
-    bridge._on_remote_health_change("remote-uuid-1234", False)
+    bridge._remote_unhealthy_dongles = {}
+    bridge._on_remote_health_change("remote-uuid-1234", "DGLMAC01", False)
 
     calls = bridge._gateway.publish.call_args_list
     assert len(calls) == 1
@@ -987,7 +993,8 @@ def test_on_remote_health_change_publishes_health_healthy(tmp_config_dir, sample
     bridge._gateway = MagicMock()
     bridge._gateway.publish.return_value = MagicMock(rc=0)
 
-    bridge._on_remote_health_change("remote-uuid-1234", True)
+    bridge._remote_unhealthy_dongles = {}
+    bridge._on_remote_health_change("remote-uuid-1234", "DGLMAC01", True)
 
     calls = bridge._gateway.publish.call_args_list
     assert len(calls) == 1
@@ -1007,8 +1014,9 @@ def test_on_remote_health_change_does_not_call_publish_hub_health(tmp_config_dir
     bridge._gateway = MagicMock()
     bridge._gateway.publish.return_value = MagicMock(rc=0)
 
+    bridge._remote_unhealthy_dongles = {}
     with patch.object(bridge, "_publish_hub_health") as mock_hub_health:
-        bridge._on_remote_health_change("remote-uuid-1234", False)
+        bridge._on_remote_health_change("remote-uuid-1234", "DGLMAC01", False)
         mock_hub_health.assert_not_called()
 
 
@@ -1147,7 +1155,6 @@ def test_on_mqtt_hub_restart_sets_restart_event(tmp_config_dir, sample_config):
 
 def test_on_mqtt_hub_restart_does_not_call_os_exit_directly(tmp_config_dir, sample_config):
     """_on_mqtt_hub_restart must not call os._exit() — clean exit is handled by run()."""
-    import os
     import threading
     from unittest.mock import patch
 
@@ -1183,7 +1190,8 @@ def test_on_remote_health_change_only_health_topic_unhealthy(tmp_config_dir, sam
     bridge._gateway = MagicMock()
     bridge._gateway.publish.return_value = MagicMock(rc=0)
 
-    bridge._on_remote_health_change("remote-abc", False)
+    bridge._remote_unhealthy_dongles = {}
+    bridge._on_remote_health_change("remote-abc", "DGLMAC01", False)
 
     calls = bridge._gateway.publish.call_args_list
     topic_payload = {c.args[0]: c.args[1] for c in calls}
@@ -1206,7 +1214,8 @@ def test_on_remote_health_change_only_health_topic_healthy(tmp_config_dir, sampl
     bridge._gateway = MagicMock()
     bridge._gateway.publish.return_value = MagicMock(rc=0)
 
-    bridge._on_remote_health_change("remote-abc", True)
+    bridge._remote_unhealthy_dongles = {}
+    bridge._on_remote_health_change("remote-abc", "DGLMAC01", True)
 
     calls = bridge._gateway.publish.call_args_list
     topic_payload = {c.args[0]: c.args[1] for c in calls}
@@ -1301,16 +1310,18 @@ def _make_bridge_for_counts(sample_config):
     bridge._gateway.publish.return_value = MagicMock(rc=0)
     bridge._workers_lock = threading.Lock()
     bridge._workers = []
+    bridge._registry = None
     return bridge
 
 
-def _mock_worker(failed=False, stopped=False, remote_id=None):
+def _mock_worker(failed=False, stopped=False, remote_id=None, paired_macs=None):
     from unittest.mock import MagicMock
 
     w = MagicMock()
     w.failed = failed
     w._stopped = stopped
     w._remote_id = remote_id
+    w._paired_macs = paired_macs or []
     return w
 
 
@@ -1851,14 +1862,18 @@ def _make_bridge_for_remote_cleanup(tmp_config_dir, sample_config, remote_id="te
     bridge._publish_hub_counts = MagicMock()
     bridge._publish_remote_dongle_count = MagicMock()
 
+    # Shared registry: the failed remote dongle owns one sensor
+    from sensors import SensorRegistry
+
+    bridge._registry = SensorRegistry()
+    bridge._registry.add_sensor("BBBBBBBB", "switch", dongle_mac=TEST_DONGLE_MAC)
+
     # Failed worker for this remote
     failed_worker = MagicMock()
     failed_worker.dongle_mac = TEST_DONGLE_MAC
     failed_worker._remote_id = remote_id
     failed_worker.failed = True
     failed_worker._stopped = False
-    failed_worker._registry = MagicMock()
-    failed_worker._registry.sensors = {"BBBBBBBB": {"sensor_type": "switch"}}
 
     # Healthy worker for this remote
     healthy_worker = MagicMock()
@@ -1866,8 +1881,6 @@ def _make_bridge_for_remote_cleanup(tmp_config_dir, sample_config, remote_id="te
     healthy_worker._remote_id = remote_id
     healthy_worker.failed = False
     healthy_worker._stopped = False
-    healthy_worker._registry = MagicMock()
-    healthy_worker._registry.sensors = {}
 
     bridge._workers = [failed_worker, healthy_worker]
     return bridge, failed_worker, healthy_worker
@@ -1891,19 +1904,14 @@ def test_remote_cleanup_disconnected_dongles_clears_dongle_topics(tmp_config_dir
     bridge._gateway.clear_dongle.assert_called_once_with(TEST_DONGLE_MAC, wait=False)
 
 
-def test_remote_cleanup_disconnected_dongles_deletes_data_dir(tmp_config_dir, sample_config):
-    """_remote_cleanup_disconnected_dongles deletes the data directory for failed dongle."""
-    import config as cfg_module
-
-    dongle_dir = pathlib.Path(cfg_module.CONFIG_DIR) / "dongles" / TEST_DONGLE_MAC
-    dongle_dir.mkdir(parents=True, exist_ok=True)
-    (dongle_dir / "sensors.yaml").write_text("")
-
+def test_remote_cleanup_disconnected_dongles_removes_registry_entries(tmp_config_dir, sample_config):
+    """_remote_cleanup_disconnected_dongles removes the failed dongle's sensors from the registry."""
     bridge, failed_worker, healthy_worker = _make_bridge_for_remote_cleanup(tmp_config_dir, sample_config)
 
     bridge._remote_cleanup_disconnected_dongles("test-remote-uuid")
 
-    assert not dongle_dir.exists(), "Dongle data directory should have been deleted"
+    assert "BBBBBBBB" not in bridge._registry.sensors
+    assert "BBBBBBBB" not in bridge._registry.state
 
 
 def test_remote_cleanup_disconnected_dongles_removes_failed_workers(tmp_config_dir, sample_config):
@@ -2265,8 +2273,8 @@ class TestRemoteTransport:
 
         health_calls = []
 
-        def callback(rid, healthy):
-            health_calls.append((rid, healthy))
+        def callback(rid, dongle_mac, healthy):
+            health_calls.append((rid, dongle_mac, healthy))
 
         unhealthy_msg = json.dumps({"type": "remote_unhealthy", "reason": "dongle_lost"})
         binary_msg = b"\xaa" * 64
@@ -2275,7 +2283,7 @@ class TestRemoteTransport:
 
         result1 = t.read()  # health message → b""
         assert result1 == b""
-        assert health_calls == [("r1", False)]
+        assert health_calls == [("r1", "MAC1", False)]
 
         result2 = t.read()  # binary frame passes through
         assert result2 == binary_msg
@@ -2286,8 +2294,8 @@ class TestRemoteTransport:
 
         health_calls = []
 
-        def callback(rid, healthy):
-            health_calls.append((rid, healthy))
+        def callback(rid, dongle_mac, healthy):
+            health_calls.append((rid, dongle_mac, healthy))
 
         healthy_msg = json.dumps({"type": "remote_healthy"})
         ws = _make_ws_mock([healthy_msg])
@@ -2295,7 +2303,7 @@ class TestRemoteTransport:
 
         result = t.read()
         assert result == b""
-        assert health_calls == [("r1", True)]
+        assert health_calls == [("r1", "MAC1", True)]
 
     def test_health_message_without_callback_does_not_raise(self):
         """Health messages with no callback set are silently ignored."""
@@ -2376,3 +2384,624 @@ class TestRemoteTransport:
         t = RemoteTransport(ws, remote_id="r1", dongle_mac="MAC1", replay_frames=[])
         result = t.read()
         assert result == b""
+
+
+# ---------------------------------------------------------------------------
+# Data payload must never include keypad PINs
+# ---------------------------------------------------------------------------
+
+
+def test_on_dongle_event_payload_strips_pins(tmp_config_dir, sample_config):
+    """Sensor config is merged into the data payload — pins must be removed."""
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._registry.sensors = {"AAAAAAAA": {"sensor_type": "switch", "name": "Front Door", "pins": ["1234", "9999"]}}
+    worker._registry.state = {"AAAAAAAA": {"last_seen": time.time(), "online": True}}
+    worker._registry.update_sensor_type = MagicMock(return_value=False)
+
+    published_payloads = {}
+
+    def _capture_publish(topic, payload, **kwargs):
+        published_payloads[topic] = payload
+        return MagicMock(rc=0)
+
+    worker._gateway.publish = _capture_publish
+
+    event = _make_event(mac="AAAAAAAA")
+    worker._on_dongle_event(worker._dongle, event)
+
+    data = published_payloads["wyzesense2mqtt/sensor/AAAAAAAA"]
+    assert "pins" not in data
+    # Registry config itself must be untouched
+    assert worker._registry.sensors["AAAAAAAA"]["pins"] == ["1234", "9999"]
+
+
+# ---------------------------------------------------------------------------
+# _resolve_device_paths — directory-valued dongle config
+# ---------------------------------------------------------------------------
+
+
+def _make_bridge_for_device_paths(sample_config):
+    from bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._config = sample_config
+    bridge._logger = logging.getLogger("test.bridge")
+    return bridge
+
+
+def test_resolve_device_paths_directory(tmp_path, sample_config):
+    """A directory-valued dongle config returns all character devices inside it."""
+    from unittest.mock import patch
+
+    bridge = _make_bridge_for_device_paths(sample_config)
+    dongle_dir = tmp_path / "ws2m-dongles"
+    dongle_dir.mkdir()
+    sample_config["dongle"] = str(dongle_dir)
+
+    fake = [str(dongle_dir / "hidraw0"), str(dongle_dir / "hidraw1")]
+    with patch("bridge.list_char_devices", return_value=fake) as mock_list:
+        result = bridge._resolve_device_paths()
+    mock_list.assert_called_once_with(str(dongle_dir))
+    assert result == fake
+
+
+def test_resolve_device_paths_empty_directory(tmp_path, sample_config):
+    """An empty dongle directory yields no devices (warning, not an error)."""
+    from unittest.mock import patch
+
+    bridge = _make_bridge_for_device_paths(sample_config)
+    dongle_dir = tmp_path / "ws2m-dongles"
+    dongle_dir.mkdir()
+    sample_config["dongle"] = str(dongle_dir)
+
+    with patch("bridge.list_char_devices", return_value=[]):
+        assert bridge._resolve_device_paths() == []
+
+
+def test_resolve_device_paths_explicit_file(sample_config):
+    """A non-directory absolute path is used as-is."""
+    bridge = _make_bridge_for_device_paths(sample_config)
+    sample_config["dongle"] = "/dev/hidraw7"
+    assert bridge._resolve_device_paths() == ["/dev/hidraw7"]
+
+
+# ---------------------------------------------------------------------------
+# _on_remote_connection wires the health callback onto the transport
+# ---------------------------------------------------------------------------
+
+
+def test_on_remote_connection_wires_health_callback(tmp_config_dir, sample_config):
+    """Every incoming transport must receive the hub's health callback —
+    otherwise remote_healthy/remote_unhealthy frames are dropped."""
+    import threading
+    from unittest.mock import MagicMock, patch
+
+    from bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._config = sample_config
+    bridge._hub_id = "hub-abc"
+    bridge._logger = logging.getLogger("test.bridge")
+    bridge._gateway = MagicMock()
+    bridge._gateway.publish.return_value = MagicMock(rc=0)
+    bridge._workers_lock = threading.Lock()
+    bridge._workers = []
+    bridge._registry = MagicMock()
+
+    transport = MagicMock()
+    transport.dongle_mac = "REMOTED1"
+    transport.remote_id = "remote-uuid-1"
+
+    # Stub out the heavyweight side effects — only the wiring is under test.
+    bridge._subscribe_remote_restart = MagicMock()
+    bridge._subscribe_remote_remove = MagicMock()
+    bridge._subscribe_remote_cleanup = MagicMock()
+    bridge._subscribe_remote_dongle = MagicMock()
+    bridge._subscribe_remote_log_level = MagicMock()
+    bridge._publish_hub_counts = MagicMock()
+    bridge._publish_remote_dongle_count = MagicMock()
+    bridge._remote_unhealthy_dongles = {}
+    bridge._publish_remote_health = MagicMock()
+
+    with patch("bridge.DongleWorker") as mock_worker_cls:
+        mock_worker_cls.return_value.start = MagicMock()
+        bridge._on_remote_connection(transport)
+
+    transport.set_health_callback.assert_called_once_with(bridge._on_remote_health_change)
+
+
+def test_on_remote_connection_wires_health_callback_on_reconnect(tmp_config_dir, sample_config):
+    """The reconnect path (existing worker for the MAC) also wires the new transport."""
+    import threading
+    from unittest.mock import MagicMock
+
+    from bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._config = sample_config
+    bridge._hub_id = "hub-abc"
+    bridge._logger = logging.getLogger("test.bridge")
+    bridge._gateway = MagicMock()
+    bridge._gateway.publish.return_value = MagicMock(rc=0)
+    bridge._workers_lock = threading.Lock()
+
+    existing = MagicMock()
+    existing.dongle_mac = "REMOTED1"
+    bridge._workers = [existing]
+
+    transport = MagicMock()
+    transport.dongle_mac = "REMOTED1"
+    transport.remote_id = "remote-uuid-1"
+
+    bridge._subscribe_remote_restart = MagicMock()
+    bridge._subscribe_remote_remove = MagicMock()
+    bridge._subscribe_remote_cleanup = MagicMock()
+    bridge._subscribe_remote_dongle = MagicMock()
+    bridge._subscribe_remote_log_level = MagicMock()
+    bridge._remote_unhealthy_dongles = {}
+    bridge._publish_remote_health = MagicMock()
+
+    bridge._on_remote_connection(transport)
+
+    transport.set_health_callback.assert_called_once_with(bridge._on_remote_health_change)
+    existing.reconnect_remote.assert_called_once_with(transport)
+
+
+# ---------------------------------------------------------------------------
+# Sensor ownership — handoff and reconcile semantics
+# ---------------------------------------------------------------------------
+
+
+def test_on_dongle_event_hands_off_ownership(tmp_config_dir, sample_config):
+    """An event for a sensor owned by another dongle transfers ownership here
+    and republishes discovery (via_device changes)."""
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._gateway.publish_sensor_discovery = MagicMock()
+    worker._registry.sensors = {"AAAAAAAA": {"sensor_type": "switch", "name": "Front Door"}}
+    worker._registry.state = {"AAAAAAAA": {"last_seen": time.time(), "online": True, "dongle": "OTHERDGL"}}
+    worker._registry.update_sensor_type = MagicMock(return_value=False)
+
+    event = _make_event(mac="AAAAAAAA")
+    worker._on_dongle_event(worker._dongle, event)
+
+    worker._registry.set_owner.assert_called_once_with("AAAAAAAA", TEST_DONGLE_MAC)
+    worker._gateway.publish_sensor_discovery.assert_called_once()
+    assert "AAAAAAAA" in worker._paired_macs
+
+
+def test_on_dongle_event_no_handoff_when_already_owner(tmp_config_dir, sample_config):
+    """No ownership churn when the event arrives via the owning dongle."""
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._gateway.publish_sensor_discovery = MagicMock()
+    worker._registry.sensors = {"AAAAAAAA": {"sensor_type": "switch"}}
+    worker._registry.state = {"AAAAAAAA": {"last_seen": time.time(), "online": True, "dongle": TEST_DONGLE_MAC}}
+    worker._registry.update_sensor_type = MagicMock(return_value=False)
+
+    event = _make_event(mac="AAAAAAAA")
+    worker._on_dongle_event(worker._dongle, event)
+
+    worker._registry.set_owner.assert_not_called()
+    worker._gateway.publish_sensor_discovery.assert_not_called()
+
+
+def test_reconcile_does_not_steal_owned_sensor(tmp_config_dir):
+    """A dongle listing a sensor owned elsewhere must not claim it at init —
+    ownership only moves when events actually arrive."""
+    from sensors import SensorRegistry
+
+    r = SensorRegistry()
+    r.add_sensor("AAAAAAAA", "switch", dongle_mac="DONGLE_A")
+
+    auto = r.reconcile_with_dongle("DONGLE_B", ["AAAAAAAA"])
+    assert auto == []
+    assert r.owner_of("AAAAAAAA") == "DONGLE_A"
+
+
+def test_reconcile_claims_unowned_sensor(tmp_config_dir):
+    """3.1.0-migrated sensors (no owner) are claimed by the listing dongle."""
+    from sensors import SensorRegistry
+
+    r = SensorRegistry()
+    r.sensors["AAAAAAAA"] = {"sensor_type": "switch", "name": "Kept Name"}
+
+    auto = r.reconcile_with_dongle("DONGLE_A", ["AAAAAAAA"])
+    assert auto == []
+    assert r.owner_of("AAAAAAAA") == "DONGLE_A"
+    # Config was preserved, not re-created
+    assert r.sensors["AAAAAAAA"]["name"] == "Kept Name"
+
+
+# ---------------------------------------------------------------------------
+# Cleanup orphaned sensors button
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_orphaned_sensors_removes_unpaired(tmp_config_dir, sample_config):
+    """Sensors not paired to any live dongle are removed; paired ones stay."""
+    bridge = _make_bridge_for_cleanup(tmp_config_dir, sample_config, worker_mac=TEST_DONGLE_MAC)
+    bridge._workers[0]._paired_macs = ["AAAAAAAA"]
+    bridge._registry.add_sensor("AAAAAAAA", "switch", dongle_mac=TEST_DONGLE_MAC)
+    bridge._registry.add_sensor("BBBBBBBB", "motion", dongle_mac="GONEDGLE")
+
+    msg = MagicMock()
+    bridge._on_mqtt_cleanup_orphaned_sensors(None, None, msg)
+
+    assert "AAAAAAAA" in bridge._registry.sensors
+    assert "BBBBBBBB" not in bridge._registry.sensors
+    bridge._gateway.clear_sensor.assert_called_once_with("BBBBBBBB", "motion", wait=False)
+
+
+def test_cleanup_orphaned_sensors_noop_when_all_paired(tmp_config_dir, sample_config):
+    bridge = _make_bridge_for_cleanup(tmp_config_dir, sample_config, worker_mac=TEST_DONGLE_MAC)
+    bridge._workers[0]._paired_macs = ["AAAAAAAA"]
+    bridge._registry.add_sensor("AAAAAAAA", "switch", dongle_mac=TEST_DONGLE_MAC)
+
+    msg = MagicMock()
+    bridge._on_mqtt_cleanup_orphaned_sensors(None, None, msg)
+
+    bridge._gateway.clear_sensor.assert_not_called()
+    assert "AAAAAAAA" in bridge._registry.sensors
+
+
+# ---------------------------------------------------------------------------
+# Hub counts — paired vs configured sensors
+# ---------------------------------------------------------------------------
+
+
+def test_publish_hub_counts_paired_and_configured(tmp_config_dir, sample_config):
+    """paired_sensors is the distinct union across live workers; configured is
+    the registry size."""
+    from sensors import SensorRegistry
+
+    bridge = _make_bridge_for_counts(sample_config)
+    bridge._registry = SensorRegistry()
+    bridge._registry.add_sensor("AAAAAAAA", "switch", dongle_mac="D1")
+    bridge._registry.add_sensor("BBBBBBBB", "motion", dongle_mac="D2")
+    bridge._registry.add_sensor("CCCCCCCC", "leak", dongle_mac="GONE")  # orphan
+
+    # AAAAAAAA is paired on both dongles (stale NVRAM) — counted once
+    bridge._workers = [
+        _mock_worker(paired_macs=["AAAAAAAA", "BBBBBBBB"]),
+        _mock_worker(paired_macs=["AAAAAAAA"], remote_id="r1"),
+    ]
+
+    bridge._publish_hub_counts()
+
+    published = {c.args[0]: c.args[1] for c in bridge._gateway.publish.call_args_list}
+    assert published["wyzesense2mqtt/hub/hub-abc/paired_sensors"] == "2"
+    assert published["wyzesense2mqtt/hub/hub-abc/configured_sensors"] == "3"
+
+
+# ---------------------------------------------------------------------------
+# Ownership transfer — stale NVRAM cleanup on the old dongle
+# ---------------------------------------------------------------------------
+
+
+def test_handoff_notifies_ownership_transfer(tmp_config_dir, sample_config):
+    """The handoff invokes the transfer callback with (mac, old_owner)."""
+    worker = _make_worker(tmp_config_dir, sample_config)
+    transfer_cb = MagicMock()
+    worker._on_ownership_transfer = transfer_cb
+    worker._gateway.publish_sensor_discovery = MagicMock()
+    worker._registry.sensors = {"AAAAAAAA": {"sensor_type": "switch"}}
+    worker._registry.state = {"AAAAAAAA": {"last_seen": time.time(), "online": True, "dongle": "OTHERDGL"}}
+    worker._registry.update_sensor_type = MagicMock(return_value=False)
+
+    worker._on_dongle_event(worker._dongle, _make_event(mac="AAAAAAAA"))
+
+    transfer_cb.assert_called_once_with("AAAAAAAA", "OTHERDGL")
+
+
+def test_forget_stale_pairing_deletes_from_nvram(tmp_config_dir, sample_config):
+    """forget_stale_pairing removes the NVRAM entry and the paired-macs record,
+    but never touches the registry."""
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._paired_macs = ["AAAAAAAA", "BBBBBBBB"]
+    worker._registry.delete_sensor = MagicMock()
+
+    worker.forget_stale_pairing("AAAAAAAA")
+
+    worker._dongle.delete.assert_called_once_with("AAAAAAAA")
+    assert worker._paired_macs == ["BBBBBBBB"]
+    worker._registry.delete_sensor.assert_not_called()
+
+
+def test_forget_stale_pairing_survives_dongle_error(tmp_config_dir, sample_config):
+    """A failed NVRAM delete is logged, not raised, and paired-macs still updates."""
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._paired_macs = ["AAAAAAAA"]
+    worker._dongle.delete.side_effect = TimeoutError("no response")
+
+    worker.forget_stale_pairing("AAAAAAAA")  # must not raise
+
+    assert worker._paired_macs == []
+
+
+def test_bridge_ownership_transfer_targets_old_owner(tmp_config_dir, sample_config):
+    """Bridge routes the NVRAM cleanup to the live worker owning the old MAC."""
+    import threading as _threading
+
+    from bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._logger = logging.getLogger("test.bridge")
+    bridge._workers_lock = _threading.Lock()
+
+    old_worker = MagicMock()
+    old_worker.dongle_mac = "OLDDGL01"
+    old_worker.failed = False
+    old_worker._stopped = False
+    other = MagicMock()
+    other.dongle_mac = "NEWDGL01"
+    other.failed = False
+    other._stopped = False
+    bridge._workers = [other, old_worker]
+
+    bridge._on_ownership_transfer("AAAAAAAA", "OLDDGL01")
+
+    # The cleanup runs on a short-lived thread — wait for it
+    for _ in range(50):
+        if old_worker.forget_stale_pairing.called:
+            break
+        time.sleep(0.01)
+    old_worker.forget_stale_pairing.assert_called_once_with("AAAAAAAA")
+    other.forget_stale_pairing.assert_not_called()
+
+
+def test_bridge_ownership_transfer_noop_when_old_owner_gone(tmp_config_dir, sample_config):
+    import threading as _threading
+
+    from bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._logger = logging.getLogger("test.bridge")
+    bridge._workers_lock = _threading.Lock()
+    bridge._workers = []
+
+    bridge._on_ownership_transfer("AAAAAAAA", "GONEDGL1")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Orphan sweep — staged mark / remove lifecycle
+# ---------------------------------------------------------------------------
+
+
+def _make_bridge_for_sweep(tmp_config_dir, sample_config, paired):
+    bridge = _make_bridge_for_cleanup(tmp_config_dir, sample_config, worker_mac=TEST_DONGLE_MAC)
+    bridge._workers[0]._paired_macs = paired
+    return bridge
+
+
+def test_sweep_marks_unpaired_sensor_stale(tmp_config_dir, sample_config):
+    bridge = _make_bridge_for_sweep(tmp_config_dir, sample_config, paired=["AAAAAAAA"])
+    bridge._registry.add_sensor("AAAAAAAA", "switch", dongle_mac=TEST_DONGLE_MAC)
+    bridge._registry.add_sensor("BBBBBBBB", "motion", dongle_mac="GONEDGLE")
+
+    bridge._sweep_orphaned_sensors()
+
+    assert bridge._registry.state["BBBBBBBB"].get("stale_since") is not None
+    assert bridge._registry.state["AAAAAAAA"].get("stale_since") is None
+    # Stage 1 removes nothing
+    assert "BBBBBBBB" in bridge._registry.sensors
+    bridge._gateway.clear_sensor.assert_not_called()
+
+
+def test_sweep_removes_sensor_after_retention(tmp_config_dir, sample_config):
+    bridge = _make_bridge_for_sweep(tmp_config_dir, sample_config, paired=[])
+    bridge._registry.add_sensor("BBBBBBBB", "motion", dongle_mac="GONEDGLE")
+    bridge._registry.state["BBBBBBBB"]["stale_since"] = time.time() - 8 * 86400
+
+    bridge._sweep_orphaned_sensors()
+
+    assert "BBBBBBBB" not in bridge._registry.sensors
+    assert "BBBBBBBB" not in bridge._registry.state
+    bridge._gateway.clear_sensor.assert_called_once_with("BBBBBBBB", "motion", wait=False)
+
+
+def test_sweep_respects_disabled_retention(tmp_config_dir, sample_config):
+    """orphan_retention_days = 0 disables automatic removal — marking only."""
+    sample_config["orphan_retention_days"] = 0
+    bridge = _make_bridge_for_sweep(tmp_config_dir, sample_config, paired=[])
+    bridge._registry.add_sensor("BBBBBBBB", "motion", dongle_mac="GONEDGLE")
+    bridge._registry.state["BBBBBBBB"]["stale_since"] = time.time() - 30 * 86400
+
+    bridge._sweep_orphaned_sensors()
+
+    assert "BBBBBBBB" in bridge._registry.sensors
+    bridge._gateway.clear_sensor.assert_not_called()
+
+
+def test_sweep_reactivates_returned_sensor(tmp_config_dir, sample_config):
+    """A stale-marked sensor that is paired again gets its marker cleared."""
+    bridge = _make_bridge_for_sweep(tmp_config_dir, sample_config, paired=["BBBBBBBB"])
+    bridge._registry.add_sensor("BBBBBBBB", "motion", dongle_mac=TEST_DONGLE_MAC)
+    bridge._registry.state["BBBBBBBB"]["stale_since"] = time.time() - 3 * 86400
+
+    bridge._sweep_orphaned_sensors()
+
+    assert bridge._registry.state["BBBBBBBB"].get("stale_since") is None
+    assert "BBBBBBBB" in bridge._registry.sensors
+
+
+def test_reconcile_clears_stale_marker(tmp_config_dir):
+    """A dongle re-listing its own sensor clears the orphan marker."""
+    from sensors import SensorRegistry
+
+    r = SensorRegistry()
+    r.add_sensor("AAAAAAAA", "switch", dongle_mac="DONGLE_A")
+    r.mark_stale("AAAAAAAA", now=time.time() - 86400)
+
+    r.reconcile_with_dongle("DONGLE_A", ["AAAAAAAA"])
+    assert r.state["AAAAAAAA"].get("stale_since") is None
+
+
+def test_set_owner_clears_stale_marker(tmp_config_dir):
+    """Ownership handoff to a new dongle clears the orphan marker."""
+    from sensors import SensorRegistry
+
+    r = SensorRegistry()
+    r.add_sensor("AAAAAAAA", "switch", dongle_mac="DONGLE_A")
+    r.mark_stale("AAAAAAAA")
+
+    r.set_owner("AAAAAAAA", "DONGLE_B")
+    assert r.state["AAAAAAAA"].get("stale_since") is None
+
+
+# ---------------------------------------------------------------------------
+# Orphan retention config entity handler
+# ---------------------------------------------------------------------------
+
+
+def _orphan_msg(payload: str):
+    msg = MagicMock()
+    msg.payload = payload.encode()
+    return msg
+
+
+def test_on_mqtt_hub_orphan_retention_updates_config(tmp_config_dir, sample_config):
+    """A valid value from HA updates the config, persists it, and republishes state."""
+    from unittest.mock import patch
+
+    bridge = _make_bridge_for_config_handlers(tmp_config_dir, sample_config)
+    bridge._config["orphan_retention_days"] = 7
+
+    with patch("bridge.save_config") as mock_save:
+        bridge._on_mqtt_hub_orphan_retention(None, None, _orphan_msg("14"))
+
+    assert bridge._config["orphan_retention_days"] == 14
+    mock_save.assert_called_once()
+    published = {c.args[0]: c.args[1] for c in bridge._gateway.publish.call_args_list}
+    assert published[f"wyzesense2mqtt/hub/{bridge._hub_id}/orphan_retention_days"] == "14"
+
+
+def test_on_mqtt_hub_orphan_retention_accepts_zero(tmp_config_dir, sample_config):
+    """0 is a valid value — it disables automatic removal."""
+    from unittest.mock import patch
+
+    bridge = _make_bridge_for_config_handlers(tmp_config_dir, sample_config)
+
+    with patch("bridge.save_config"):
+        bridge._on_mqtt_hub_orphan_retention(None, None, _orphan_msg("0"))
+
+    assert bridge._config["orphan_retention_days"] == 0
+
+
+def test_on_mqtt_hub_orphan_retention_rejects_invalid(tmp_config_dir, sample_config):
+    """Non-numeric and out-of-range values are ignored without touching config."""
+    from unittest.mock import patch
+
+    bridge = _make_bridge_for_config_handlers(tmp_config_dir, sample_config)
+    bridge._config["orphan_retention_days"] = 7
+
+    with patch("bridge.save_config") as mock_save:
+        bridge._on_mqtt_hub_orphan_retention(None, None, _orphan_msg("banana"))
+        bridge._on_mqtt_hub_orphan_retention(None, None, _orphan_msg("-1"))
+        bridge._on_mqtt_hub_orphan_retention(None, None, _orphan_msg("9999"))
+
+    assert bridge._config["orphan_retention_days"] == 7
+    mock_save.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Health isolation — hub health ignores remote workers; remote health is
+# aggregated per dongle
+# ---------------------------------------------------------------------------
+
+
+def _make_bridge_for_health(sample_config):
+    from bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._config = sample_config
+    bridge._hub_id = "hub-abc"
+    bridge._logger = logging.getLogger("test.bridge")
+    bridge._gateway = MagicMock()
+    bridge._gateway.publish.return_value = MagicMock(rc=0)
+    bridge._remote_unhealthy_dongles = {}
+    return bridge
+
+
+def test_hub_health_unaffected_by_failed_remote_worker(tmp_config_dir, sample_config):
+    """A dead remote must never degrade the hub — hub health is hub-area only."""
+    from unittest.mock import patch
+
+    bridge = _make_bridge_for_health(sample_config)
+    local_ok = _mock_worker()
+    remote_failed = _mock_worker(failed=True, remote_id="r1")
+
+    with patch("bridge._mark_healthy") as mark_ok, patch("bridge._mark_unhealthy") as mark_bad:
+        bridge._update_hub_health([local_ok, remote_failed])
+
+    mark_ok.assert_called_once()
+    mark_bad.assert_not_called()
+    published = {c.args[0]: c.args[1] for c in bridge._gateway.publish.call_args_list}
+    assert published["wyzesense2mqtt/hub/hub-abc/health"] == "healthy"
+
+
+def test_hub_health_healthy_in_remote_only_mode_with_dead_remote(tmp_config_dir, sample_config):
+    """Remote-only hub with its remote offline: the hub itself is still fine."""
+    from unittest.mock import patch
+
+    bridge = _make_bridge_for_health(sample_config)
+    remote_failed = _mock_worker(failed=True, remote_id="r1")
+
+    with patch("bridge._mark_healthy") as mark_ok, patch("bridge._mark_unhealthy") as mark_bad:
+        bridge._update_hub_health([remote_failed])
+
+    mark_ok.assert_called_once()
+    mark_bad.assert_not_called()
+
+
+def test_hub_health_degraded_only_when_all_local_failed(tmp_config_dir, sample_config):
+    """One failed local dongle of two keeps the hub healthy (the dongle device
+    carries that state); all local failed marks the hub degraded."""
+    from unittest.mock import patch
+
+    bridge = _make_bridge_for_health(sample_config)
+    ok = _mock_worker()
+    failed = _mock_worker(failed=True)
+
+    with patch("bridge._mark_healthy") as mark_ok, patch("bridge._mark_unhealthy"):
+        bridge._update_hub_health([ok, failed])
+    mark_ok.assert_called_once()
+
+    bridge._gateway.publish.reset_mock()
+    with patch("bridge._mark_healthy"), patch("bridge._mark_unhealthy") as mark_bad:
+        bridge._update_hub_health([failed, _mock_worker(failed=True)])
+    mark_bad.assert_called_once()
+    published = {c.args[0]: c.args[1] for c in bridge._gateway.publish.call_args_list}
+    assert published["wyzesense2mqtt/hub/hub-abc/health"] == "degraded"
+
+
+def test_remote_health_aggregates_across_dongles(tmp_config_dir, sample_config):
+    """One remote with several dongles: degraded while ANY dongle is unhealthy,
+    healthy only when all have recovered."""
+    bridge = _make_bridge_for_health(sample_config)
+
+    def last_health():
+        for c in reversed(bridge._gateway.publish.call_args_list):
+            if c.args[0].endswith("/remote/r1/health"):
+                return c.args[1]
+        return None
+
+    bridge._on_remote_health_change("r1", "DGL_A", False)
+    assert last_health() == "degraded"
+
+    bridge._on_remote_health_change("r1", "DGL_B", False)
+    assert last_health() == "degraded"
+
+    bridge._on_remote_health_change("r1", "DGL_A", True)
+    assert last_health() == "degraded"  # DGL_B still down
+
+    bridge._on_remote_health_change("r1", "DGL_B", True)
+    assert last_health() == "healthy"
+
+
+def test_remote_health_per_remote_isolation(tmp_config_dir, sample_config):
+    """Dongle trouble on one remote never marks a different remote degraded."""
+    bridge = _make_bridge_for_health(sample_config)
+    bridge._on_remote_health_change("r1", "DGL_A", False)
+
+    published = {c.args[0]: c.args[1] for c in bridge._gateway.publish.call_args_list}
+    assert published["wyzesense2mqtt/remote/r1/health"] == "degraded"
+    assert "wyzesense2mqtt/remote/r2/health" not in published

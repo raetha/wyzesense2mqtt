@@ -5,8 +5,9 @@ Architecture
 ------------
 Bridge        — top-level orchestrator: config, MQTT connection, service discovery,
                 service-level MQTT commands (reload, log_level), DongleWorker lifecycle.
-DongleWorker  — owns one physical dongle + its SensorRegistry; handles all
-                sensor events and dongle-scoped MQTT commands (scan, remove, sensor config).
+DongleWorker  — owns one physical dongle; handles all sensor events and
+                dongle-scoped MQTT commands (scan, remove, sensor config).
+                All workers share the hub-wide SensorRegistry.
 
 Each DongleWorker runs independently against the shared MqttGateway.  When
 dongle is "auto", all detected dongles get a worker; when it is an explicit
@@ -22,7 +23,6 @@ Startup sequence
     └─ for each dongle device:
          DongleWorker.start()
            ├─ _open_dongle()
-           ├─ _migrate_legacy_sensor_files()   (flat → per-dongle dir, once)
            ├─ _publish_dongle_discovery()
            └─ _init_sensors()
 
@@ -32,23 +32,28 @@ MQTT topics (v2 schema)
   <self_topic_root>/hub/<uuid>/log_level                  — hub log level state (retained)
   <self_topic_root>/hub/<uuid>/log_level/set              — hub log level command
   <self_topic_root>/hub/<uuid>/cleanup_removed_dongles    — hub cleanup command
-  <self_topic_root>/hub/<uuid>/remote_pair                       — enable remote pairing mode command
-  <self_topic_root>/hub/<uuid>/remote_pairing               — pairing mode state (retained)
-  <self_topic_root>/hub/<uuid>/dongle                   — USB dongle config state (retained)
-  <self_topic_root>/hub/<uuid>/dongle/set               — USB dongle config command
-  <self_topic_root>/hub/<uuid>/ws_port                      — WebSocket port state (retained)
-  <self_topic_root>/hub/<uuid>/ws_port/set                  — WebSocket port command
-  <self_topic_root>/hub/<uuid>/remote_pairing_timeout       — Remote pairing timeout state (retained)
-  <self_topic_root>/hub/<uuid>/remote_pairing_timeout/set   — Remote pairing timeout command
-  <self_topic_root>/hub/<uuid>/mdns                         — mDNS advertisement state (retained)
-  <self_topic_root>/hub/<uuid>/mdns/set                     — mDNS advertisement command
-  <self_topic_root>/hub/<uuid>/ws_enabled                    — WebSocket listener enabled state (retained)
-  <self_topic_root>/hub/<uuid>/ws_enabled/set                — WebSocket listener enabled command
-  <self_topic_root>/hub/<uuid>/restart/set                   — hub restart command
-  <self_topic_root>/hub/<uuid>/health                     — hub health state (retained)
+  <self_topic_root>/hub/<uuid>/cleanup_orphaned_sensors   — hub orphan cleanup command
+  <self_topic_root>/hub/<uuid>/remote_pair                — enable remote pairing mode command
+  <self_topic_root>/hub/<uuid>/remote_pairing             — pairing mode state (retained)
+  <self_topic_root>/hub/<uuid>/dongle                     — USB dongle config state (retained)
+  <self_topic_root>/hub/<uuid>/dongle/set                 — USB dongle config command
+  <self_topic_root>/hub/<uuid>/ws_port                    — WebSocket port state (retained)
+  <self_topic_root>/hub/<uuid>/ws_port/set                — WebSocket port command
+  <self_topic_root>/hub/<uuid>/remote_pairing_timeout     — Remote pairing timeout state (retained)
+  <self_topic_root>/hub/<uuid>/remote_pairing_timeout/set — Remote pairing timeout command
+  <self_topic_root>/hub/<uuid>/orphan_retention_days      — orphan retention state (retained)
+  <self_topic_root>/hub/<uuid>/orphan_retention_days/set  — orphan retention command
+  <self_topic_root>/hub/<uuid>/mdns                       — mDNS advertisement state (retained)
+  <self_topic_root>/hub/<uuid>/mdns/set                   — mDNS advertisement command
+  <self_topic_root>/hub/<uuid>/ws_enabled                 — WebSocket listener enabled state (retained)
+  <self_topic_root>/hub/<uuid>/ws_enabled/set             — WebSocket listener enabled command
+  <self_topic_root>/hub/<uuid>/restart/set                — hub restart command
+  <self_topic_root>/hub/<uuid>/health                     — hub health state (retained; hub + local dongles only)
   <self_topic_root>/hub/<uuid>/connected_dongles          — count of working local dongles (retained)
   <self_topic_root>/hub/<uuid>/remote_dongles             — aggregate count of all remote-relayed dongles (retained)
   <self_topic_root>/hub/<uuid>/connected_remotes          — count of distinct connected remotes (retained)
+  <self_topic_root>/hub/<uuid>/paired_sensors             — distinct sensors paired to live dongles (retained)
+  <self_topic_root>/hub/<uuid>/configured_sensors         — sensors in the registry (retained)
   <self_topic_root>/dongle/<mac>/scan                     — scan for new sensor on this dongle
   <self_topic_root>/dongle/<mac>/remove                   — remove sensor by MAC payload (sensor's own Remove button)
   <self_topic_root>/dongle/<mac>/status                   — dongle online/offline (retained)
@@ -69,7 +74,7 @@ MQTT topics (v2 schema)
   <self_topic_root>/sensor/<sensor_mac>/play              — chime play button
   <self_topic_root>/sensor/<sensor_mac>/<param>/set       — chime number set
   <self_topic_root>/remote/<uuid>/status                  — remote online/offline (retained)
-  <self_topic_root>/remote/<uuid>/health                  — remote health state (retained)
+  <self_topic_root>/remote/<uuid>/health                  — remote health, aggregated over its dongles (retained)
   <self_topic_root>/remote/<uuid>/connected_dongles       — count of working remote dongles (retained)
   <self_topic_root>/remote/<uuid>/restart/set                      — remote restart command
   <self_topic_root>/remote/<uuid>/remove                           — remove remote and clear all its topics
@@ -78,8 +83,8 @@ MQTT topics (v2 schema)
 
 import json
 import logging
+import os
 import pathlib
-import shutil
 import threading
 import time
 from collections import deque
@@ -88,15 +93,12 @@ import config as _cfg_mod
 import dongle_protocol
 from config import (
     VERSION,
-    dongle_data_path,
-    find_all_dongle_devices,
     init_logging,
-    list_known_dongle_macs,
     load_config,
     load_hub_id,
-    migrate_legacy_sensor_files,
     save_config,
 )
+from device_discovery import find_all_dongle_devices, list_char_devices
 from mqtt import (
     DISCOVERY_SCHEMA_VERSION,
     LOG_LEVEL_OPTIONS,
@@ -110,6 +112,10 @@ from mqtt import (
 from retrying import retry
 from sensors import DEVICE_CLASS_OPTIONS, INVERTIBLE_SENSOR_TYPES, SensorRegistry
 from sensors import SENSOR_TYPES as _SENSOR_TYPES
+
+# How often the orphaned-sensor sweep runs.  Marking orphans is cheap and
+# reversible; removal only acts on sensors past orphan_retention_days.
+ORPHAN_SWEEP_INTERVAL_SECONDS = 3600
 
 # ---------------------------------------------------------------------------
 # Remote WebSocket transport
@@ -130,11 +136,14 @@ class RemoteTransport(dongle_protocol.Transport):
     Replay frames collected during the auth handshake are delivered first via
     an in-memory deque before switching to live WebSocket reads.
 
-    JSON text control frames are intercepted and routed to callbacks:
-      - remote_unhealthy / remote_healthy → on_health_change(remote_id, bool)
-      - set_dongle                        → on_set_dongle(remote_id, value)
-      - set_log_level                     → on_set_log_level(remote_id, level)
+    JSON text control frames are intercepted and routed:
+      - remote_unhealthy / remote_healthy → on_health_change(remote_id, dongle_mac, bool)
       - (all others are logged and discarded)
+
+    The listener constructs the transport without callbacks; Bridge wires
+    on_health_change via set_health_callback() when the connection is handed
+    off.  Hub→remote control frames (restart, set_dongle, set_log_level) are
+    sent with the send_* methods.
     """
 
     _log = logging.getLogger("ws2m.transport")
@@ -146,16 +155,16 @@ class RemoteTransport(dongle_protocol.Transport):
         dongle_mac: str,
         replay_frames: list[bytes],
         on_health_change=None,
-        on_set_dongle=None,
-        on_set_log_level=None,
     ):
         self._ws = ws_connection
         self._remote_id = remote_id
         self._dongle_mac = dongle_mac
         self._replay: deque[bytes] = deque(replay_frames)
         self._on_health_change = on_health_change  # Callable[[str, bool], None] | None
-        self._on_set_dongle = on_set_dongle  # Callable[[str, str], None] | None
-        self._on_set_log_level = on_set_log_level  # Callable[[str, str], None] | None
+
+    def set_health_callback(self, on_health_change) -> None:
+        """Set the callback invoked on remote_healthy / remote_unhealthy frames."""
+        self._on_health_change = on_health_change
 
     @property
     def remote_id(self) -> str:
@@ -187,12 +196,12 @@ class RemoteTransport(dongle_protocol.Transport):
         if msg_type == "remote_unhealthy":
             self._log.warning("RemoteTransport: remote reported unhealthy: %s", parsed.get("reason", ""))
             if self._on_health_change is not None:
-                self._on_health_change(self._remote_id, False)
+                self._on_health_change(self._remote_id, self._dongle_mac, False)
 
         elif msg_type == "remote_healthy":
             self._log.info("RemoteTransport: remote reported healthy")
             if self._on_health_change is not None:
-                self._on_health_change(self._remote_id, True)
+                self._on_health_change(self._remote_id, self._dongle_mac, True)
 
         else:
             self._log.warning("RemoteTransport: unexpected control message from remote: %s", msg[:120])
@@ -224,7 +233,9 @@ class RemoteTransport(dongle_protocol.Transport):
 
 
 # ---------------------------------------------------------------------------
-# Health file
+# Health file — the Docker HEALTHCHECK target, managed by _update_hub_health.
+# Present while the hub's own area (main loop + local dongles) is operating;
+# remote state never affects it.
 # ---------------------------------------------------------------------------
 
 _HEALTH_FILE = pathlib.Path("/tmp/ws2m_healthy")  # noqa: S108
@@ -261,21 +272,25 @@ class DongleWorker:
         cfg: dict,
         hub_id: str,
         logger: logging.Logger,
+        registry: SensorRegistry,
         transport: dongle_protocol.Transport | None = None,
         remote_id: str | None = None,
-        on_remote_health_change=None,
+        on_ownership_transfer=None,
     ):
         self._device_path = device_path or "<remote>"
         self._transport = transport  # pre-built transport for remote dongles; None for local
         self._remote_id = remote_id  # UUID of the ws2m-remote process, if any
-        self._on_remote_health_change = on_remote_health_change  # Callable[[str, bool], None] | None
         self._gateway = gateway
         self._config = cfg
         self._hub_id = hub_id
         self._logger = logger.getChild("worker")
 
         self._dongle: dongle_protocol.Dongle | None = None
-        self._registry: SensorRegistry | None = None
+        self._registry = registry  # hub-wide shared SensorRegistry
+        # Called as (mac, old_owner_mac) when an event transfers ownership here
+        self._on_ownership_transfer = on_ownership_transfer
+        # MACs this dongle reported as paired at last successful list()
+        self._paired_macs: list[str] = []
         self._initialized = False
         self._failed = False
         self._stopped = False
@@ -319,10 +334,6 @@ class DongleWorker:
         self._open_dongle()
 
         mac = self._dongle.mac
-        self._registry = SensorRegistry(mac, self._logger)
-
-        # One-time migration of legacy flat files → per-dongle directory
-        migrate_legacy_sensor_files(mac, self._logger)
 
         cfg = self._config
         self._scan_topic = f"{cfg['self_topic_root']}/dongle/{mac}/scan"
@@ -391,17 +402,18 @@ class DongleWorker:
         if not self._initialized:
             return
         self._subscribe_dongle_topics()
-        for mac, sensor in list(self._registry.sensors.items()):
-            if sensor.get("sensor_type") == "keypad":
+        owned = self._registry.macs_owned_by(self._dongle.mac) if self._dongle else []
+        for mac in owned:
+            if self._registry.sensors.get(mac, {}).get("sensor_type") == "keypad":
                 self._subscribe_keypad_command(mac)
         for topic in list(self._chime_subscribed):
             self._gateway.client.subscribe(topic, QOS_COMMAND)
-        for mac, sensor in list(self._registry.sensors.items()):
-            if sensor.get("sensor_type") == "chime":
+        for mac in owned:
+            if self._registry.sensors.get(mac, {}).get("sensor_type") == "chime":
                 self._subscribe_chime(mac)
         for topic in list(self._sensor_config_subscribed):
             self._gateway.client.subscribe(topic, QOS_COMMAND)
-        for mac in list(self._registry.sensors.keys()):
+        for mac in owned:
             self._subscribe_sensor_config(mac)
         # Re-publish dongle status
         self._gateway.publish(
@@ -413,27 +425,26 @@ class DongleWorker:
     # ------------------------------------------------------------------
 
     def _init_sensors(self, wait: bool = True) -> None:
-        """Load sensor config+state, reconcile with dongle, run migrations, publish discovery."""
+        """Reconcile the shared registry with this dongle, run migrations, publish discovery.
+
+        The registry itself is loaded once by Bridge before any worker starts.
+        """
         registry = self._registry
-        registry.load_sensors()
-        registry.load_state()
 
         # Reconcile with dongle's paired sensor list
         try:
             linked = self._dongle.list()
             if linked is not None:
-                auto_added = registry.reconcile_with_dongle(linked)
+                self._paired_macs = [m for m in linked if registry.is_valid_mac(m)]
+                auto_added = registry.reconcile_with_dongle(self._dongle.mac, linked)
                 for mac in auto_added:
-                    self._logger.warning(
-                        f"Auto-added unconfigured sensor {mac} — "
-                        f"update dongles/{self._dongle.mac}/sensors.yaml to set name/type"
-                    )
+                    self._logger.warning(f"Auto-added unconfigured sensor {mac} — update sensors.yaml to set name/type")
             else:
                 self._logger.warning("Dongle returned empty sensor list")
-                registry.ensure_all_have_state()
+                registry.ensure_owned_have_state(self._dongle.mac)
         except TimeoutError:
             self._logger.error("Timed out fetching sensor list from dongle")
-            registry.ensure_all_have_state()
+            registry.ensure_owned_have_state(self._dongle.mac)
 
         # Discovery schema migration (run once per schema bump)
         if self._config["hass_discovery"]:
@@ -443,7 +454,7 @@ class DongleWorker:
                     f"Migrating discovery topics v{recorded} → v{DISCOVERY_SCHEMA_VERSION} "
                     f"for dongle {self._dongle.mac}"
                 )
-                for mac in list(registry.state):
+                for mac in registry.macs_owned_by(self._dongle.mac):
                     if registry.is_valid_mac(mac):
                         sensor_type = registry.sensors.get(mac, {}).get("sensor_type", "unknown")
                         self._gateway.migrate_discovery_topics(
@@ -451,15 +462,16 @@ class DongleWorker:
                         )
                 # Version is written by Bridge after all workers have migrated
 
-        # Publish discovery for all known sensors
+        # Publish discovery for the sensors this dongle owns
         if self._config["hass_discovery"]:
-            for mac in list(registry.state):
+            for mac in registry.macs_owned_by(self._dongle.mac):
                 if registry.is_valid_mac(mac):
                     self._publish_sensor_discovery(mac, wait=wait)
 
-        # Subscribe to command topics for already-configured sensors
+        # Subscribe to command topics for the sensors this dongle owns
         if self._gateway.is_connected:
-            for mac, sensor in list(registry.sensors.items()):
+            for mac in registry.macs_owned_by(self._dongle.mac):
+                sensor = registry.sensors.get(mac, {})
                 if sensor.get("sensor_type") == "keypad":
                     self._subscribe_keypad_command(mac)
                 elif sensor.get("sensor_type") == "chime":
@@ -906,17 +918,41 @@ class DongleWorker:
 
         # Auto-add unseen sensor
         if event.mac not in registry.sensors:
-            registry.add_sensor(event.mac, event.sensor_type if hasattr(event, "sensor_type") else None)
+            registry.add_sensor(
+                event.mac,
+                event.sensor_type if hasattr(event, "sensor_type") else None,
+                dongle_mac=self._dongle.mac,
+            )
+            if event.mac not in self._paired_macs:
+                self._paired_macs.append(event.mac)
             if cfg["hass_discovery"]:
                 self._publish_sensor_discovery(event.mac)
             self._subscribe_sensor_config(event.mac)
             if event.mac not in self._auto_add_warned:
                 self._logger.warning(
-                    f"Auto-added unconfigured sensor {event.mac} — "
-                    f"update dongles/{self._dongle.mac}/sensors.yaml and reload to set name/type"
+                    f"Auto-added unconfigured sensor {event.mac} — update sensors.yaml and reload to set name/type"
                 )
                 self._auto_add_warned.add(event.mac)
         else:
+            # Ownership handoff: an event for a known sensor arriving via this
+            # dongle means the sensor is actually paired here now — its config
+            # follows it; only the dongle link and HA device chain change.
+            owner = registry.owner_of(event.mac)
+            if owner != self._dongle.mac:
+                _name = registry.sensors.get(event.mac, {}).get("name", "")
+                _label = f" ({_name})" if _name else ""
+                if owner:
+                    self._logger.info(f"Sensor {event.mac}{_label} moved from dongle {owner} to {self._dongle.mac}")
+                registry.set_owner(event.mac, self._dongle.mac)
+                if owner and self._on_ownership_transfer:
+                    # Ask Bridge to drop the stale NVRAM pairing on the old dongle
+                    self._on_ownership_transfer(event.mac, owner)
+                if event.mac not in self._paired_macs:
+                    self._paired_macs.append(event.mac)
+                if cfg["hass_discovery"]:
+                    self._publish_sensor_discovery(event.mac)
+                # Take over the sensor's command topic callbacks
+                self._subscribe_sensor_config(event.mac)
             if hasattr(event, "sensor_type"):
                 changed = registry.update_sensor_type(event.mac, event.sensor_type)
                 if changed:
@@ -1033,6 +1069,9 @@ class DongleWorker:
         payload = {}
         payload.update(registry.sensors.get(event.mac, {}))
         payload.update(vars(event))
+        # Never publish keypad PIN codes — sensor config is merged wholesale
+        # above, and pins must not appear on the MQTT data topic.
+        payload.pop("pins", None)
         # Compute battery percentage from voltage using per-sensor discharge curves.
         # SensorEvent provides battery_voltage (V); the % conversion requires SENSOR_TYPES
         # which lives in sensors.py (an application module, not the protocol library).
@@ -1092,8 +1131,9 @@ class DongleWorker:
                         retain=RETAIN_STATUS,
                     )
                 if self._gateway and self._registry:
-                    for mac, state in self._registry.state.items():
-                        if state.get("online"):
+                    own_mac = self._dongle.mac if self._dongle else None
+                    for mac, state in list(self._registry.state.items()):
+                        if state.get("dongle") == own_mac and state.get("online"):
                             self._gateway.publish(
                                 f"{cfg['self_topic_root']}/sensor/{mac}/status",
                                 "offline",
@@ -1107,9 +1147,12 @@ class DongleWorker:
                 self._logger.debug("Failed to publish offline status during dongle failure", exc_info=True)
 
     def check_sensor_availability(self) -> None:
-        """Mark sensors offline when last_seen exceeds their timeout."""
+        """Mark this dongle's sensors offline when last_seen exceeds their timeout."""
         now = time.time()
-        for mac, state in self._registry.state.items():
+        own_mac = self._dongle.mac if self._dongle else None
+        for mac, state in list(self._registry.state.items()):
+            if state.get("dongle") != own_mac:
+                continue
             if not state.get("online"):
                 continue
             sensor = self._registry.sensors.get(mac, {})
@@ -1150,10 +1193,31 @@ class DongleWorker:
             self._logger.error(f"Failed to reconnect remote dongle {self.dongle_mac}", exc_info=True)
             self._failed = True
 
+    def forget_stale_pairing(self, mac: str) -> None:
+        """Remove *mac* from this dongle's NVRAM after ownership moved elsewhere.
+
+        The sensor's RF bond now points at another dongle, so this entry is
+        pure stale bookkeeping — deleting it keeps the paired-sensor count
+        honest and prevents the sensor re-appearing in this dongle's list.
+        Registry entries and MQTT topics are NOT touched (they belong to the
+        new owner).
+        """
+        try:
+            if self._dongle:
+                self._dongle.delete(mac)
+                self._logger.info(f"Removed stale NVRAM pairing for {mac} from dongle {self._dongle.mac}")
+        except Exception as exc:
+            self._logger.warning(f"Could not remove stale NVRAM pairing for {mac}: {exc}")
+        if mac in self._paired_macs:
+            self._paired_macs.remove(mac)
+
     def reload(self) -> None:
-        """Reload sensor config and state, re-run discovery."""
+        """Re-run sensor reconciliation and discovery for this dongle.
+
+        The shared registry is reloaded from disk once by Bridge before the
+        workers are asked to reload.
+        """
         self._auto_add_warned.clear()
-        self._registry.save_state()
         self._init_sensors(wait=False)
 
     def stop(self) -> None:
@@ -1191,7 +1255,11 @@ class Bridge:
         self._config: dict = {}
         self._hub_id: str = ""
         self._gateway: MqttGateway | None = None
+        self._registry: SensorRegistry | None = None
         self._workers: list[DongleWorker] = []
+        # Per-remote sets of dongle MACs currently reported unhealthy; a
+        # remote's health entity shows degraded while its set is non-empty.
+        self._remote_unhealthy_dongles: dict[str, set[str]] = {}
         self._workers_lock = threading.Lock()
         self._ws_listener = None
         self._ws_listener_thread: threading.Thread | None = None
@@ -1199,11 +1267,13 @@ class Bridge:
         self._reload_topic = ""
         self._log_level_set_topic = ""
         self._cleanup_removed_dongles_topic = ""
+        self._cleanup_orphaned_sensors_topic = ""
         self._remote_pair_topic = ""
         self._hub_restart_topic = ""
         self._hub_dongle_topic = ""
         self._hub_ws_port_topic = ""
         self._hub_remote_pairing_timeout_topic = ""
+        self._hub_orphan_retention_topic = ""
         self._hub_mdns_topic = ""
         self._hub_ws_enabled_topic = ""
 
@@ -1213,6 +1283,10 @@ class Bridge:
 
         # Set by the MQTT restart callback to wake run() and trigger a clean exit
         self._restart_requested = threading.Event()
+
+        # Periodic orphaned-sensor sweep bookkeeping (first sweep one interval
+        # after start, so slow remotes have connected and listed their sensors)
+        self._last_orphan_sweep = time.time()
 
     @property
     def _is_remote_pairing_active(self) -> bool:
@@ -1230,6 +1304,13 @@ class Bridge:
 
         self._load_config()
         self._hub_id = load_hub_id(self._logger)
+
+        # One shared sensor registry for all dongles — sensor config follows
+        # the sensor; the owning dongle is tracked per state entry.
+        self._registry = SensorRegistry(self._logger)
+        self._registry.load_sensors()
+        self._registry.load_state()
+
         self._setup_hub_topics(self._hub_id)
         self._connect_mqtt()
 
@@ -1256,7 +1337,15 @@ class Bridge:
 
         # Start a DongleWorker for each local device
         for path in device_paths:
-            worker = DongleWorker(path, self._gateway, self._config, self._hub_id, self._logger)
+            worker = DongleWorker(
+                path,
+                self._gateway,
+                self._config,
+                self._hub_id,
+                self._logger,
+                self._registry,
+                on_ownership_transfer=self._on_ownership_transfer,
+            )
             worker.start()
             with self._workers_lock:
                 self._workers.append(worker)
@@ -1319,11 +1408,13 @@ class Bridge:
         self._reload_topic = f"{hub}/reload"
         self._log_level_set_topic = f"{hub}/log_level/set"
         self._cleanup_removed_dongles_topic = f"{hub}/cleanup_removed_dongles"
+        self._cleanup_orphaned_sensors_topic = f"{hub}/cleanup_orphaned_sensors"
         self._remote_pair_topic = f"{hub}/remote_pair"
         self._hub_restart_topic = f"{hub}/restart/set"
         self._hub_dongle_topic = f"{hub}/dongle/set"
         self._hub_ws_port_topic = f"{hub}/ws_port/set"
         self._hub_remote_pairing_timeout_topic = f"{hub}/remote_pairing_timeout/set"
+        self._hub_orphan_retention_topic = f"{hub}/orphan_retention_days/set"
         self._hub_mdns_topic = f"{hub}/mdns/set"
         self._hub_ws_enabled_topic = f"{hub}/ws_enabled/set"
 
@@ -1331,6 +1422,7 @@ class Bridge:
         """Return local_device_paths.
 
         "auto"          → detect all local WyzeSense dongles.
+        "/dev/<dir>/"   → all character devices inside the directory.
         "/dev/hidrawN"  → single explicit device path.
         """
         dongle = str(self._config.get("dongle", "auto"))
@@ -1342,6 +1434,13 @@ class Bridge:
                 self._logger.warning("Auto-detect: no WyzeSense dongles found")
             return found
         if dongle.startswith("/"):
+            if os.path.isdir(dongle):
+                found = list_char_devices(dongle)
+                if found:
+                    self._logger.info(f"Dongle directory {dongle}: found {len(found)} device(s): {found}")
+                else:
+                    self._logger.warning(f"Dongle directory {dongle} contains no character devices")
+                return found
             self._logger.info(f"Using explicit dongle path: {dongle}")
             return [dongle]
         self._logger.warning(f"Unrecognized dongle value {dongle!r} — skipping")
@@ -1382,6 +1481,18 @@ class Bridge:
         mac = transport.dongle_mac
         remote_id = transport.remote_id
 
+        # Wire the remote's health frames (remote_healthy / remote_unhealthy)
+        # to the hub's remote/<uuid>/health publisher.  The listener constructs
+        # the transport without callbacks; this covers both the new-worker and
+        # reconnect paths.
+        transport.set_health_callback(self._on_remote_health_change)
+
+        # A fresh authenticated connection proves this dongle is working —
+        # clear any lingering unhealthy flag and refresh the aggregate.
+        if self._remote_unhealthy_dongles.get(remote_id):
+            self._remote_unhealthy_dongles[remote_id].discard(mac)
+        self._publish_remote_health(remote_id)
+
         # Publish / refresh remote device discovery
         cfg = self._config
         if cfg.get("hass_discovery"):
@@ -1410,9 +1521,10 @@ class Bridge:
             self._config,
             self._hub_id,
             self._logger,
+            self._registry,
             transport=transport,
             remote_id=remote_id,
-            on_remote_health_change=self._on_remote_health_change,
+            on_ownership_transfer=self._on_ownership_transfer,
         )
         try:
             worker.start()
@@ -1436,6 +1548,10 @@ class Bridge:
                 client.message_callback_add(self._log_level_set_topic, self._on_mqtt_log_level)
                 client.subscribe(self._cleanup_removed_dongles_topic, QOS_COMMAND)
                 client.message_callback_add(self._cleanup_removed_dongles_topic, self._on_mqtt_cleanup_removed_dongles)
+                client.subscribe(self._cleanup_orphaned_sensors_topic, QOS_COMMAND)
+                client.message_callback_add(
+                    self._cleanup_orphaned_sensors_topic, self._on_mqtt_cleanup_orphaned_sensors
+                )
                 client.subscribe(self._remote_pair_topic, QOS_COMMAND)
                 client.message_callback_add(self._remote_pair_topic, self._on_mqtt_remote_pair)
                 client.subscribe(self._hub_restart_topic, QOS_COMMAND)
@@ -1449,6 +1565,8 @@ class Bridge:
                     self._hub_remote_pairing_timeout_topic,
                     self._on_mqtt_hub_remote_pairing_timeout,
                 )
+                client.subscribe(self._hub_orphan_retention_topic, QOS_COMMAND)
+                client.message_callback_add(self._hub_orphan_retention_topic, self._on_mqtt_hub_orphan_retention)
                 client.subscribe(self._hub_mdns_topic, QOS_COMMAND)
                 client.message_callback_add(self._hub_mdns_topic, self._on_mqtt_hub_mdns)
                 client.subscribe(self._hub_ws_enabled_topic, QOS_COMMAND)
@@ -1472,11 +1590,13 @@ class Bridge:
             client.message_callback_remove(self._reload_topic)
             client.message_callback_remove(self._log_level_set_topic)
             client.message_callback_remove(self._cleanup_removed_dongles_topic)
+            client.message_callback_remove(self._cleanup_orphaned_sensors_topic)
             client.message_callback_remove(self._remote_pair_topic)
             client.message_callback_remove(self._hub_restart_topic)
             client.message_callback_remove(self._hub_dongle_topic)
             client.message_callback_remove(self._hub_ws_port_topic)
             client.message_callback_remove(self._hub_remote_pairing_timeout_topic)
+            client.message_callback_remove(self._hub_orphan_retention_topic)
             client.message_callback_remove(self._hub_mdns_topic)
             client.message_callback_remove(self._hub_ws_enabled_topic)
             client.connected_flag = False
@@ -1487,22 +1607,79 @@ class Bridge:
 
         self._gateway.connect(_on_connect, _on_disconnect, _on_message)
 
-    def _on_remote_health_change(self, remote_id: str, is_healthy: bool) -> None:
-        """Called when a remote sends a health frame over WebSocket.
+    def _on_ownership_transfer(self, mac: str, old_owner_mac: str) -> None:
+        """A sensor's ownership just moved away from *old_owner_mac*.
 
-        Publishes healthy/degraded to ws2m/remote/<uuid>/health.
-        Does NOT affect hub health.  Dongle connectivity is tracked separately
-        on the dongle device (ws2m_dongle_<mac>) via the DongleWorker lifecycle.
+        If the old owner is still connected to this hub, remove the sensor
+        from its NVRAM so only the active pairing remains anywhere.  Runs on a
+        short-lived thread — the dongle command round-trip must not block the
+        new owner's event loop.
+        """
+        with self._workers_lock:
+            old_worker = next(
+                (w for w in self._workers if w.dongle_mac == old_owner_mac and not w.failed and not w._stopped),
+                None,
+            )
+        if old_worker is None:
+            self._logger.debug(f"Old owner {old_owner_mac} of sensor {mac} is not connected — nothing to unpair")
+            return
+        threading.Thread(
+            target=old_worker.forget_stale_pairing,
+            args=(mac,),
+            name=f"nvram-cleanup-{mac}",
+            daemon=True,
+        ).start()
+
+    def _on_remote_health_change(self, remote_id: str, dongle_mac: str, is_healthy: bool) -> None:
+        """Called when a remote's relay sends a health frame over WebSocket.
+
+        A remote may relay several dongles, each on its own connection, so
+        health is tracked per dongle and aggregated: the remote is degraded
+        while any of its dongles is unhealthy.  Publishes healthy/degraded to
+        ws2m/remote/<uuid>/health.  Never affects hub health.
         """
         if not (self._gateway and self._config and self._hub_id):
             return
+        unhealthy = self._remote_unhealthy_dongles.setdefault(remote_id, set())
+        if is_healthy:
+            unhealthy.discard(dongle_mac)
+        else:
+            unhealthy.add(dongle_mac)
+        self._publish_remote_health(remote_id)
+
+    def _publish_remote_health(self, remote_id: str) -> None:
+        """Publish the aggregate health of one remote (retained)."""
         cfg = self._config
-        health_state = "healthy" if is_healthy else "degraded"
-        health_topic = f"{cfg['self_topic_root']}/remote/{remote_id}/health"
+        health_state = "degraded" if self._remote_unhealthy_dongles.get(remote_id) else "healthy"
         self._gateway.publish(
-            health_topic, health_state, is_json=False, wait=False, qos=QOS_STATUS, retain=RETAIN_STATUS
+            f"{cfg['self_topic_root']}/remote/{remote_id}/health",
+            health_state,
+            is_json=False,
+            wait=False,
+            qos=QOS_STATUS,
+            retain=RETAIN_STATUS,
         )
         self._logger.debug(f"Remote {remote_id} health → {health_state}")
+
+    def _update_hub_health(self, workers: list) -> None:
+        """Refresh the Docker health file and the HA Hub Health entity.
+
+        Hub health reflects the hub's own area only: the running main loop
+        plus its LOCAL dongles.  Remote workers never degrade the hub — their
+        state lives on the remote and dongle devices, and a hub restart could
+        not fix them anyway.  Only when every local dongle has failed is the
+        hub marked degraded, since a container restart may re-enumerate them;
+        a hub with no local dongles (remote-only mode) stays healthy as long
+        as the loop runs.
+        """
+        local_workers = [w for w in workers if w._remote_id is None]
+        if local_workers and all(w.failed for w in local_workers):
+            _mark_unhealthy()
+            self._publish_hub_health("degraded")
+        else:
+            # Heartbeat — also catches a hung process via HEALTHCHECK.
+            _mark_healthy()
+            self._publish_hub_health("healthy")
 
     def _publish_hub_health(self, state: str) -> None:
         """Publish hub health state to <self_topic_root>/hub/<hub_id>/health (retained)."""
@@ -1531,11 +1708,21 @@ class Bridge:
         remote_workers = [w for w in live if w._remote_id is not None]
         remote_dongle_count = len(remote_workers)
         remote_count = len({w._remote_id for w in remote_workers})
+        # paired = distinct sensors reported paired by currently-live dongles;
+        # configured = sensors in the registry.  A gap between the two means
+        # something is stale (orphaned config or an unadopted paired sensor).
+        paired_macs: set[str] = set()
+        for w in live:
+            paired_macs.update(w._paired_macs)
+        paired_count = len(paired_macs)
+        configured_count = len(self._registry.sensors) if self._registry else 0
         hub = f"{self._config['self_topic_root']}/hub/{self._hub_id}"
         for topic, value in [
             (f"{hub}/connected_dongles", str(local_count)),
             (f"{hub}/remote_dongles", str(remote_dongle_count)),
             (f"{hub}/connected_remotes", str(remote_count)),
+            (f"{hub}/paired_sensors", str(paired_count)),
+            (f"{hub}/configured_sensors", str(configured_count)),
         ]:
             self._gateway.publish(topic, value, is_json=False, wait=False, qos=QOS_STATUS, retain=RETAIN_STATUS)
 
@@ -1616,6 +1803,7 @@ class Bridge:
 
         def _handler(client, userdata, msg) -> None:
             self._logger.info(f"Remove requested for remote {remote_id}")
+            self._remote_unhealthy_dongles.pop(remote_id, None)
             self._remove_remote_chain(remote_id)
 
         return _handler
@@ -1656,9 +1844,6 @@ class Bridge:
 
         with self._workers_lock:
             failed_workers = [w for w in self._workers if w._remote_id == remote_id and (w.failed or w._stopped)]
-            if not failed_workers:
-                # Also check data dir for known dongles with no worker at all
-                pass
 
         if not failed_workers:
             self._logger.info(f"Cleanup remote {remote_id}: no failed/stopped workers — nothing to clean up")
@@ -1668,22 +1853,16 @@ class Bridge:
 
         for worker in failed_workers:
             dongle_mac = worker.dongle_mac
-            # Clear sensor topics first
-            if worker._registry:
-                for sensor_mac, sensor in list(worker._registry.sensors.items()):
-                    sensor_type = sensor.get("sensor_type", "unknown")
+            # Clear sensor topics and registry entries for this dongle's sensors
+            if self._registry and dongle_mac:
+                for sensor_mac in self._registry.macs_owned_by(dongle_mac):
+                    sensor_type = self._registry.sensors.get(sensor_mac, {}).get("sensor_type", "unknown")
                     self._logger.info(f"  Clearing sensor topics: {sensor_mac} ({sensor_type})")
                     self._gateway.clear_sensor(sensor_mac, sensor_type, wait=False)
+                    self._registry.delete_sensor(sensor_mac)
             # Clear dongle topics
             if dongle_mac:
                 self._gateway.clear_dongle(dongle_mac, wait=False)
-                # Delete data directory
-                dongle_dir = dongle_data_path(dongle_mac)
-                try:
-                    shutil.rmtree(dongle_dir)
-                    self._logger.info(f"  Deleted data directory: {dongle_dir}")
-                except OSError as exc:
-                    self._logger.warning(f"  Could not delete {dongle_dir}: {exc}")
 
         with self._workers_lock:
             failed_set = set(id(w) for w in failed_workers)
@@ -1825,10 +2004,16 @@ class Bridge:
 
     def _on_mqtt_reload(self, client, userdata, msg) -> None:
         self._logger.info(f"Reload requested: {msg.payload.decode()!r}")
+        # Persist current runtime state, then re-read user-edited config from
+        # disk once for the shared registry before workers re-reconcile.
+        if self._registry:
+            self._registry.save_state()
+            self._registry.load_sensors()
         with self._workers_lock:
             workers = list(self._workers)
         for worker in workers:
             worker.reload()
+        self._publish_hub_counts()
 
     def _on_mqtt_log_level(self, client, userdata, msg) -> None:
         """Handle a log level select change from HA."""
@@ -1884,6 +2069,15 @@ class Bridge:
         self._gateway.publish(
             f"{hub}/remote_pairing_timeout",
             str(cfg.get("hub_remote_pairing_seconds", 60)),
+            is_json=False,
+            wait=False,
+            qos=QOS_NUMBER,
+            retain=RETAIN_NUMBER,
+        )
+        # orphan_retention_days
+        self._gateway.publish(
+            f"{hub}/orphan_retention_days",
+            str(cfg.get("orphan_retention_days", 7)),
             is_json=False,
             wait=False,
             qos=QOS_NUMBER,
@@ -1968,6 +2162,37 @@ class Bridge:
         if self._gateway and self._hub_id:
             self._gateway.publish(
                 f"{cfg['self_topic_root']}/hub/{self._hub_id}/remote_pairing_timeout",
+                str(value),
+                is_json=False,
+                wait=False,
+                qos=QOS_NUMBER,
+                retain=RETAIN_NUMBER,
+            )
+
+    def _on_mqtt_hub_orphan_retention(self, client, userdata, msg) -> None:
+        """Handle orphan retention days config update from HA.
+
+        0 disables automatic removal; orphan marking always continues.
+        Takes effect at the next sweep — no restart needed.
+        """
+        cfg = self._config
+        raw = msg.payload.decode(errors="replace").strip()
+        try:
+            value = int(float(raw))
+        except (ValueError, TypeError):
+            self._logger.warning(f"Invalid orphan retention value: {raw!r}")
+            return
+        if value < 0 or value > 365:
+            self._logger.warning(f"Orphan retention {value} outside 0–365 — ignoring")
+            return
+        cfg["orphan_retention_days"] = value
+        save_config(cfg, self._logger)
+        self._logger.info(
+            f"Orphan retention updated to {value} day(s)" + (" (automatic removal disabled)" if value == 0 else "")
+        )
+        if self._gateway and self._hub_id:
+            self._gateway.publish(
+                f"{cfg['self_topic_root']}/hub/{self._hub_id}/orphan_retention_days",
                 str(value),
                 is_json=False,
                 wait=False,
@@ -2094,11 +2319,12 @@ class Bridge:
     def _on_mqtt_cleanup_removed_dongles(self, client, userdata, msg) -> None:
         """Handle a 'Cleanup removed dongles' button press from HA.
 
-        Diffs the dongles recorded on disk against the currently-connected
-        USB devices.  For each dongle that is no longer present:
+        Diffs the dongles recorded in the registry (owners of at least one
+        sensor) against the currently-connected dongles.  For each dongle that
+        is no longer present:
 
         1. Clears all retained MQTT topics for its sensors and the dongle device.
-        2. Deletes the ``data/dongles/<mac>/`` directory tree.
+        2. Removes its sensors from the registry (sensors.yaml + state.yaml).
 
         This is a one-way destructive action — the dongle and all its sensor
         data are permanently removed from ws2m.  The operation is idempotent:
@@ -2106,7 +2332,7 @@ class Bridge:
         """
         self._logger.info("Cleanup removed dongles requested")
 
-        known_macs = list_known_dongle_macs(self._logger)
+        known_macs = self._registry.known_dongle_macs() if self._registry else set()
         if not known_macs:
             self._logger.info("No known dongles recorded — nothing to clean up")
             return
@@ -2115,7 +2341,7 @@ class Bridge:
             workers_snapshot = list(self._workers)
         active_macs: set[str] = {w.dongle_mac for w in workers_snapshot if w.dongle_mac}
 
-        removed_macs = [mac for mac in known_macs if mac not in active_macs]
+        removed_macs = [mac for mac in sorted(known_macs) if mac not in active_macs]
         if not removed_macs:
             self._logger.info("All recorded dongles are currently active — nothing to clean up")
             return
@@ -2123,26 +2349,107 @@ class Bridge:
         self._logger.info(f"Cleaning up {len(removed_macs)} removed dongle(s): {removed_macs}")
 
         for mac in removed_macs:
-            # Load the sensor registry for this dongle so we can clear per-sensor topics
-            registry = SensorRegistry(mac)
-            registry.load_sensors()
-            for sensor_mac, sensor in registry.sensors.items():
-                sensor_type = sensor.get("sensor_type", "unknown")
+            for sensor_mac in self._registry.macs_owned_by(mac):
+                sensor_type = self._registry.sensors.get(sensor_mac, {}).get("sensor_type", "unknown")
                 self._logger.info(f"  Clearing sensor topics: {sensor_mac} ({sensor_type})")
                 self._gateway.clear_sensor(sensor_mac, sensor_type, wait=False)
+                self._registry.delete_sensor(sensor_mac)
 
             # Clear dongle-level MQTT topics
             self._gateway.clear_dongle(mac, wait=False)
 
-            # Delete the data directory
-            dongle_dir = dongle_data_path(mac)
-            try:
-                shutil.rmtree(dongle_dir)
-                self._logger.info(f"  Deleted data directory: {dongle_dir}")
-            except OSError as exc:
-                self._logger.warning(f"  Could not delete {dongle_dir}: {exc}")
-
+        self._publish_hub_counts()
         self._logger.info("Cleanup removed dongles complete")
+
+    def _sweep_orphaned_sensors(self) -> None:
+        """Staged automatic orphan lifecycle, run periodically from run().
+
+        Stage 1 — mark: a configured sensor not paired to any live dongle gets
+        a ``stale_since`` timestamp.  Nothing else changes: its entities stay
+        in HA (showing unavailable, which is the truth) and its config is
+        untouched, so a rebooting remote or a temporary outage costs nothing.
+        If the sensor is paired again, reconcile/handoff clear the marker and
+        republish discovery — full reactivation.
+
+        Stage 2 — remove: once a sensor has been continuously orphaned longer
+        than ``orphan_retention_days``, its retained MQTT topics are cleared
+        and its registry entries deleted.  Set the option to 0 to disable
+        stage 2 (marking still happens; the HA button remains available).
+        """
+        if not (self._registry and self._gateway):
+            return
+
+        with self._workers_lock:
+            live = [w for w in self._workers if not w.failed and not w._stopped]
+        paired_macs: set[str] = set()
+        for w in live:
+            paired_macs.update(w._paired_macs)
+
+        changed = False
+        for mac in list(self._registry.sensors):
+            if mac in paired_macs:
+                # Belt and braces — reconcile/handoff normally clear this
+                if self._registry.state.get(mac, {}).get("stale_since") is not None:
+                    self._registry.clear_stale(mac)
+                    changed = True
+            elif self._registry.state.get(mac, {}).get("stale_since") is None:
+                self._registry.mark_stale(mac)
+                self._logger.info(
+                    f"Sensor {mac} is not paired to any connected dongle — marked orphaned "
+                    f"(config retained; reactivates automatically if it returns)"
+                )
+                changed = True
+
+        retention_days = float(self._config.get("orphan_retention_days", 7) or 0)
+        removed = []
+        if retention_days > 0:
+            for mac in self._registry.stale_macs(retention_days * 86400):
+                sensor_type = self._registry.sensors.get(mac, {}).get("sensor_type", "unknown")
+                self._logger.warning(f"Removing sensor {mac} — orphaned for more than {retention_days:g} day(s)")
+                self._gateway.clear_sensor(mac, sensor_type, wait=False)
+                self._registry.delete_sensor(mac)
+                removed.append(mac)
+
+        if changed or removed:
+            self._registry.save_state()
+        if removed:
+            self._publish_hub_counts()
+
+    def _on_mqtt_cleanup_orphaned_sensors(self, client, userdata, msg) -> None:
+        """Handle a 'Cleanup orphaned sensors' button press from HA.
+
+        Removes registry entries (and clears retained MQTT topics) for sensors
+        that are not paired to any currently-connected dongle — typically left
+        behind when a sensor was unpaired via a path that didn't go through
+        the remove flow, or when its dongle was removed while offline.
+
+        Sensors on dongles that are merely offline right now will be removed
+        too — the paired_sensors / configured_sensors entities show whether a
+        gap exists before pressing.  Idempotent when nothing is orphaned.
+        """
+        self._logger.info("Cleanup orphaned sensors requested")
+        if not (self._registry and self._gateway):
+            return
+
+        with self._workers_lock:
+            live = [w for w in self._workers if not w.failed and not w._stopped]
+        paired_macs: set[str] = set()
+        for w in live:
+            paired_macs.update(w._paired_macs)
+
+        orphans = [mac for mac in list(self._registry.sensors) if mac not in paired_macs]
+        if not orphans:
+            self._logger.info("No orphaned sensors — nothing to clean up")
+            return
+
+        self._logger.info(f"Cleaning up {len(orphans)} orphaned sensor(s): {orphans}")
+        for mac in orphans:
+            sensor_type = self._registry.sensors.get(mac, {}).get("sensor_type", "unknown")
+            self._gateway.clear_sensor(mac, sensor_type, wait=False)
+            self._registry.delete_sensor(mac)
+
+        self._publish_hub_counts()
+        self._logger.info("Cleanup orphaned sensors complete")
 
     # ------------------------------------------------------------------
     # Main loop
@@ -2169,23 +2476,12 @@ class Bridge:
                         any_failed = True
 
                 if any_failed:
-                    _mark_unhealthy()
-                    self._publish_hub_health("degraded")
                     self._publish_hub_counts()
                     failed_remote_ids = {w._remote_id for w in workers if w.failed and w._remote_id}
                     for rid in failed_remote_ids:
                         self._publish_remote_dongle_count(rid)
 
-                # All workers failed — idle without doing any work until restarted.
-                # If there are no local workers (remote-only mode), skip this check.
-                if workers and all(w.failed for w in workers):
-                    self._logger.debug("All dongle workers failed — idling until container is restarted")
-                    continue
-
-                # Heartbeat — also catches a hung process via HEALTHCHECK.
-                _mark_healthy()
-                if not any_failed:
-                    self._publish_hub_health("healthy")
+                self._update_hub_health(workers)
 
                 if not self._gateway.is_connected:
                     self._logger.warning("MQTT broker disconnected — awaiting reconnect")
@@ -2193,6 +2489,10 @@ class Bridge:
                 for worker in workers:
                     if not worker.failed:
                         worker.check_sensor_availability()
+
+                if time.time() - self._last_orphan_sweep >= ORPHAN_SWEEP_INTERVAL_SECONDS:
+                    self._last_orphan_sweep = time.time()
+                    self._sweep_orphaned_sensors()
 
         except KeyboardInterrupt:
             self._logger.warning("Interrupted by user")

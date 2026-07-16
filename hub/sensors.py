@@ -2,11 +2,20 @@
 Sensor registry for WyzeSense2MQTT.
 
 Owns all in-process and on-disk state for the known sensor fleet:
-  - dongles/<mac>/sensors.yaml  – user-editable per-sensor configuration
-  - dongles/<mac>/state.yaml    – runtime-only state (last_seen, online)
+  - sensors.yaml  – user-editable per-sensor configuration, keyed by sensor MAC
+  - state.yaml    – runtime-only state (last_seen, online, owning dongle)
 
-Each dongle gets its own SensorRegistry instance, pointed at its own
-subdirectory under <CONFIG_DIR>/dongles/<dongle_mac>/.
+There is exactly ONE registry for the whole hub, shared by all DongleWorkers.
+Sensor configuration is a property of the sensor itself — its name, device
+class, PINs, and so on follow the sensor if it is re-paired to a different
+dongle.  The only dongle-specific fact is which dongle currently relays the
+sensor, recorded as the ``dongle`` key in each state entry ("ownership").
+Ownership is claimed at dongle init for unowned sensors and transfers
+automatically when an event for a known sensor arrives via a different dongle.
+
+All mutating operations and file writes are serialised through an internal
+lock, and files are written atomically (temp file + os.replace), so concurrent
+updates from multiple dongle workers can never corrupt the YAML files.
 
 The SensorRegistry is the single source of truth for sensor data within the
 bridge.  Nothing else should read or write these files directly.
@@ -14,13 +23,13 @@ bridge.  Nothing else should read or write these files directly.
 
 import logging
 import os
+import threading
 import time
 
 from config import (
     SENSOR_STATE_FILE,
     SENSORS_CONFIG_FILE,
-    dongle_data_path,
-    ensure_dongle_dir,
+    config_path,
     read_yaml,
     write_yaml,
 )
@@ -151,40 +160,90 @@ DEVICE_CLASS_OPTIONS: dict[str, list[str]] = {
     "motionv2": ["motion", "occupancy"],
 }
 
+
 # How far back to look for "fresh" state data on startup (seconds).
 # State older than this is discarded to avoid showing stale availability.
-STALE_STATE_SECONDS = 1 * 60 * 60  # 1 hour
-
-
 def _default_state_entry() -> dict:
     return {"last_seen": time.time(), "online": True}
 
 
 class SensorRegistry:
-    """Manages sensor configuration and runtime state for one dongle.
+    """Manages sensor configuration and runtime state for the whole hub.
 
-    Each dongle gets its own SensorRegistry instance, with data stored
-    under <CONFIG_DIR>/dongles/<dongle_mac>/.
+    One instance is shared by all DongleWorkers; data lives in
+    <CONFIG_DIR>/sensors.yaml and <CONFIG_DIR>/state.yaml.
 
     Attributes:
-        dongle_mac:  the MAC of the owning dongle (used for path resolution)
-        sensors:     dict[mac, config_dict]  – persisted to sensors.yaml
-        state:       dict[mac, state_dict]   – persisted to state.yaml
+        sensors:  dict[mac, config_dict]  – persisted to sensors.yaml
+        state:    dict[mac, state_dict]   – persisted to state.yaml; each
+                  entry may carry a ``dongle`` key naming the owning dongle
+
+    Thread safety: all mutating methods and saves acquire an internal RLock;
+    files are written atomically so a crash mid-write leaves the previous
+    file intact.  Direct dict-item mutation of an existing sensor entry
+    followed by save_sensors() is also safe — the save serialises a snapshot
+    under the lock.
     """
 
-    def __init__(self, dongle_mac: str, logger: logging.Logger | None = None):
-        self._dongle_mac = dongle_mac
+    def __init__(self, logger: logging.Logger | None = None):
         self._logger = logger.getChild("sensors") if logger else logging.getLogger("ws2m.sensors")
+        self._lock = threading.RLock()
         self.sensors: dict[str, dict] = {}
         self.state: dict[str, dict] = {}
 
-    @property
-    def dongle_mac(self) -> str:
-        return self._dongle_mac
-
     def _data_path(self, filename: str) -> str:
-        """Return the full path to a per-dongle data file."""
-        return dongle_data_path(self._dongle_mac, filename)
+        """Return the full path to a registry data file."""
+        return config_path(filename)
+
+    # ------------------------------------------------------------------
+    # Dongle ownership
+    # ------------------------------------------------------------------
+
+    def owner_of(self, mac: str) -> str | None:
+        """Return the MAC of the dongle that owns *mac*, or None if unowned."""
+        return self.state.get(mac, {}).get("dongle")
+
+    def set_owner(self, mac: str, dongle_mac: str) -> None:
+        """Record *dongle_mac* as the owning dongle for sensor *mac*.
+
+        Clears any orphan staleness marker — the sensor is demonstrably alive.
+        """
+        with self._lock:
+            entry = self.state.setdefault(mac, _default_state_entry())
+            entry["dongle"] = dongle_mac
+            entry.pop("stale_since", None)
+
+    def mark_stale(self, mac: str, now: float | None = None) -> None:
+        """Record when *mac* was first seen orphaned (idempotent)."""
+        with self._lock:
+            if mac in self.state:
+                self.state[mac].setdefault("stale_since", now if now is not None else time.time())
+
+    def clear_stale(self, mac: str) -> None:
+        """Remove the orphan staleness marker for *mac*."""
+        with self._lock:
+            if mac in self.state:
+                self.state[mac].pop("stale_since", None)
+
+    def stale_macs(self, older_than_seconds: float) -> list[str]:
+        """Return MACs whose stale_since marker is older than *older_than_seconds*."""
+        cutoff = time.time() - older_than_seconds
+        with self._lock:
+            return [
+                mac
+                for mac, entry in self.state.items()
+                if entry.get("stale_since") is not None and entry["stale_since"] < cutoff
+            ]
+
+    def macs_owned_by(self, dongle_mac: str) -> list[str]:
+        """Return all sensor MACs currently owned by *dongle_mac*."""
+        with self._lock:
+            return [mac for mac, entry in self.state.items() if entry.get("dongle") == dongle_mac]
+
+    def known_dongle_macs(self) -> set[str]:
+        """Return the set of dongle MACs that own at least one sensor."""
+        with self._lock:
+            return {entry["dongle"] for entry in self.state.values() if entry.get("dongle")}
 
     # ------------------------------------------------------------------
     # Logging helpers
@@ -202,12 +261,14 @@ class SensorRegistry:
         """Load sensors.yaml into self.sensors. Returns True if file existed."""
         path = self._data_path(SENSORS_CONFIG_FILE)
         if not os.path.isfile(path):
-            self._log("warning", f"No sensors config file found for dongle {self._dongle_mac}")
-            self.sensors = {}
+            self._log("warning", "No sensors config file found")
+            with self._lock:
+                self.sensors = {}
             return False
 
         data = read_yaml(path, self._logger) or {}
-        self.sensors = data
+        with self._lock:
+            self.sensors = data
         self._log("info", f"Loaded {len(self.sensors)} sensor(s) from {path}")
 
         # Back-fill defaults and migrate legacy fields
@@ -221,17 +282,24 @@ class SensorRegistry:
         return True
 
     def save_sensors(self) -> bool:
-        """Persist self.sensors to sensors.yaml."""
-        ensure_dongle_dir(self._dongle_mac)
-        ok = write_yaml(self._data_path(SENSORS_CONFIG_FILE), self.sensors, self._logger)
+        """Persist self.sensors to sensors.yaml (atomic, serialised)."""
+        with self._lock:
+            ok = write_yaml(self._data_path(SENSORS_CONFIG_FILE), self.sensors, self._logger)
         if ok:
             self._log("debug", "Saved sensors.yaml")
         return ok
 
-    def add_sensor(self, mac: str, sensor_type: str | None = None, sw_version: str | None = None) -> None:
+    def add_sensor(
+        self,
+        mac: str,
+        sensor_type: str | None = None,
+        sw_version: str | None = None,
+        dongle_mac: str | None = None,
+    ) -> None:
         """Add a new sensor entry (or overwrite if already present).
 
-        Initialises runtime state for the sensor as well.
+        Initialises runtime state for the sensor as well; if *dongle_mac* is
+        given it is recorded as the owning dongle.
         """
         self._log("info", f"Adding sensor to registry: {mac}")
         entry: dict = {
@@ -248,21 +316,26 @@ class SensorRegistry:
         if sw_version:
             entry["sw_version"] = sw_version
 
-        self.sensors[mac] = entry
-        # Always initialise runtime state for new sensors
-        self.state.setdefault(mac, _default_state_entry())
-        self.save_sensors()
+        with self._lock:
+            self.sensors[mac] = entry
+            # Always initialise runtime state for new sensors
+            self.state.setdefault(mac, _default_state_entry())
+            if dongle_mac:
+                self.state[mac]["dongle"] = dongle_mac
+            self.save_sensors()
 
     def delete_sensor(self, mac: str) -> bool:
         """Remove a sensor from the registry and its runtime state."""
         self._log("info", f"Removing sensor from registry: {mac}")
         removed = False
-        if mac in self.sensors:
-            del self.sensors[mac]
-            removed = True
-            self.save_sensors()
-        if mac in self.state:
-            del self.state[mac]
+        with self._lock:
+            if mac in self.sensors:
+                del self.sensors[mac]
+                removed = True
+                self.save_sensors()
+            if mac in self.state:
+                del self.state[mac]
+                self.save_state()
         if not removed:
             self._log("error", f"Sensor {mac} not found in registry")
         return removed
@@ -296,42 +369,52 @@ class SensorRegistry:
 
         raw = read_yaml(path, self._logger) or {}
 
-        # Drop stale state
-        modified = raw.pop("modified", None)
-        if modified is not None and (time.time() - modified) > STALE_STATE_SECONDS:
-            self._log("warning", "Discarding stale sensor state (older than 1 hour)")
-            self.state = {}
-            return True
-
-        self.state = raw
+        # Load state as-is, however old.  last_seen values are absolute
+        # timestamps, so after any downtime the per-sensor-type availability
+        # timeouts (4 h / 8 h / 24 h) naturally mark timed-out sensors offline
+        # on the first availability sweep — no separate staleness cutoff is
+        # needed, and dongle ownership survives arbitrary downtime.
+        raw.pop("modified", None)
+        with self._lock:
+            self.state = raw
         self._log("info", f"Loaded state for {len(self.state)} sensor(s) from {path}")
         return True
 
     def save_state(self) -> bool:
-        """Persist self.state to state.yaml, with a 'modified' timestamp."""
-        ensure_dongle_dir(self._dongle_mac)
-        data = dict(self.state)
-        data["modified"] = time.time()
-        ok = write_yaml(self._data_path(SENSOR_STATE_FILE), data, self._logger)
+        """Persist self.state to state.yaml, with a 'modified' timestamp (atomic, serialised)."""
+        with self._lock:
+            data = dict(self.state)
+            data["modified"] = time.time()
+            ok = write_yaml(self._data_path(SENSOR_STATE_FILE), data, self._logger)
         if ok:
             self._log("debug", "Saved state.yaml")
         return ok
 
-    def ensure_state_entry(self, mac: str) -> None:
-        """Initialise a state entry for *mac* if one does not already exist."""
-        if mac not in self.state:
-            self.state[mac] = _default_state_entry()
+    def ensure_state_entry(self, mac: str, dongle_mac: str | None = None) -> None:
+        """Initialise a state entry for *mac* if one does not already exist.
 
-    def prune_state_to(self, linked_macs: list[str]) -> None:
-        """Remove state entries for sensors not in *linked_macs*.
+        If *dongle_mac* is given and the entry has no owner yet, it is claimed.
+        """
+        with self._lock:
+            if mac not in self.state:
+                self.state[mac] = _default_state_entry()
+            if dongle_mac and not self.state[mac].get("dongle"):
+                self.state[mac]["dongle"] = dongle_mac
+
+    def prune_state_for_dongle(self, dongle_mac: str, linked_macs: list[str]) -> None:
+        """Remove state entries owned by *dongle_mac* for sensors not in *linked_macs*.
 
         Called after a successful dongle.list() so state entries for sensors
-        no longer paired with the dongle are removed.
+        no longer paired with that dongle are removed.  Entries owned by other
+        dongles (or unowned) are never touched.
         """
-        stale = [mac for mac in self.state if mac not in linked_macs]
-        for mac in stale:
-            del self.state[mac]
-            self._log("warning", f"Pruned stale state entry for unlinked sensor {mac}")
+        with self._lock:
+            stale = [
+                mac for mac, entry in self.state.items() if entry.get("dongle") == dongle_mac and mac not in linked_macs
+            ]
+            for mac in stale:
+                del self.state[mac]
+                self._log("warning", f"Pruned stale state entry for unlinked sensor {mac}")
 
     # ------------------------------------------------------------------
     # MAC validation
@@ -418,30 +501,55 @@ class SensorRegistry:
     # Reconciliation helpers (called during init_sensors)
     # ------------------------------------------------------------------
 
-    def reconcile_with_dongle(self, linked_macs: list[str]) -> list[str]:
-        """Ensure every MAC the dongle knows about has a sensor + state entry.
+    def reconcile_with_dongle(self, dongle_mac: str, linked_macs: list[str]) -> list[str]:
+        """Reconcile *dongle_mac*'s paired-sensor list with the registry.
 
-        Returns a list of MACs that were auto-added (not previously configured).
+        For each valid MAC in *linked_macs*:
+          - unknown sensor → auto-added with *dongle_mac* as owner
+          - known but unowned (e.g. migrated 3.1.0 state) → claimed
+          - known and owned by another dongle → left alone (stale NVRAM pairing;
+            ownership only transfers when events actually arrive via this
+            dongle), logged so the user can clean up the old pairing
+
+        State entries owned by this dongle but absent from *linked_macs* are
+        pruned.  Returns a list of MACs that were auto-added.
         """
         auto_added = []
-        for mac in linked_macs:
-            if not self.is_valid_mac(mac):
-                continue
-            if mac not in self.sensors:
-                self.add_sensor(mac)
-                auto_added.append(mac)
-            else:
-                self.ensure_state_entry(mac)
+        with self._lock:
+            for mac in linked_macs:
+                if not self.is_valid_mac(mac):
+                    continue
+                if mac not in self.sensors:
+                    self.add_sensor(mac, dongle_mac=dongle_mac)
+                    auto_added.append(mac)
+                    continue
+                owner = self.owner_of(mac)
+                if owner is None:
+                    self.ensure_state_entry(mac, dongle_mac)
+                    self.set_owner(mac, dongle_mac)
+                elif owner == dongle_mac:
+                    self.ensure_state_entry(mac, dongle_mac)
+                    self.clear_stale(mac)
+                else:
+                    self._log(
+                        "info",
+                        f"Sensor {mac} is paired in dongle {dongle_mac}'s NVRAM but currently "
+                        f"owned by dongle {owner} — ownership transfers on first event via "
+                        f"{dongle_mac}; remove the stale pairing from {dongle_mac} if unintended",
+                    )
 
-        self.prune_state_to(linked_macs)
+            self.prune_state_for_dongle(dongle_mac, linked_macs)
         return auto_added
 
-    def ensure_all_have_state(self) -> None:
-        """Give a state entry to every configured sensor that lacks one.
+    def ensure_owned_have_state(self, dongle_mac: str) -> None:
+        """Give a state entry to every sensor owned by *dongle_mac* that lacks one.
 
-        Called when dongle.list() failed; ensures every configured sensor has
-        a state entry so availability checks can run even without a current
-        paired-sensor list from the dongle.
+        Called when dongle.list() failed; ensures the dongle's sensors keep
+        state entries so availability checks can run even without a current
+        paired-sensor list.  (State entries normally imply ownership, so this
+        mainly re-creates entries lost to the stale-state discard on load.)
         """
-        for mac in self.sensors:
-            self.ensure_state_entry(mac)
+        with self._lock:
+            for mac in self.sensors:
+                if self.owner_of(mac) == dongle_mac:
+                    self.ensure_state_entry(mac, dongle_mac)

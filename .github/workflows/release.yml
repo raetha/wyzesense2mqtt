@@ -22,12 +22,14 @@ jobs:
           # Hub package: hub/ code + example service file
           mkdir -p /tmp/ws2m-hub-pkg
           cp -r hub/. /tmp/ws2m-hub-pkg/
+          cp -r shared/. /tmp/ws2m-hub-pkg/
           cp examples/hub/ws2m-hub.service.example /tmp/ws2m-hub-pkg/
           tar -czf "ws2m-hub-${VERSION}.tar.gz" -C /tmp/ws2m-hub-pkg .
 
           # Remote package: remote/ code + example service file
           mkdir -p /tmp/ws2m-remote-pkg
           cp -r remote/. /tmp/ws2m-remote-pkg/
+          cp -r shared/. /tmp/ws2m-remote-pkg/
           cp examples/remote/ws2m-remote.service.example /tmp/ws2m-remote-pkg/
           tar -czf "ws2m-remote-${VERSION}.tar.gz" -C /tmp/ws2m-remote-pkg .
 

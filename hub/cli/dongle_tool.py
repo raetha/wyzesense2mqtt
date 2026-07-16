@@ -29,9 +29,17 @@ import os
 import sys
 
 # Allow running from the wyzesense2mqtt/ directory directly
-sys.path.insert(0, __file__.rsplit("/cli", 1)[0])
+_pkg_root = __file__.rsplit("/cli", 1)[0]
+sys.path.insert(0, _pkg_root)
+# shared/ holds dongle_protocol and device_discovery in a git clone; Docker
+# images and release packages flatten it into the app dir (no-op there).
+import os as _os  # noqa: E402
 
-import dongle_protocol as dp
+_shared = _os.path.join(_os.path.dirname(_pkg_root), "shared")
+if _os.path.isdir(_shared):
+    sys.path.insert(0, _shared)
+
+import dongle_protocol as dp  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Event callback
@@ -340,7 +348,7 @@ def main() -> int:
 
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         try:
-            from config import find_all_dongle_devices
+            from device_discovery import find_all_dongle_devices
 
             devices = find_all_dongle_devices()
         except ImportError:

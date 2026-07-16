@@ -93,9 +93,9 @@ def _build_hub(remotes_path: pathlib.Path, pairing_active: bool = False):
 
 
 def _build_remote(data_dir: pathlib.Path, remote_id: str = "test-remote-uuid", dongle_mac: str = "TESTMAC"):
-    from remote import Remote
+    from remote import DongleRelay
 
-    r = Remote(
+    r = DongleRelay(
         hub_url="ws://127.0.0.1:8765",
         remote_id=remote_id,
         data_dir=data_dir,

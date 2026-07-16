@@ -32,14 +32,10 @@ MAIN_CONFIG_FILE = "config.yaml"
 MIGRATIONS_FILE = "migrations.yaml"
 HUB_FILE = "hub.yaml"
 
-# Per-dongle data lives under <CONFIG_DIR>/dongles/<dongle_mac>/
-DONGLES_DIR = "dongles"
+# Sensor registry files (flat at CONFIG_DIR level; one file for all sensors
+# across every dongle — dongle ownership is a per-entry key in state.yaml)
 SENSORS_CONFIG_FILE = "sensors.yaml"
 SENSOR_STATE_FILE = "state.yaml"
-
-# Legacy flat-file names (used only for migration detection)
-_LEGACY_SENSORS_FILE = "sensors.yaml"
-_LEGACY_STATE_FILE = "state.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -77,10 +73,21 @@ DEFAULT_CONFIG: dict = {
     # are cleaned up so HA does not retain stale entities.
     # Can also be set via WS2M_HASS_DISCOVERY env var.
     "hass_discovery": True,
+    # Days an orphaned sensor's configuration is retained before automatic
+    # removal.  A sensor is orphaned when it is not paired to any
+    # currently-connected dongle (e.g. its remote was shut down, or it was
+    # unpaired outside ws2m).  Orphans keep their config and simply show as
+    # unavailable in HA; if the sensor or its dongle returns within the
+    # window, everything reactivates untouched.  0 disables automatic
+    # removal (the "Cleanup orphaned sensors" HA button always works).
+    "orphan_retention_days": 7,
     # USB dongle path:
-    #   "auto"        — detect all connected WyzeSense dongles automatically
-    #                   (multi-dongle supported when "auto" is used)
-    #   "/dev/hidrawN" — use exactly this one device (single-dongle)
+    #   "auto"          — detect all connected WyzeSense dongles automatically
+    #                     (multi-dongle supported when "auto" is used)
+    #   "/dev/hidrawN"  — use exactly this one device (single-dongle)
+    #   "/dev/<dir>/"   — a directory: use every character device inside it
+    #                     (multi-dongle; pairs with the example udev rule that
+    #                     collects all dongles under /dev/ws2m-dongles/)
     "dongle": "auto",
     # Remote bridge — WebSocket listener for remote connections.
     # Adoption is token-less: enable pairing mode from HA or via the ws2m/hub/<uuid>/remote_pair
@@ -118,44 +125,6 @@ def config_path(*parts: str) -> str:
     return os.path.join(CONFIG_DIR, *parts)
 
 
-def dongle_data_path(dongle_mac: str, *parts: str) -> str:
-    """Return a path rooted at <CONFIG_DIR>/dongles/<dongle_mac>/."""
-    return os.path.join(CONFIG_DIR, DONGLES_DIR, dongle_mac, *parts)
-
-
-def ensure_dongle_dir(dongle_mac: str) -> str:
-    """Create <CONFIG_DIR>/dongles/<dongle_mac>/ if it does not exist.
-
-    Returns the directory path.
-    """
-    path = dongle_data_path(dongle_mac)
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
-def list_known_dongle_macs(logger: logging.Logger | None = None) -> list[str]:
-    """Return the MAC addresses of all dongles that have a data directory.
-
-    Scans ``<CONFIG_DIR>/dongles/`` and returns subdirectory names, which
-    correspond to dongle MAC addresses recorded during previous runs.  Returns
-    an empty list if the dongles directory does not exist yet.
-    """
-    dongles_dir = config_path(DONGLES_DIR)
-    if not os.path.isdir(dongles_dir):
-        return []
-    try:
-        return [entry for entry in os.listdir(dongles_dir) if os.path.isdir(os.path.join(dongles_dir, entry))]
-    except OSError as exc:
-        if logger:
-            logger.warning(f"Could not list dongle directories: {exc}")
-        return []
-
-
-# ---------------------------------------------------------------------------
-# Low-level YAML I/O
-# ---------------------------------------------------------------------------
-
-
 def read_yaml(path: str, logger: logging.Logger | None = None) -> dict | None:
     """Read and parse a YAML file. Returns None on any error."""
     try:
@@ -171,10 +140,17 @@ def read_yaml(path: str, logger: logging.Logger | None = None) -> dict | None:
 
 
 def write_yaml(path: str, data: dict, logger: logging.Logger | None = None) -> bool:
-    """Serialise *data* to a YAML file. Returns True on success."""
+    """Serialise *data* to a YAML file atomically. Returns True on success.
+
+    The data is written to a temp file in the same directory and moved into
+    place with os.replace(), so readers never observe a partially-written
+    file and a crash mid-write leaves the previous file intact.
+    """
     try:
-        with open(path, "w") as f:
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w") as f:
             f.write(yaml.safe_dump(data))
+        os.replace(tmp_path, path)
         return True
     except OSError as err:
         msg = f"Could not write file '{path}': {err}"
@@ -377,113 +353,3 @@ def set_migration_value(key: str, value, logger: logging.Logger | None = None) -
     state = load_migrations(logger)
     state[key] = value
     return save_migrations(state, logger)
-
-
-# ---------------------------------------------------------------------------
-# Legacy data migration
-#
-# If sensors.yaml / state.yaml exist at the flat CONFIG_DIR level (pre-4.0
-# single-dongle layout), migrate them into the per-dongle directory structure
-# on first start.  Called by Bridge after the dongle MAC is known.
-# ---------------------------------------------------------------------------
-
-
-def migrate_legacy_sensor_files(dongle_mac: str, logger: logging.Logger | None = None) -> bool:
-    """Move legacy flat sensors.yaml / state.yaml into dongles/<mac>/ if needed.
-
-    Returns True if any files were migrated.
-    """
-    import shutil
-
-    migrated = False
-    dongle_dir = ensure_dongle_dir(dongle_mac)
-
-    for filename in (_LEGACY_SENSORS_FILE, _LEGACY_STATE_FILE):
-        legacy_path = config_path(filename)
-        new_path = os.path.join(dongle_dir, filename)
-        if os.path.isfile(legacy_path) and not os.path.isfile(new_path):
-            shutil.move(legacy_path, new_path)
-            msg = f"Migrated {legacy_path} → {new_path}"
-            if logger:
-                logger.info(msg)
-            else:
-                print(msg)
-            migrated = True
-
-    return migrated
-
-
-# ---------------------------------------------------------------------------
-# Dongle device auto-detection
-# ---------------------------------------------------------------------------
-
-
-def find_dongle_device() -> str | None:
-    """Scan /sys/class/hidraw for the WyzeSense bridge dongle.
-
-    Matches USB vendor 1a86 (QinHeng Electronics) and product e024, which
-    is the identifier used by the Wyze Sense Bridge HID device.
-    Returns the first matching /dev/hidraw* path, or None if not found.
-
-    Deprecated: prefer find_all_dongle_devices() for multi-dongle support.
-    Returns the first detected device for backwards compatibility.
-    """
-    devices = find_all_dongle_devices()
-    return devices[0] if devices else None
-
-
-def find_all_dongle_devices() -> list[str]:
-    """Scan /sys/class/hidraw for WyzeSense dongles (USB vendor 1a86, product e024)."""
-    import glob
-    import stat
-
-    devices = []
-
-    for hidraw in glob.glob("/sys/class/hidraw/hidraw*"):
-        try:
-            # Walk upward until idVendor exists
-            path = os.path.realpath(hidraw)
-            while path != "/" and not os.path.exists(os.path.join(path, "idVendor")):
-                path = os.path.dirname(path)
-            if path == "/":
-                continue
-
-            # Check vendor/product
-            vendor = open(os.path.join(path, "idVendor")).read().strip().lower()
-            product = open(os.path.join(path, "idProduct")).read().strip().lower()
-            if vendor != "1a86" or product != "e024":
-                continue
-
-            # Read major/minor
-            major, minor = map(int, open(os.path.join(hidraw, "dev")).read().split(":"))
-
-            # Optimized recursive scan
-            stack = ["/dev"]
-
-            while stack:
-                try:
-                    for entry in os.scandir(stack.pop()):
-                        if entry.is_dir(follow_symlinks=False):
-                            # Skip irrelevant dirs
-                            if not entry.name.startswith(("pts", "shm", "mqueue")):
-                                stack.append(entry.path)
-                            continue
-
-                        # Skip non-character devices immediately
-                        try:
-                            st = entry.stat(follow_symlinks=False)
-                        except OSError:
-                            continue
-
-                        if stat.S_ISCHR(st.st_mode):
-                            # Match major/minor
-                            if os.major(st.st_rdev) == major and os.minor(st.st_rdev) == minor:
-                                devices.append(entry.path)
-
-                except OSError:
-                    pass
-
-        except OSError:
-            continue
-
-    return devices

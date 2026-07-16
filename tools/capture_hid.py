@@ -204,7 +204,7 @@ def main() -> None:
                 if response.lower() == "skip":
                     print(f"    Keeping {mac!r} as-is")
                     continue
-                replacement = response if response else default
+                replacement = response or default
                 if len(replacement) != 8:
                     print(f"    Warning: {replacement!r} is not 8 chars — skipping")
                     continue

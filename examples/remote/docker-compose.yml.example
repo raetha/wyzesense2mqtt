@@ -37,8 +37,9 @@ services:
     # Pass through a WyzeSense USB dongle.
     # If WS2M_DONGLE=auto, all hidraw devices matching VID 1a86 / PID e024
     # are detected automatically — grant access to all or just the one you need.
-    # If using the example udev rule, comment out devices section and uncomment
-    # the volume below instead.
+    # If using the example udev rule, comment out the devices section, uncomment
+    # the /dev/ws2m-dongles volume below, and set WS2M_DONGLE=/dev/ws2m-dongles
+    # (or leave it as auto).  One remote relays any number of dongles.
     #
     devices:
       - "${DEV_DONGLE:-/dev/hidraw0}:/dev/hidraw0"
@@ -49,6 +50,8 @@ services:
 
     # Uncomment when using the example udev rule in order to access hardware via
     # the volume bind mount. Grants read, write, modify access to HIDRAW devices.
+    # NOTE: the hidraw major number (239 below) is dynamically allocated by the
+    # kernel — verify yours with `ls -l /dev/hidraw0` on the host and adjust.
     #
     # device_cgroup_rules:
     #   - 'c 239:* rwm'

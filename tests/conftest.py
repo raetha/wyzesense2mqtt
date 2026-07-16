@@ -7,8 +7,12 @@ import sys
 
 import pytest
 
-# Ensure the package directory is on the path for all tests
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "hub"))
+# Ensure the package directories are on the path for all tests.
+# shared/ holds modules used by both hub and remote (dongle_protocol,
+# device_discovery); Docker images and release packages flatten them
+# alongside the hub/remote code.
+for _pkg in ("hub", "shared"):
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", _pkg))
 
 
 def pytest_addoption(parser):
@@ -40,12 +44,14 @@ def tmp_config_dir(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def tmp_dongle_dir(tmp_config_dir):
-    """Create <config_dir>/dongles/<TEST_DONGLE_MAC>/ and return the path."""
+    """Return the registry data directory (flat since the global-registry redesign).
+
+    Kept under the historical fixture name so the many tests using it read
+    naturally — sensor files now live directly in the config dir.
+    """
     import config as cfg_module
 
-    dongle_dir = cfg_module.dongle_data_path(TEST_DONGLE_MAC)
-    os.makedirs(dongle_dir, exist_ok=True)
-    return dongle_dir
+    return cfg_module.CONFIG_DIR
 
 
 @pytest.fixture()

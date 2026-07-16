@@ -119,8 +119,10 @@ python3 -m cli.mqtt_tool cleanup-discovery --listen-seconds 15
 ### `remove-dongle`
 
 Permanently removes a single dongle and all of its sensors from MQTT and local
-storage. Prints the dongle MAC, all sensors with their type and name, and the
-data directory path before making any changes.
+storage. A dongle's sensors are the `state.yaml` entries that record it as
+their owner. Prints the dongle MAC and all sensors with their type and name
+before making any changes; with `--apply` those sensors are also removed from
+`sensors.yaml` and `state.yaml`.
 
 ```bash
 # Dry run — show what would be removed

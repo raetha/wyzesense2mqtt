@@ -23,9 +23,9 @@ jobs:
       - name: Install ruff
         run: pip install ruff
       - name: Run ruff check
-        run: ruff check hub/ remote/ tests/
+        run: ruff check hub/ remote/ shared/ tests/ tools/
       - name: Run ruff format check
-        run: ruff format --check hub/ remote/ tests/
+        run: ruff format --check hub/ remote/ shared/ tests/ tools/
 
   # ── Verify dependencies install and the app imports cleanly ────────────
   build:

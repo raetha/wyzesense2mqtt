@@ -3,6 +3,7 @@ FROM docker.io/python:3.13-alpine
 LABEL maintainer="Raetha"
 
 COPY remote /app/
+COPY shared /app/
 
 RUN apk add --no-cache tzdata \
     && pip3 install --no-cache-dir --upgrade pip \

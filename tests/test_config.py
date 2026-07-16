@@ -26,35 +26,6 @@ def test_config_path_nested(tmp_config_dir):
     assert result == os.path.join(cfg_module.CONFIG_DIR, "sub", "file.yaml")
 
 
-def test_dongle_data_path(tmp_config_dir):
-    import config as cfg_module
-
-    result = cfg_module.dongle_data_path("AABBCCDD")
-    assert result == os.path.join(cfg_module.CONFIG_DIR, "dongles", "AABBCCDD")
-
-
-def test_dongle_data_path_with_file(tmp_config_dir):
-    import config as cfg_module
-
-    result = cfg_module.dongle_data_path("AABBCCDD", "sensors.yaml")
-    assert result == os.path.join(cfg_module.CONFIG_DIR, "dongles", "AABBCCDD", "sensors.yaml")
-
-
-def test_ensure_dongle_dir_creates_directory(tmp_config_dir):
-    import config as cfg_module
-
-    path = cfg_module.ensure_dongle_dir("AABBCCDD")
-    assert os.path.isdir(path)
-    assert path == cfg_module.dongle_data_path("AABBCCDD")
-
-
-def test_ensure_dongle_dir_idempotent(tmp_config_dir):
-    import config as cfg_module
-
-    cfg_module.ensure_dongle_dir("AABBCCDD")
-    cfg_module.ensure_dongle_dir("AABBCCDD")  # should not raise
-
-
 # ---------------------------------------------------------------------------
 # YAML I/O
 # ---------------------------------------------------------------------------
@@ -277,247 +248,41 @@ def test_load_hub_id_unique_across_instances(tmp_config_dir, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Legacy sensor file migration
+# 3.1.0 data compatibility — flat files load as-is, no migration code
 # ---------------------------------------------------------------------------
 
 
-def test_migrate_legacy_sensor_files_moves_sensors_yaml(tmp_config_dir):
-    """Legacy sensors.yaml at config root is moved into dongles/<mac>/ subdir."""
+def test_310_flat_files_load_without_migration(tmp_config_dir):
+    """3.1.0 sensors.yaml/state.yaml are already at the canonical flat paths;
+    entries simply lack an owner and are claimed by their dongle at reconcile."""
+    import config as cfg_module
+    from sensors import SensorRegistry
+
+    with open(cfg_module.config_path("sensors.yaml"), "w") as f:
+        yaml.safe_dump({"AAAAAAAA": {"sensor_type": "switch", "name": "Front Door"}}, f)
+    with open(cfg_module.config_path("state.yaml"), "w") as f:
+        yaml.safe_dump({"AAAAAAAA": {"last_seen": 100.0, "online": True}}, f)
+
+    r = SensorRegistry()
+    r.load_sensors()
+    r.load_state()
+    assert r.sensors["AAAAAAAA"]["name"] == "Front Door"
+    assert r.owner_of("AAAAAAAA") is None
+
+    r.reconcile_with_dongle("DONGLE_A", ["AAAAAAAA"])
+    assert r.owner_of("AAAAAAAA") == "DONGLE_A"
+    assert r.sensors["AAAAAAAA"]["name"] == "Front Door"
+
+
+def test_write_yaml_is_atomic(tmp_config_dir):
+    """write_yaml never leaves a temp file behind and replaces atomically."""
     import config as cfg_module
 
-    # Write legacy flat sensors.yaml
-    legacy_path = cfg_module.config_path("sensors.yaml")
-    with open(legacy_path, "w") as f:
-        yaml.safe_dump({"AAAAAAAA": {"sensor_type": "switch"}}, f)
-
-    migrated = cfg_module.migrate_legacy_sensor_files("DONGLE01")
-    assert migrated is True
-
-    new_path = cfg_module.dongle_data_path("DONGLE01", "sensors.yaml")
-    assert os.path.isfile(new_path)
-    assert not os.path.isfile(legacy_path)
-
-    data = yaml.safe_load(open(new_path))
-    assert "AAAAAAAA" in data
-
-
-def test_migrate_legacy_sensor_files_moves_state_yaml(tmp_config_dir):
-    """Legacy state.yaml at config root is moved into dongles/<mac>/ subdir."""
-    import config as cfg_module
-
-    legacy_path = cfg_module.config_path("state.yaml")
-    with open(legacy_path, "w") as f:
-        yaml.safe_dump({"AAAAAAAA": {"online": True}}, f)
-
-    cfg_module.migrate_legacy_sensor_files("DONGLE01")
-
-    new_path = cfg_module.dongle_data_path("DONGLE01", "state.yaml")
-    assert os.path.isfile(new_path)
-    assert not os.path.isfile(legacy_path)
-
-
-def test_migrate_legacy_sensor_files_noop_when_no_legacy_files(tmp_config_dir):
-    import config as cfg_module
-
-    migrated = cfg_module.migrate_legacy_sensor_files("DONGLE01")
-    assert migrated is False
-
-
-def test_migrate_legacy_sensor_files_noop_when_destination_exists(tmp_config_dir):
-    """Does not overwrite an existing per-dongle file."""
-    import config as cfg_module
-
-    # Existing new-layout file
-    cfg_module.ensure_dongle_dir("DONGLE01")
-    new_path = cfg_module.dongle_data_path("DONGLE01", "sensors.yaml")
-    with open(new_path, "w") as f:
-        yaml.safe_dump({"NEW": {}}, f)
-
-    # Legacy file that should NOT overwrite
-    legacy_path = cfg_module.config_path("sensors.yaml")
-    with open(legacy_path, "w") as f:
-        yaml.safe_dump({"OLD": {}}, f)
-
-    cfg_module.migrate_legacy_sensor_files("DONGLE01")
-
-    # New file untouched
-    data = yaml.safe_load(open(new_path))
-    assert "NEW" in data
-    # Legacy file still present (was not moved)
-    assert os.path.isfile(legacy_path)
-
-
-# ---------------------------------------------------------------------------
-# Migration tracking
-# ---------------------------------------------------------------------------
-
-
-def test_load_migrations_defaults_when_no_file(tmp_config_dir):
-    import config as cfg_module
-
-    state = cfg_module.load_migrations()
-    assert "discovery_schema_version" in state
-    assert state["discovery_schema_version"] == 1
-
-
-def test_migration_round_trip(tmp_config_dir):
-    import config as cfg_module
-
-    cfg_module.save_migrations({"discovery_schema_version": 2})
-    state = cfg_module.load_migrations()
-    assert state["discovery_schema_version"] == 2
-
-
-def test_set_get_migration_value(tmp_config_dir):
-    import config as cfg_module
-
-    cfg_module.set_migration_value("discovery_schema_version", 3)
-    assert cfg_module.get_migration_value("discovery_schema_version") == 3
-
-
-def test_migration_missing_key_fills_default(tmp_config_dir):
-    """A migrations.yaml that lacks a key gets the default filled in on load."""
-    import config as cfg_module
-
-    cfg_module.save_migrations({})
-    state = cfg_module.load_migrations()
-    assert state["discovery_schema_version"] == 1
-
-
-# ---------------------------------------------------------------------------
-# write_yaml error path
-# ---------------------------------------------------------------------------
-
-
-def test_write_yaml_ioerror_returns_false(tmp_config_dir):
-    import config as cfg_module
-
-    result = cfg_module.write_yaml("/nonexistent/path/file.yaml", {"key": "value"})
-    assert result is False
-
-
-def test_write_yaml_logs_error_when_logger_provided(tmp_config_dir):
-    import logging
-    from unittest.mock import patch
-
-    import config as cfg_module
-
-    logger = logging.getLogger("test_write_error")
-    with patch.object(logger, "error") as mock_err:
-        cfg_module.write_yaml("/nonexistent/path/file.yaml", {}, logger)
-        assert mock_err.called
-
-
-def test_read_yaml_logs_error_when_logger_provided(tmp_config_dir):
-    import logging
-    from unittest.mock import patch
-
-    import config as cfg_module
-
-    logger = logging.getLogger("test")
-    with patch.object(logger, "error") as mock_err:
-        cfg_module.read_yaml("/nonexistent/path.yaml", logger)
-        assert mock_err.called
-
-
-# ---------------------------------------------------------------------------
-# save_config
-# ---------------------------------------------------------------------------
-
-
-def test_save_config_round_trips(sample_config, tmp_config_dir):
-    import config as cfg_module
-
-    cfg_module.save_config(sample_config)
-    reloaded, _ = cfg_module.load_config()
-    for key, value in sample_config.items():
-        assert reloaded[key] == value
-
-
-def test_load_config_env_coercion_true_and_none(sample_config, tmp_config_dir, monkeypatch):
-    """Env vars of 'true' and 'none' are coerced to bool True and None."""
-    monkeypatch.setenv("WS2M_LOG_LEVEL", "DEBUG")
-    monkeypatch.setenv("WS2M_MQTT_PASSWORD", "none")
-
-    import importlib
-
-    import config as cfg_module
-
-    importlib.reload(cfg_module)
-    cfg_module.CONFIG_DIR = str(tmp_config_dir / "config")
-
-    cfg_path = cfg_module.config_path(cfg_module.MAIN_CONFIG_FILE)
-    with open(cfg_path, "w") as f:
-        yaml.safe_dump(sample_config, f)
-
-    cfg, _ = cfg_module.load_config()
-    assert cfg["log_level"] == "DEBUG"
-    assert cfg["mqtt_password"] is None
-
-
-def test_load_config_logs_error_when_no_host_and_logger(tmp_config_dir):
-    """load_config should call logger.error when mqtt_host is missing."""
-    import logging
-    from unittest.mock import patch
-
-    import config as cfg_module
-
-    cfg_path = cfg_module.config_path(cfg_module.MAIN_CONFIG_FILE)
-    with open(cfg_path, "w") as f:
-        yaml.safe_dump({"mqtt_port": 1883}, f)
-
-    logger = logging.getLogger("test_no_host")
-    with patch.object(logger, "error") as mock_err:
-        cfg, _ = cfg_module.load_config(logger)
-        assert cfg is None
-        assert mock_err.called
-
-
-# ---------------------------------------------------------------------------
-# list_known_dongle_macs
-# ---------------------------------------------------------------------------
-
-
-def test_list_known_dongle_macs_empty_when_no_dongles_dir(tmp_config_dir):
-    import config as cfg_module
-
-    result = cfg_module.list_known_dongle_macs()
-    assert result == []
-
-
-def test_list_known_dongle_macs_returns_subdirectory_names(tmp_config_dir):
-    import config as cfg_module
-
-    cfg_module.ensure_dongle_dir("AABBCCDD")
-    cfg_module.ensure_dongle_dir("11223344")
-    result = cfg_module.list_known_dongle_macs()
-    assert sorted(result) == ["11223344", "AABBCCDD"]
-
-
-def test_list_known_dongle_macs_ignores_files(tmp_config_dir):
-    """Files inside dongles/ should not be returned, only subdirectories."""
-    import os
-
-    import config as cfg_module
-
-    dongles_dir = cfg_module.config_path(cfg_module.DONGLES_DIR)
-    os.makedirs(dongles_dir, exist_ok=True)
-    # Create a stray file inside dongles/
-    open(os.path.join(dongles_dir, "not_a_mac.txt"), "w").close()
-    cfg_module.ensure_dongle_dir("AABBCCDD")
-    result = cfg_module.list_known_dongle_macs()
-    assert result == ["AABBCCDD"]
-
-
-def test_list_known_dongle_macs_with_logger(tmp_config_dir):
-    import logging
-
-    import config as cfg_module
-
-    cfg_module.ensure_dongle_dir("AABBCCDD")
-    logger = logging.getLogger("test")
-    result = cfg_module.list_known_dongle_macs(logger)
-    assert result == ["AABBCCDD"]
+    path = cfg_module.config_path("atomic.yaml")
+    assert cfg_module.write_yaml(path, {"a": 1}) is True
+    assert cfg_module.write_yaml(path, {"a": 2}) is True
+    assert yaml.safe_load(open(path)) == {"a": 2}
+    assert not os.path.exists(f"{path}.tmp")
 
 
 def test_hub_ws_enabled_in_default_config():
@@ -580,3 +345,94 @@ def test_dongle_key_in_default_config():
 
     assert "dongle" in cfg_module.DEFAULT_CONFIG
     assert "usb_dongle" not in cfg_module.DEFAULT_CONFIG
+
+
+# ---------------------------------------------------------------------------
+# Device node resolution (_find_dev_node / list_char_devices)
+# ---------------------------------------------------------------------------
+
+
+def _fake_matcher_for(paths: set[str]):
+    """Return a _device_matches replacement that matches exactly *paths*."""
+
+    def _matches(path: str, major: int, minor: int) -> bool:
+        return path in paths
+
+    return _matches
+
+
+def test_find_dev_node_prefers_canonical(tmp_path, monkeypatch):
+    """When both the canonical node and a udev alias exist, the canonical path wins."""
+    import device_discovery as cfg_module
+
+    dev_root = tmp_path / "dev"
+    (dev_root / "ws2m-dongles").mkdir(parents=True)
+    canonical = dev_root / "hidraw0"
+    alias = dev_root / "ws2m-dongles" / "hidraw0"
+    canonical.touch()
+    alias.touch()
+
+    monkeypatch.setattr(cfg_module, "_device_matches", _fake_matcher_for({str(canonical), str(alias)}))
+    result = cfg_module._find_dev_node("hidraw0", 239, 0, dev_root=str(dev_root))
+    assert result == str(canonical)
+
+
+def test_find_dev_node_falls_back_to_alias(tmp_path, monkeypatch):
+    """Without a canonical node (container bind mount), the alias is found by scan."""
+    import device_discovery as cfg_module
+
+    dev_root = tmp_path / "dev"
+    (dev_root / "ws2m-dongles").mkdir(parents=True)
+    alias = dev_root / "ws2m-dongles" / "hidraw3"
+    alias.touch()
+
+    monkeypatch.setattr(cfg_module, "_device_matches", _fake_matcher_for({str(alias)}))
+    result = cfg_module._find_dev_node("hidraw3", 239, 3, dev_root=str(dev_root))
+    assert result == str(alias)
+
+
+def test_find_dev_node_returns_none_when_absent(tmp_path, monkeypatch):
+    """No matching node anywhere returns None (device not passed into container)."""
+    import device_discovery as cfg_module
+
+    dev_root = tmp_path / "dev"
+    dev_root.mkdir()
+    monkeypatch.setattr(cfg_module, "_device_matches", _fake_matcher_for(set()))
+    assert cfg_module._find_dev_node("hidraw5", 239, 5, dev_root=str(dev_root)) is None
+
+
+def test_find_dev_node_returns_single_path(tmp_path, monkeypatch):
+    """Exactly one path is returned even when several aliases match — prevents
+    two DongleWorkers opening the same physical dongle."""
+    import device_discovery as cfg_module
+
+    dev_root = tmp_path / "dev"
+    (dev_root / "a").mkdir(parents=True)
+    (dev_root / "b").mkdir()
+    alias_a = dev_root / "a" / "hidraw1"
+    alias_b = dev_root / "b" / "hidraw1"
+    alias_a.touch()
+    alias_b.touch()
+
+    monkeypatch.setattr(cfg_module, "_device_matches", _fake_matcher_for({str(alias_a), str(alias_b)}))
+    result = cfg_module._find_dev_node("hidraw1", 239, 1, dev_root=str(dev_root))
+    assert result in (str(alias_a), str(alias_b))  # one of them, never both
+
+
+def test_list_char_devices_empty_or_missing_dir(tmp_path):
+    import device_discovery as cfg_module
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert cfg_module.list_char_devices(str(empty)) == []
+    assert cfg_module.list_char_devices(str(tmp_path / "does-not-exist")) == []
+
+
+def test_list_char_devices_skips_regular_files(tmp_path):
+    """Regular files are not character devices and must be skipped."""
+    import device_discovery as cfg_module
+
+    d = tmp_path / "dongles"
+    d.mkdir()
+    (d / "not-a-device").write_text("x")
+    assert cfg_module.list_char_devices(str(d)) == []

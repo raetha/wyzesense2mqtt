@@ -187,7 +187,10 @@ def test_publish_sensor_discovery_payload_structure(tmp_config_dir):
             assert "availability" in payload
             assert "state_topic" in payload
             assert payload["origin"]["name"] == "WyzeSense2MQTT"
-            assert "schema_version" in payload
+            # HA device discovery rejects unknown top-level keys — the schema
+            # version must never appear in the payload (tracked in migrations.yaml
+            # and derivable from the topic path instead).
+            assert "schema_version" not in payload
             break
     else:
         pytest.fail("Discovery config publish call not found")
@@ -1887,3 +1890,21 @@ def test_publish_remote_discovery_has_log_level_entity(tmp_config_dir):
     assert "log_level" in components, f"log_level not in {list(components)}"
     assert components["log_level"]["platform"] == "select"
     assert components["log_level"]["options"] == LOG_LEVEL_OPTIONS
+
+
+def test_publish_hub_discovery_orphan_retention_entity(tmp_config_dir):
+    """The hub device carries the Orphan retention number entity."""
+    import json
+
+    gw, cfg = _make_gateway()
+    gw.publish_hub_discovery(TEST_HUB_ID, "INFO")
+
+    payload = json.loads(gw._client.publish.call_args_list[0].kwargs["payload"])
+    comp = payload["components"].get("orphan_retention")
+    assert comp is not None
+    assert comp["platform"] == "number"
+    assert comp["entity_category"] == "config"
+    assert comp["min"] == 0
+    assert comp["max"] == 365
+    assert comp["state_topic"].endswith("/orphan_retention_days")
+    assert comp["command_topic"].endswith("/orphan_retention_days/set")

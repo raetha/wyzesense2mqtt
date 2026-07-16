@@ -8,7 +8,7 @@ skipped by default.  Run them explicitly with:
     pytest -m dongle --dongle /dev/hidraw0 (use a specific device path)
     pytest -m dongle --dongle auto         (explicitly request auto-detection)
 
-'auto' (the default) exercises the same find_dongle_device() code path
+'auto' (the default) exercises the same find_all_dongle_devices() code path
 that the bridge uses at startup.
 
 The bridge service MUST NOT be running while these tests execute — both
@@ -63,10 +63,6 @@ def pytest_addoption(parser):
 @pytest.fixture(scope="session")
 def dongle(request):
     """Open the dongle and yield it; stop on teardown."""
-    import os
-    import sys
-
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "wyzesense2mqtt"))
     import dongle_protocol as dp
 
     device = request.config.getoption("--dongle", default="auto")
@@ -74,13 +70,12 @@ def dongle(request):
 
     if device.lower() == "auto":
         # Exercise the same auto-detection path the bridge uses at startup
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "wyzesense2mqtt"))
-        from config import find_dongle_device
+        from device_discovery import find_all_dongle_devices
 
-        detected = find_dongle_device()
-        if detected is None:
+        detected = find_all_dongle_devices()
+        if not detected:
             pytest.skip("Auto-detection found no WyzeSense dongle in /sys/class/hidraw")
-        device = detected
+        device = detected[0]
 
     def _on_event(dongle, event):
         events.append(event)

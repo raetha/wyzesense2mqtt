@@ -122,49 +122,64 @@ def test_timeout_for_unknown_type_uses_unknown_default():
 
 
 # ---------------------------------------------------------------------------
-# SensorRegistry — construction and dongle_mac property
+# SensorRegistry — construction and shared files
 # ---------------------------------------------------------------------------
 
 
-def test_sensor_registry_dongle_mac(tmp_dongle_dir):
-    from sensors import SensorRegistry
+def test_sensor_registry_files_are_flat(tmp_dongle_dir):
+    """The registry reads and writes flat sensors.yaml/state.yaml in the data dir."""
+    import os
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
-    assert r.dongle_mac == TEST_DONGLE_MAC
-
-
-def test_sensor_registry_separate_instances(tmp_config_dir):
-    """Two SensorRegistry instances for different dongles are independent."""
     import config as cfg_module
     from sensors import SensorRegistry
 
-    cfg_module.ensure_dongle_dir("DONGLE_A")
-    cfg_module.ensure_dongle_dir("DONGLE_B")
+    r = SensorRegistry()
+    r.add_sensor("AAAAAAAA", "motion")
+    r.save_state()
+    assert os.path.isfile(os.path.join(cfg_module.CONFIG_DIR, "sensors.yaml"))
+    assert os.path.isfile(os.path.join(cfg_module.CONFIG_DIR, "state.yaml"))
 
-    r_a = SensorRegistry("DONGLE_A")
-    r_b = SensorRegistry("DONGLE_B")
 
-    r_a.load_sensors()
+def test_sensor_registry_shared_across_instances(tmp_dongle_dir):
+    """Two instances see the same on-disk data — there is one registry per hub."""
+    from sensors import SensorRegistry
+
+    r_a = SensorRegistry()
+    r_a.add_sensor("AAAAAAAA", "motion", dongle_mac="DONGLE_A")
+
+    r_b = SensorRegistry()
     r_b.load_sensors()
+    assert "AAAAAAAA" in r_b.sensors
 
-    r_a.add_sensor("AAAAAAAA", "motion")
-    r_b.add_sensor("BBBBBBBB", "switch")
 
-    assert "AAAAAAAA" in r_a.sensors
-    assert "AAAAAAAA" not in r_b.sensors
-    assert "BBBBBBBB" in r_b.sensors
-    assert "BBBBBBBB" not in r_a.sensors
+def test_sensor_registry_ownership(tmp_dongle_dir):
+    """Ownership is recorded per state entry and queryable."""
+    from sensors import SensorRegistry
+
+    r = SensorRegistry()
+    r.add_sensor("AAAAAAAA", "motion", dongle_mac="DONGLE_A")
+    r.add_sensor("BBBBBBBB", "switch", dongle_mac="DONGLE_B")
+    r.ensure_state_entry("CCCCCCCC")  # unowned
+
+    assert r.owner_of("AAAAAAAA") == "DONGLE_A"
+    assert r.owner_of("CCCCCCCC") is None
+    assert r.macs_owned_by("DONGLE_A") == ["AAAAAAAA"]
+    assert r.known_dongle_macs() == {"DONGLE_A", "DONGLE_B"}
+
+    r.set_owner("AAAAAAAA", "DONGLE_B")
+    assert r.owner_of("AAAAAAAA") == "DONGLE_B"
+    assert sorted(r.macs_owned_by("DONGLE_B")) == ["AAAAAAAA", "BBBBBBBB"]
 
 
 # ---------------------------------------------------------------------------
-# SensorRegistry — load/save sensors.yaml (per-dongle path)
+# SensorRegistry — load/save sensors.yaml
 # ---------------------------------------------------------------------------
 
 
 def test_load_sensors_no_file(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     assert r.load_sensors() is False
     assert r.sensors == {}
 
@@ -172,11 +187,11 @@ def test_load_sensors_no_file(tmp_dongle_dir):
 def test_add_sensor_persists(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_sensors()
     r.add_sensor("AAAAAAAA", "motion", "19")
 
-    r2 = SensorRegistry(TEST_DONGLE_MAC)
+    r2 = SensorRegistry()
     r2.load_sensors()
     assert "AAAAAAAA" in r2.sensors
     assert r2.sensors["AAAAAAAA"]["sensor_type"] == "motion"
@@ -186,7 +201,7 @@ def test_add_sensor_persists(tmp_dongle_dir):
 def test_add_sensor_sets_class_from_type(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_sensors()
     r.add_sensor("AAAAAAAA", "switch")
     assert r.sensors["AAAAAAAA"]["class"] == "opening"
@@ -195,7 +210,7 @@ def test_add_sensor_sets_class_from_type(tmp_dongle_dir):
 def test_add_sensor_sets_invert_state_default(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_sensors()
     r.add_sensor("AAAAAAAA")
     assert r.sensors["AAAAAAAA"]["invert_state"] is False
@@ -204,7 +219,7 @@ def test_add_sensor_sets_invert_state_default(tmp_dongle_dir):
 def test_delete_sensor(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_sensors()
     r.add_sensor("AAAAAAAA", "motion")
     r.add_sensor("BBBBBBBB", "switch")
@@ -213,7 +228,7 @@ def test_delete_sensor(tmp_dongle_dir):
     assert "AAAAAAAA" not in r.sensors
     assert "BBBBBBBB" in r.sensors
 
-    r2 = SensorRegistry(TEST_DONGLE_MAC)
+    r2 = SensorRegistry()
     r2.load_sensors()
     assert "AAAAAAAA" not in r2.sensors
 
@@ -221,7 +236,7 @@ def test_delete_sensor(tmp_dongle_dir):
 def test_delete_sensor_also_removes_state(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_sensors()
     r.add_sensor("AAAAAAAA", "motion")
     r.ensure_state_entry("AAAAAAAA")
@@ -232,7 +247,7 @@ def test_delete_sensor_also_removes_state(tmp_dongle_dir):
 def test_delete_missing_sensor_returns_false(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_sensors()
     assert r.delete_sensor("ZZZZZZZZ") is False
 
@@ -240,7 +255,7 @@ def test_delete_missing_sensor_returns_false(tmp_dongle_dir):
 def test_update_sensor_type(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_sensors()
     r.add_sensor("AAAAAAAA", "switch")
 
@@ -251,7 +266,7 @@ def test_update_sensor_type(tmp_dongle_dir):
 def test_update_sensor_type_noop_same_value(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_sensors()
     r.add_sensor("AAAAAAAA", "motion")
     assert r.update_sensor_type("AAAAAAAA", "motion") is False
@@ -260,7 +275,7 @@ def test_update_sensor_type_noop_same_value(tmp_dongle_dir):
 def test_update_sensor_type_missing_mac(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_sensors()
     assert r.update_sensor_type("ZZZZZZZZ", "motion") is False
 
@@ -270,35 +285,30 @@ def test_update_sensor_type_missing_mac(tmp_dongle_dir):
 # ---------------------------------------------------------------------------
 
 
-def test_sensors_yaml_written_to_dongle_subdir(tmp_dongle_dir):
-    """sensors.yaml must be written to dongles/<mac>/ not the config root."""
+def test_sensors_yaml_written_to_data_dir(tmp_dongle_dir):
+    """sensors.yaml is written flat in the data dir."""
     import config as cfg_module
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_sensors()
     r.add_sensor("AAAAAAAA", "motion")
 
-    expected = cfg_module.dongle_data_path(TEST_DONGLE_MAC, "sensors.yaml")
+    expected = cfg_module.config_path("sensors.yaml")
     assert os.path.isfile(expected)
-    # Must NOT exist at config root
-    root_path = cfg_module.config_path("sensors.yaml")
-    assert not os.path.isfile(root_path)
 
 
-def test_state_yaml_written_to_dongle_subdir(tmp_dongle_dir):
-    """state.yaml must be written to dongles/<mac>/ not the config root."""
+def test_state_yaml_written_to_data_dir(tmp_dongle_dir):
+    """state.yaml is written flat in the data dir."""
     import config as cfg_module
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.ensure_state_entry("AAAAAAAA")
     r.save_state()
 
-    expected = cfg_module.dongle_data_path(TEST_DONGLE_MAC, "state.yaml")
+    expected = cfg_module.config_path("state.yaml")
     assert os.path.isfile(expected)
-    root_path = cfg_module.config_path("state.yaml")
-    assert not os.path.isfile(root_path)
 
 
 # ---------------------------------------------------------------------------
@@ -309,62 +319,65 @@ def test_state_yaml_written_to_dongle_subdir(tmp_dongle_dir):
 def test_state_round_trip(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.ensure_state_entry("AAAAAAAA")
     r.state["AAAAAAAA"]["online"] = False
     r.save_state()
 
-    r2 = SensorRegistry(TEST_DONGLE_MAC)
+    r2 = SensorRegistry()
     r2.load_state()
     assert r2.state["AAAAAAAA"]["online"] is False
 
 
-def test_stale_state_is_discarded(tmp_dongle_dir):
+def test_old_state_is_loaded_as_is(tmp_dongle_dir):
+    """State is never discarded for age — last_seen is an absolute timestamp,
+    so the per-type availability timeouts handle downtime naturally."""
     import config as cfg_module
-    from sensors import STALE_STATE_SECONDS, SensorRegistry
+    from sensors import SensorRegistry
 
-    path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, "state.yaml")
+    path = cfg_module.config_path("state.yaml")
     with open(path, "w") as f:
         yaml.safe_dump(
-            {"AAAAAAAA": {"last_seen": 0.0, "online": True}, "modified": time.time() - STALE_STATE_SECONDS - 1},
+            {"AAAAAAAA": {"last_seen": 0.0, "online": True}, "modified": 1.0},
             f,
         )
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_state()
-    assert r.state == {}
+    assert r.state["AAAAAAAA"]["last_seen"] == 0.0
+    assert "modified" not in r.state
 
 
 def test_fresh_state_is_loaded(tmp_dongle_dir):
     import config as cfg_module
     from sensors import SensorRegistry
 
-    path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, "state.yaml")
+    path = cfg_module.config_path("state.yaml")
     with open(path, "w") as f:
         yaml.safe_dump(
             {"AAAAAAAA": {"last_seen": time.time(), "online": True}, "modified": time.time()},
             f,
         )
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_state()
     assert "AAAAAAAA" in r.state
     assert r.state["AAAAAAAA"]["online"] is True
 
 
 # ---------------------------------------------------------------------------
-# SensorRegistry — reconcile_with_dongle / prune_state_to
+# SensorRegistry — reconcile_with_dongle / prune_state_for_dongle
 # ---------------------------------------------------------------------------
 
 
 def test_reconcile_adds_unknown_sensors(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_sensors()
     r.load_state()
 
-    auto = r.reconcile_with_dongle(["AAAAAAAA", "BBBBBBBB"])
+    auto = r.reconcile_with_dongle(TEST_DONGLE_MAC, ["AAAAAAAA", "BBBBBBBB"])
     assert set(auto) == {"AAAAAAAA", "BBBBBBBB"}
     assert "AAAAAAAA" in r.sensors
     assert "BBBBBBBB" in r.sensors
@@ -373,23 +386,23 @@ def test_reconcile_adds_unknown_sensors(tmp_dongle_dir):
 def test_reconcile_does_not_readd_known_sensors(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_sensors()
     r.add_sensor("AAAAAAAA", "motion")
     r.load_state()
 
-    auto = r.reconcile_with_dongle(["AAAAAAAA"])
+    auto = r.reconcile_with_dongle(TEST_DONGLE_MAC, ["AAAAAAAA"])
     assert "AAAAAAAA" not in auto
 
 
 def test_reconcile_skips_invalid_macs(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    r = SensorRegistry()
     r.load_sensors()
     r.load_state()
 
-    auto = r.reconcile_with_dongle(["00000000", "AAAAAAAA"])
+    auto = r.reconcile_with_dongle(TEST_DONGLE_MAC, ["00000000", "AAAAAAAA"])
     assert "00000000" not in auto
     assert "AAAAAAAA" in auto
 
@@ -397,24 +410,48 @@ def test_reconcile_skips_invalid_macs(tmp_dongle_dir):
 def test_prune_state_removes_unlinked(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
-    r.ensure_state_entry("AAAAAAAA")
-    r.ensure_state_entry("BBBBBBBB")
+    r = SensorRegistry()
+    r.ensure_state_entry("AAAAAAAA", TEST_DONGLE_MAC)
+    r.ensure_state_entry("BBBBBBBB", TEST_DONGLE_MAC)
+    r.ensure_state_entry("CCCCCCCC", "OTHERDGL")  # owned elsewhere
+    r.ensure_state_entry("DDDDDDDD")  # unowned
 
-    r.prune_state_to(["AAAAAAAA"])
-    assert "BBBBBBBB" not in r.state
+    r.prune_state_for_dongle(TEST_DONGLE_MAC, ["AAAAAAAA"])
+    assert "BBBBBBBB" not in r.state  # owned by this dongle, no longer linked
     assert "AAAAAAAA" in r.state
+    assert "CCCCCCCC" in r.state  # other dongles' entries are never touched
+    assert "DDDDDDDD" in r.state  # unowned entries are never touched
 
 
-def test_ensure_all_have_state(tmp_dongle_dir):
+def test_old_state_preserves_ownership(tmp_dongle_dir):
+    """Dongle ownership survives arbitrary downtime."""
+    import config as cfg_module
     from sensors import SensorRegistry
 
-    r = SensorRegistry(TEST_DONGLE_MAC)
+    path = cfg_module.config_path("state.yaml")
+    with open(path, "w") as f:
+        yaml.safe_dump(
+            {
+                "AAAAAAAA": {"last_seen": 0.0, "online": True, "dongle": "DONGLE_A"},
+                "modified": 1.0,
+            },
+            f,
+        )
+
+    r = SensorRegistry()
+    r.load_state()
+    assert r.owner_of("AAAAAAAA") == "DONGLE_A"
+
+
+def test_ensure_owned_have_state(tmp_dongle_dir):
+    from sensors import SensorRegistry
+
+    r = SensorRegistry()
     r.load_sensors()
     r.add_sensor("AAAAAAAA", "motion")
     r.add_sensor("BBBBBBBB", "switch")
 
-    r.ensure_all_have_state()
+    r.ensure_owned_have_state(TEST_DONGLE_MAC)
     assert "AAAAAAAA" in r.state
     assert "BBBBBBBB" in r.state
 
@@ -474,7 +511,7 @@ def test_chime_in_sensor_types():
 def test_add_sensor_sets_invert_state_false_by_default(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     reg.add_sensor("AAAAAAAA", "switch")
     assert reg.sensors["AAAAAAAA"]["invert_state"] is False
 
@@ -485,11 +522,11 @@ def test_load_sensors_backfills_invert_state(tmp_dongle_dir):
     import yaml
     from sensors import SensorRegistry
 
-    path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
+    path = cfg_module.config_path(cfg_module.SENSORS_CONFIG_FILE)
     with open(path, "w") as f:
         yaml.safe_dump({"AAAAAAAA": {"name": "Test", "sensor_type": "switch"}}, f)
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     reg.load_sensors()
     assert "invert_state" in reg.sensors["AAAAAAAA"]
     assert reg.sensors["AAAAAAAA"]["invert_state"] is False
@@ -501,11 +538,11 @@ def test_load_sensors_preserves_invert_state_true(tmp_dongle_dir):
     import yaml
     from sensors import SensorRegistry
 
-    path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
+    path = cfg_module.config_path(cfg_module.SENSORS_CONFIG_FILE)
     with open(path, "w") as f:
         yaml.safe_dump({"AAAAAAAA": {"name": "Test", "sensor_type": "switch", "invert_state": True}}, f)
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     reg.load_sensors()
     assert reg.sensors["AAAAAAAA"]["invert_state"] is True
 
@@ -516,11 +553,11 @@ def test_load_sensors_drops_legacy_timeout_key(tmp_dongle_dir):
     import yaml
     from sensors import SensorRegistry
 
-    path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
+    path = cfg_module.config_path(cfg_module.SENSORS_CONFIG_FILE)
     with open(path, "w") as f:
         yaml.safe_dump({"AAAAAAAA": {"name": "Test", "sensor_type": "switch", "timeout": 7200}}, f)
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     reg.load_sensors()
     assert "timeout" not in reg.sensors["AAAAAAAA"]
 
@@ -587,7 +624,7 @@ def test_invertible_sensor_types_excludes_leak_and_others():
 def test_add_pin_adds_to_empty_list(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     reg.add_sensor("KPADKPAD", "keypad")
     result = reg.add_pin("KPADKPAD", "1234")
     assert result is True
@@ -597,7 +634,7 @@ def test_add_pin_adds_to_empty_list(tmp_dongle_dir):
 def test_add_pin_no_duplicate(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     reg.add_sensor("KPADKPAD", "keypad")
     reg.add_pin("KPADKPAD", "1234")
     result = reg.add_pin("KPADKPAD", "1234")
@@ -608,7 +645,7 @@ def test_add_pin_no_duplicate(tmp_dongle_dir):
 def test_add_pin_multiple_pins(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     reg.add_sensor("KPADKPAD", "keypad")
     reg.add_pin("KPADKPAD", "1234")
     reg.add_pin("KPADKPAD", "5678")
@@ -618,7 +655,7 @@ def test_add_pin_multiple_pins(tmp_dongle_dir):
 def test_add_pin_unknown_mac_returns_false(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     result = reg.add_pin("UNKNOWN1", "1234")
     assert result is False
 
@@ -626,7 +663,7 @@ def test_add_pin_unknown_mac_returns_false(tmp_dongle_dir):
 def test_clear_pins_removes_all(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     reg.add_sensor("KPADKPAD", "keypad")
     reg.add_pin("KPADKPAD", "1234")
     reg.add_pin("KPADKPAD", "5678")
@@ -635,7 +672,7 @@ def test_clear_pins_removes_all(tmp_dongle_dir):
     assert reg.sensors["KPADKPAD"]["pins"] == []
 
     # Verify the empty list was persisted — reload from disk and check
-    reg2 = SensorRegistry(TEST_DONGLE_MAC)
+    reg2 = SensorRegistry()
     reg2.load_sensors()
     assert reg2.sensors["KPADKPAD"]["pins"] == []
 
@@ -643,7 +680,7 @@ def test_clear_pins_removes_all(tmp_dongle_dir):
 def test_clear_pins_when_empty_returns_false(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     reg.add_sensor("KPADKPAD", "keypad")
     result = reg.clear_pins("KPADKPAD")
     assert result is False
@@ -652,7 +689,7 @@ def test_clear_pins_when_empty_returns_false(tmp_dongle_dir):
 def test_clear_pins_unknown_mac_returns_false(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     result = reg.clear_pins("UNKNOWN1")
     assert result is False
 
@@ -660,7 +697,7 @@ def test_clear_pins_unknown_mac_returns_false(tmp_dongle_dir):
 def test_pin_count_empty(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     reg.add_sensor("KPADKPAD", "keypad")
     assert reg.pin_count("KPADKPAD") == 0
 
@@ -668,7 +705,7 @@ def test_pin_count_empty(tmp_dongle_dir):
 def test_pin_count_after_adds(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     reg.add_sensor("KPADKPAD", "keypad")
     reg.add_pin("KPADKPAD", "1234")
     reg.add_pin("KPADKPAD", "5678")
@@ -681,11 +718,11 @@ def test_pin_count_handles_legacy_string_pin(tmp_dongle_dir):
     import yaml
     from sensors import SensorRegistry
 
-    path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
+    path = cfg_module.config_path(cfg_module.SENSORS_CONFIG_FILE)
     with open(path, "w") as f:
         yaml.safe_dump({"KPADKPAD": {"name": "Keypad", "sensor_type": "keypad", "pins": "1234"}}, f)
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     reg.load_sensors()
     assert reg.pin_count("KPADKPAD") == 1
 
@@ -693,7 +730,7 @@ def test_pin_count_handles_legacy_string_pin(tmp_dongle_dir):
 def test_pin_count_unknown_mac_returns_zero(tmp_dongle_dir):
     from sensors import SensorRegistry
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     assert reg.pin_count("UNKNOWN1") == 0
 
 
@@ -703,11 +740,11 @@ def test_add_pin_handles_legacy_string_pin(tmp_dongle_dir):
     import yaml
     from sensors import SensorRegistry
 
-    path = cfg_module.dongle_data_path(TEST_DONGLE_MAC, cfg_module.SENSORS_CONFIG_FILE)
+    path = cfg_module.config_path(cfg_module.SENSORS_CONFIG_FILE)
     with open(path, "w") as f:
         yaml.safe_dump({"KPADKPAD": {"name": "Keypad", "sensor_type": "keypad", "pins": "1234"}}, f)
 
-    reg = SensorRegistry(TEST_DONGLE_MAC)
+    reg = SensorRegistry()
     reg.load_sensors()
     reg.add_pin("KPADKPAD", "5678")
     pins = reg.sensors["KPADKPAD"]["pins"]

@@ -29,6 +29,13 @@ import pathlib
 import signal
 import sys
 
+# Dev/git-clone convenience: shared modules (dongle_protocol, device_discovery)
+# live in ../shared when running from the repo tree.  Docker images and release
+# packages flatten shared/ into the app directory, making this a no-op there.
+_shared = pathlib.Path(__file__).resolve().parent.parent / "shared"
+if _shared.is_dir():
+    sys.path.insert(0, str(_shared))
+
 
 def _handle_sigterm(signum, frame):
     raise KeyboardInterrupt
@@ -54,20 +61,30 @@ def main() -> None:
     )
     parser.add_argument(
         "--dongle",
-        default=_env("WS2M_DONGLE", "auto"),
+        default=_env("WS2M_DONGLE"),
         metavar="PATH",
-        help='HID device path or "auto"  [env: WS2M_DONGLE]',
+        help='HID device path, a directory of device nodes, or "auto"  [env: WS2M_DONGLE]',
     )
     parser.add_argument(
         "--log-level",
-        default=_env("WS2M_LOG_LEVEL", "INFO"),
+        default=_env("WS2M_LOG_LEVEL"),
         metavar="LEVEL",
         help="Logging level  [env: WS2M_LOG_LEVEL]",
     )
     args = parser.parse_args()
 
+    data_dir = pathlib.Path(_env("WS2M_DATA_DIR", "/app/data") or "/app/data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    from remote import Remote, _discover_hub_via_mdns, _load_or_create_remote_id, load_saved_setting
+
+    # Settings changed from HA are persisted under data_dir and used as the
+    # default; env vars / CLI flags pin the value and take precedence.
+    log_level = args.log_level or load_saved_setting(data_dir, "log_level") or "INFO"
+    dongle = args.dongle or load_saved_setting(data_dir, "dongle") or "auto"
+
     logging.basicConfig(
-        level=getattr(logging, (args.log_level or "INFO").upper(), logging.INFO),
+        level=getattr(logging, log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)-8s %(name)-25s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         stream=sys.stdout,
@@ -76,8 +93,6 @@ def main() -> None:
     print("WyzeSense2MQTT remote starting — logs follow")
 
     from frame_queue import InMemoryFrameQueue
-
-    from remote import Remote, _discover_hub_via_mdns, _load_or_create_remote_id
 
     hub_url = args.hub_url
     if not hub_url:
@@ -89,24 +104,20 @@ def main() -> None:
             logger.error("mDNS discovery timed out — set WS2M_HUB_URL to connect directly")
             sys.exit(1)
 
-    data_dir = pathlib.Path(_env("WS2M_DATA_DIR", "/app/data") or "/app/data")
-    data_dir.mkdir(parents=True, exist_ok=True)
-
     # Load or create the stable remote UUID (unless overridden via env/flag)
     remote_id = _load_or_create_remote_id(data_dir)
     logger.info(f"Remote ID: {remote_id}")
 
-    queue = InMemoryFrameQueue(
-        max_seconds=float(_env("WS2M_QUEUE_MAX_SECONDS", "10") or 10),
-        max_frames=int(_env("WS2M_QUEUE_MAX_FRAMES", "500") or 500),
-    )
+    # Each dongle relay gets its own replay queue
+    queue_max_seconds = float(_env("WS2M_QUEUE_MAX_SECONDS", "10") or 10)
+    queue_max_frames = int(_env("WS2M_QUEUE_MAX_FRAMES", "500") or 500)
 
     remote = Remote(
         hub_url=hub_url,
         remote_id=remote_id,
         data_dir=data_dir,
-        device=args.dongle or "auto",
-        queue=queue,
+        device=dongle,
+        queue_factory=lambda: InMemoryFrameQueue(max_seconds=queue_max_seconds, max_frames=queue_max_frames),
         handshake_frame_count=int(_env("WS2M_HANDSHAKE_FRAMES", "10") or 10),
         logger=logger,
     )

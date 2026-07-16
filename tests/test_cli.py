@@ -15,10 +15,8 @@ import pytest
 
 
 def test_dongle_tool_help_exits_zero():
-    import sys
     from unittest.mock import patch
 
-    sys.path.insert(0, "wyzesense2mqtt")
     import cli.dongle_tool as dt
 
     with pytest.raises(SystemExit) as exc:
@@ -158,3 +156,63 @@ def test_mqtt_tool_unknown_command_exits_nonzero():
     with pytest.raises(SystemExit) as exc:
         mt.build_parser().parse_args(["not-a-command"])
     assert exc.value.code != 0
+
+
+# ---------------------------------------------------------------------------
+# cli/mqtt_tool.py — discovery topic identification
+# ---------------------------------------------------------------------------
+
+
+class TestIsOurTopic:
+    def _v2_payload(self, mac):
+        return {"components": {"state": {"unique_id": f"wyzesense_{mac}_state"}}}
+
+    def test_recognizes_v2_device_topic(self):
+        """v2 sensor discovery topics use device_id ws2m_sensor_<mac>."""
+        from cli.mqtt_tool import _is_our_topic
+
+        topic = "homeassistant/device/ws2m_sensor_AABBCCDD/config"
+        assert _is_our_topic(topic, "ws2m_sensor_AABBCCDD", self._v2_payload("AABBCCDD")) == "AABBCCDD"
+
+    def test_recognizes_v1_per_entity_topic(self):
+        from cli.mqtt_tool import _is_our_topic
+
+        topic = "homeassistant/sensor/wyzesense_AABBCCDD/battery/config"
+        payload = {"unique_id": "wyzesense_AABBCCDD_battery"}
+        assert _is_our_topic(topic, "wyzesense_AABBCCDD", payload) == "AABBCCDD"
+
+    def test_rejects_bridge_device(self):
+        from cli.mqtt_tool import _is_our_topic
+
+        topic = "homeassistant/binary_sensor/wyzesense_bridge_AABBCCDD/connection_state/config"
+        assert _is_our_topic(topic, "wyzesense_bridge_AABBCCDD", {}) is None
+
+    def test_rejects_foreign_device(self):
+        from cli.mqtt_tool import _is_our_topic
+
+        assert _is_our_topic("homeassistant/device/zigbee2mqtt_x/config", "zigbee2mqtt_x", {}) is None
+
+    def test_rejects_mismatched_unique_ids(self):
+        from cli.mqtt_tool import _is_our_topic
+
+        payload = {"components": {"state": {"unique_id": "someone_else_entirely"}}}
+        topic = "homeassistant/device/ws2m_sensor_AABBCCDD/config"
+        assert _is_our_topic(topic, "ws2m_sensor_AABBCCDD", payload) is None
+
+
+class TestSchemaFromTopic:
+    def test_v2_device_topic(self):
+        from cli.mqtt_tool import _schema_from_topic
+
+        assert _schema_from_topic("homeassistant/device/ws2m_sensor_AABBCCDD/config", "homeassistant") == "v2"
+
+    def test_v1_per_entity_topic(self):
+        from cli.mqtt_tool import _schema_from_topic
+
+        result = _schema_from_topic("homeassistant/sensor/wyzesense_AABBCCDD/battery/config", "homeassistant")
+        assert result.startswith("v1")
+
+    def test_respects_custom_hass_root(self):
+        from cli.mqtt_tool import _schema_from_topic
+
+        assert _schema_from_topic("ha/discovery/device/ws2m_sensor_X/config", "ha/discovery") == "v2"

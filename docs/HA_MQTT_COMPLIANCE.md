@@ -95,23 +95,29 @@ Values are hardcoded per message type for correctness:
 
 ## Discovery payload tagging & manual cleanup
 
-Every device discovery payload now includes:
-
-- `origin.name: "WyzeSense2MQTT"` — identifies the payload as ours.
-- `schema_version: <DISCOVERY_SCHEMA_VERSION>` — the schema version it was
-  published with.
-
-HA ignores these as unrecognized top-level keys, but they're used by tooling
-(see below) to find and identify our retained discovery topics on the
-broker.
+Every device discovery payload includes `origin.name: "WyzeSense2MQTT"`,
+which identifies the payload as ours. `origin` is part of the HA device
+discovery schema, so this is the only tagging the payload can carry — HA
+validates device discovery payloads strictly and **rejects unknown top-level
+keys** ("extra keys not allowed"), so no custom keys (such as an embedded
+schema version) may ever be added to a discovery payload. The discovery
+schema version is instead tracked in `migrations.yaml` and is derivable from
+the topic path itself: v2 topics live under
+`<hass_topic_root>/device/ws2m_sensor_<mac>/config`, while v1 topics used the
+legacy per-entity `<hass_topic_root>/<platform>/wyzesense_<mac>/<entity>/config`
+form. Tooling (see below) uses the topic path plus `origin.name` and the
+`wyzesense_<mac>_*` component unique_ids to find and identify our retained
+discovery topics on the broker.
 
 Additionally, the sensor data payload (published to
-`<self_topic_root>/<mac>`) includes `wyzesense2mqtt_version` and
-`discovery_schema_version`. Since several entities use
+`<self_topic_root>/sensor/<mac>`) includes `ws2m_version` and
+`ws2m_discovery_schema`. Since several entities use
 `json_attributes_topic` pointing at this topic, these show up as entity
 attributes in HA — a quick visual check that a device is running the schema
 you expect, and a hint that something's stale if a device's attributes show
-an old `discovery_schema_version` after an upgrade.
+an old `ws2m_discovery_schema` after an upgrade. Data payloads are not
+validated by HA, so metadata keys are safe there; keypad `pins` are stripped
+before publishing so PIN codes never appear on the broker.
 
 ### `cleanup-discovery` CLI
 
@@ -120,19 +126,19 @@ present in a dongle's `sensors.yaml`. If a sensor was removed by hand (edited ou
 `sensors.yaml`/`state.yaml` after a failed unpair, rather than via the
 `remove` MQTT topic), its discovery topic(s) can be orphaned indefinitely.
 
-This is implemented in **`cli/maintenance.py`** (not the main bridge process,
+This is implemented in **`cli/mqtt_tool.py`** (not the main bridge process,
 which should be invoked via `__main__.py` or `service.sh`):
 
 ```
-python3 -m cli.maintenance cleanup-discovery [--apply] [--listen-seconds N]
+python3 -m cli.mqtt_tool cleanup-discovery [--apply] [--listen-seconds N]
 ```
 
 This subscribes to all known discovery wildcards — both the current
 device-based format and the legacy per-entity format, since they live under
 different topic paths:
 
-- v2: `homeassistant/device/+/config`  (covers sensor, service, and dongle devices;
-       the tool filters to `wyzesense_<mac>` device-ids only)
+- v2: `homeassistant/device/+/config`  (covers sensor, hub, remote, and dongle
+       devices; the tool filters to `ws2m_sensor_<mac>` device-ids only)
 - v1: `homeassistant/sensor/+/+/config`, `homeassistant/binary_sensor/+/+/config`
 
 then waits (`--listen-seconds`, default 5) for the broker to replay retained
@@ -140,10 +146,11 @@ messages (there's no "list retained topics" API — this is the same approach
 a tool like MQTT Explorer uses under the hood). It then:
 
 - Filters to payloads that look like ours: the device-id topic segment is
-  `wyzesense_<mac>` (and not `wyzesense_bridge_...`), and a `unique_id` in
-  the payload starts with `wyzesense_<mac>_`. (v1 payloads predate the
-  `origin` tag, so identification relies on the topic/unique_id naming
-  convention rather than `origin.name`.)
+  `ws2m_sensor_<mac>` (v2) or `wyzesense_<mac>` (v1, and not
+  `wyzesense_bridge_...`), and a `unique_id` in the payload starts with
+  `wyzesense_<mac>_`. (v1 payloads predate the `origin` tag, so
+  identification relies on the topic/unique_id naming convention rather than
+  `origin.name`.)
 - Flags any whose MAC isn't in any dongle's `sensors.yaml`.
 - Without `--apply`, just lists what it found (dry run).
 - With `--apply`, clears the found topic(s) plus any other schema versions'

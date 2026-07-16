@@ -43,23 +43,40 @@ two devices: `ws2m_hub_<uuid>` (software) and `ws2m_dongle_<mac>`
 topics automatically (schema v1→v2). Delete the stale bridge device from HA's
 device registry manually after upgrading.
 
-**Sensor data directory restructured** — sensor files have moved from
-`<data>/sensors.yaml` and `<data>/state.yaml` to
-`<data>/dongles/<dongle_mac>/sensors.yaml` and `state.yaml`. Existing flat
-files are migrated automatically on first start.
-
 **Scan and remove MQTT topics are now dongle-scoped** — `ws2m/scan` and
 `ws2m/remove` are now `ws2m/dongle/<mac>/scan` and `ws2m/dongle/<mac>/remove`.
+
+**Shared code moved to `shared/`** — `dongle_protocol.py` and the new
+`device_discovery.py` are shared by the hub and the remote. Docker images and
+release packages flatten `shared/` alongside the app code, so nothing changes
+for Docker users; git-clone native installs must keep `shared/` next to
+`hub/`/`remote/` (the entry points pick it up automatically).
 
 **Python 3.12+ required.**
 
 ### Added
 
-- **Remote bridge** — a new `ws2m-remote` image runs on any machine with a
-  USB WyzeSense dongle and forwards raw HID frames to the hub over an
-  authenticated WebSocket. The hub runs the full sensor protocol; the remote
-  is fully transparent. Supports hot-reconnect with a replay buffer (10 s TTL,
-  500-frame ring buffer) so brief network disruptions do not drop sensor events.
+- **Sensor fleet visibility** — the hub device gains **Paired sensors**
+  (distinct sensors reported paired by currently-connected dongles) and
+  **Configured sensors** (registry entries) diagnostic entities, plus a
+  **Cleanup orphaned sensors** button that removes registry entries and
+  retained topics for sensors no longer paired to any connected dongle. A gap
+  between the two counts is the signal that something stale exists.
+- **Staged orphan lifecycle** — an hourly sweep marks sensors that are no
+  longer paired to any connected dongle (their entities simply show
+  unavailable; config is untouched, and everything reactivates automatically
+  if the sensor, dongle, or remote returns). Sensors orphaned continuously
+  for longer than `orphan_retention_days` (default 7; 0 disables) have their
+  retained topics cleared and registry entries removed automatically. The
+  retention window is adjustable live via the **Orphan retention** number
+  entity on the hub device (or `orphan_retention_days` in config).
+- **Remote bridge** — a new `ws2m-remote` image runs on any machine with one
+  or more USB WyzeSense dongles and forwards raw HID frames to the hub over
+  authenticated WebSockets (one connection per dongle, so dongles are fully
+  independent of each other). The hub runs the full sensor protocol; the
+  remote is fully transparent. Each dongle supports hot-reconnect with its own
+  replay buffer (10 s TTL, 500-frame ring buffer) so brief network disruptions
+  do not drop sensor events.
   Remotes auto-discover the hub via mDNS (`_ws2m._tcp.local.`) when
   `WS2M_HUB_URL` is not set — useful for simple single-hub setups. Set
   `WS2M_HUB_URL` explicitly when crossing VLANs or in Docker without host
@@ -68,14 +85,24 @@ files are migrated automatically on first start.
   hub device also exposes a **WebSocket remote listener** switch for toggling
   this at runtime. Activate pairing mode via the `ws2m/hub/<uuid>/remote_pair` button
   in HA to adopt new remotes — no pre-shared secret is required. Each remote
-  appears in HA with `health` (healthy/degraded), `connected_dongles`
-  (count of relayed dongles), a `Restart` button, and a **Remove remote** button
-  that clears all MQTT topics for the remote and its entire dongle and sensor chain.
+  appears in HA with `health` (healthy/degraded, aggregated across its
+  dongles), `connected_dongles` (count of relayed dongles), a `Restart`
+  button, a dongle selector and log level (both persisted on the remote and
+  applied at startup; `WS2M_DONGLE`/`WS2M_LOG_LEVEL` env vars pin them), and a
+  **Remove remote** button that clears all MQTT topics for the remote and its
+  entire dongle and sensor chain.
   See `examples/hub/` and `examples/remote/` for compose and service file examples.
 - **Multi-dongle support** — `dongle: auto` (the default) connects to all
-  WyzeSense bridge dongles at startup. Each gets its own worker with independent
-  sensor registry and dongle-scoped MQTT topics. Explicit paths (`/dev/hidrawN`)
-  remain supported.
+  WyzeSense bridge dongles at startup, on the hub and on remotes alike. Each
+  gets its own worker and dongle-scoped MQTT topics. Explicit paths (`/dev/hidrawN`)
+  remain supported, and `dongle` may also be set to a directory (e.g.
+  `/dev/ws2m-dongles`) to use every device node inside it — pairs with the
+  example udev rule in `examples/99-ws2m-dongles.rules.example`, which collects
+  all WyzeSense dongles into one folder that can be bind mounted into a
+  container (see the compose examples for the matching `device_cgroup_rules`).
+  Auto-detection prefers the canonical `/dev/hidrawN` node and returns exactly
+  one path per physical dongle, so a dongle reachable via both its canonical
+  node and a udev alias is never opened twice.
 - **HA device hierarchy** — three-level device tree: `ws2m_hub_<uuid>` →
   `ws2m_dongle_<mac>` → `wyzesense_<mac>`, linked via `via_device` so HA shows
   the full chain. A stable hub UUID is generated on first run and persisted
@@ -83,7 +110,8 @@ files are migrated automatically on first start.
 - **Wyze Sense Keypad v2 (WSKP1)** — publishes arm/disarm mode, motion, and PIN
   events to MQTT. Creates an `alarm_control_panel` and `motion` binary sensor in
   HA. Supports PIN validation and pushes state back to the keypad display/LEDs
-  via `CMD_SEND_KEYPAD_EVENT`. See [docs/keypad.md](docs/keypad.md).
+  via `CMD_SEND_KEYPAD_EVENT`. PIN codes are stored only in `sensors.yaml` and
+  are never published to MQTT. See [docs/keypad.md](docs/keypad.md).
 - **Wyze Video Doorbell V1 Chime (WCHIME1)** — play button and number entities
   for ring tone (0–255), volume (1–9), and repeat count (1–9). Values persist to
   `sensors.yaml`. Ring tone IDs are undocumented; see
@@ -100,10 +128,13 @@ files are migrated automatically on first start.
   [raetha/home-assistant-apps](https://github.com/raetha/home-assistant-apps).
   `service.sh` detects `/data/options.json` and loads config automatically,
   including Mosquitto broker auto-discovery via the Supervisor API.
-- **Docker `HEALTHCHECK`** — the bridge writes and periodically touches
-  `/tmp/ws2m_healthy` while running; removes it on failure. Container flips
-  unhealthy within ~90 s of a dongle failure or process hang.
-- **Test suite** — 540 unit and integration tests covering all modules.
+- **Docker `HEALTHCHECK`** — both images write and periodically touch
+  `/tmp/ws2m_healthy` while running. Health is strictly scoped to each
+  container's own area: the hub flips unhealthy within ~90 s of a process hang
+  or when every *local* dongle has failed (remote problems never degrade the
+  hub — they surface on the remote and dongle devices in HA); the remote flips
+  unhealthy when every dongle it relays is lost.
+- **Test suite** — 590 unit, integration, and hardware tests covering all modules.
   Hardware smoke tests behind `pytest -m dongle`. Run with
   `bash scripts/run_tests.sh`.
 - **`cli/mqtt_tool.py`** — MQTT maintenance CLI: `cleanup-discovery` finds
@@ -130,6 +161,20 @@ files are migrated automatically on first start.
 
 ### Changed
 
+- **Global sensor registry** — `<data>/sensors.yaml` and `<data>/state.yaml`
+  hold the whole sensor fleet across every dongle (local and remote); 3.1.0
+  files load as-is. Sensor configuration (name, class, invert_state, PINs,
+  chime settings) is a property of the sensor and follows it if it is
+  re-paired to a different dongle; the owning dongle is recorded per entry in
+  `state.yaml` and transfers automatically when events arrive via a different
+  dongle (HA `via_device` updates on the fly). When ownership transfers and
+  the old dongle is still connected, the stale pairing is deleted from the old
+  dongle's NVRAM so only the active link exists anywhere. All registry writes
+  are atomic and serialised, so concurrent updates from multiple dongles can
+  never corrupt the files. Sensor state is never discarded for age —
+  `last_seen` values are absolute timestamps, so the per-sensor-type
+  availability timeouts (4 h / 8 h / 24 h) handle any length of downtime
+  naturally.
 - **Major package refactor** — `wyzesense2mqtt.py` (881-line monolith) replaced
   by a structured package: `config.py`, `sensors.py`, `mqtt.py`,
   `dongle_protocol.py` (renamed from `wyzesense.py`, fully snake_cased),
@@ -139,7 +184,7 @@ files are migrated automatically on first start.
   `ws2m/hub/<uuid>/` (UUID included for multi-hub support). Old flat-root
   sensor and dongle topics are cleared as retained on first 4.0 start.
 - **HA MQTT discovery** upgraded to device-based format
-  (`homeassistant/device/wyzesense_<mac>/config` with `components`), supported
+  (`homeassistant/device/ws2m_sensor_<mac>/config` with `components`), supported
   since HA 2024.4. Adds `has_entity_name`, `origin`, `suggested_display_precision`,
   and versioned schema migration tracked in `migrations.yaml`.
 - Sensor availability now includes both the sensor's own heartbeat topic and its
@@ -165,21 +210,24 @@ files are migrated automatically on first start.
 - **USB dongle disconnect** — an `OSError` from the HID read loop was previously
   swallowed silently, leaving the worker spinning indefinitely with no output.
   The error now propagates: the bridge logs it, publishes the dongle and all
-  attached sensors offline, saves state, and marks the container unhealthy.
-  Remaining healthy workers continue unaffected.
+  attached sensors offline, and saves state. Remaining healthy workers
+  continue unaffected; the container is marked unhealthy only if every local
+  dongle has failed.
 - **`invert_state` re-implemented** — present in `sensors.yaml` since v1.1 but
   dropped from bridge logic in v3.1.0. Now applied correctly: swaps
   `payload_on`/`payload_off` in HA discovery for contact and motion sensors.
 - Non-ASCII MAC bytes no longer crash event parsing; decoded via latin-1 with a
   warning.
-
 ### Migration notes
 
-Existing `config.yaml`, `sensors.yaml`, and `state.yaml` files are compatible —
-no manual changes required. Removed config keys (`mqtt_qos`, `mqtt_retain`,
-`publish_sensor_name`, per-sensor `timeout`) are silently stripped on first load.
-`migrations.yaml` records `discovery_schema_version: 2` after the v1→v2
-migration runs; subsequent starts skip the migration.
+Existing 3.1.0 `config.yaml`, `sensors.yaml`, and `state.yaml` files are
+compatible — no manual changes required; sensors are claimed by their dongle
+on first start. Removed config keys (`mqtt_qos`, `mqtt_retain`,
+`publish_sensor_name`, per-sensor `timeout`) are silently stripped on first
+load. `migrations.yaml` records `discovery_schema_version: 2` after the v1→v2
+migration runs; subsequent starts skip the migration. Interim 4.0.0-devel
+per-dongle `dongles/<mac>/` directories are merged into the flat registry
+files automatically (originals kept at `dongles.migrated/`).
 
 ## [3.1.0] — 2026-06-13
 

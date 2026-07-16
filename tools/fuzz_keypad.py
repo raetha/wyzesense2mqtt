@@ -476,7 +476,8 @@ def main() -> None:
         "--mac",
         required=True,
         metavar="MAC",
-        help="Keypad MAC address (8 alphanumeric chars, e.g. KPADKPAD). Run 'python3 -m wyzesense2mqtt bridge_tool list' to find it.",
+        help="Keypad MAC address (8 alphanumeric chars, e.g. KPADKPAD). "
+        "Run 'python3 -m hub dongle_tool list' to find it.",
     )
     parser.add_argument(
         "--log-file",
@@ -501,7 +502,8 @@ def main() -> None:
     parser.add_argument(
         "--no-skip",
         action="store_true",
-        help="Do not skip known command IDs in Pass 1. Useful if you want to observe known-command responses for comparison. CMD_DEL_ALL_SENSORS is always skipped regardless.",
+        help="Do not skip known command IDs in Pass 1. Useful if you want to observe "
+        "known-command responses for comparison. CMD_DEL_ALL_SENSORS is always skipped regardless.",
     )
 
     # Pass 1 options
@@ -545,7 +547,8 @@ def main() -> None:
         type=int,
         default=1,
         metavar="N",
-        help="Number of payload bytes after the MAC to sweep [default: 1]. 1 = 256 combos, 2 = 65536, 3 = 16M (impractical).",
+        help="Number of payload bytes after the MAC to sweep [default: 1]. "
+        "1 = 256 combos, 2 = 65536, 3 = 16M (impractical).",
     )
 
     args = parser.parse_args()
