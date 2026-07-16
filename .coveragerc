@@ -1,0 +1,8 @@
+[run]
+omit =
+    # Entry point — requires full bridge stack to exercise
+    wyzesense2mqtt/__main__.py
+
+[report]
+omit =
+    wyzesense2mqtt/__main__.py

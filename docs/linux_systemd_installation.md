@@ -1,46 +1,146 @@
 # Linux Systemd Installation
 
-The gateway can also be run as a systemd service for those not wanting to use Docker. Requires Python 3.6 or newer. You may need to do all commands as root, depending on filesystem permissions. This is NOT actively tested, please submit an issue or PR if you experience problems.
-1. Plug the Wyze Sense Bridge into a USB port on the Linux host.
-2. Pull down a copy of the repository
+This document covers running `ws2m-hub` and `ws2m-remote` as native systemd services without Docker. Requires Python 3.12 or newer. You may need to run commands as root depending on filesystem permissions.
+
+> **Note:** This installation method is not actively tested. Docker is the recommended and supported deployment method. Please submit an issue or PR if you encounter problems.
+
+## Table of Contents
+- [Hub](#hub)
+- [Remote Bridge](#remote-bridge)
+
+---
+
+## Hub
+
+### 1. Plug in the Wyze Sense Bridge
+
+Connect the USB dongle to the Linux host.
+
+### 2. Download the hub package
+
+Download the latest release from the [GitHub Releases page](https://github.com/raetha/wyzesense2mqtt/releases). Replace `X.Y.Z` with the version you want:
+
 ```bash
-cd /tmp
-git clone https://github.com/raetha/wyzesense2mqtt.git
+VERSION=X.Y.Z
+wget "https://github.com/raetha/wyzesense2mqtt/releases/download/v${VERSION}/ws2m-hub-${VERSION}.tar.gz"
+mkdir -p /opt/ws2m/hub
+tar -xzf "ws2m-hub-${VERSION}.tar.gz" -C /opt/ws2m/hub/
 ```
-3. Create local application folders (Select a location that works for you, example uses /opt/wyzesense2mqtt)
+
+### 3. Install hub dependencies
+
 ```bash
-mv /tmp/wyzesense2mqtt/wyzesense2mqtt /opt/wyzesense2mqtt
-rm -rf /tmp/wyzesense2mqtt
-cd /opt/wyzesense2mqtt
-mkdir config
-mkdir logs
+pip3 install -r /opt/ws2m/hub/requirements.txt
 ```
-4. Prepare config.yaml file. You must set MQTT host parameters! Username and password can be blank if unused. (see example below)
+
+### 4. Create the data directory
+
 ```bash
-cp samples/config.yaml config/config.yaml
-vim config/config.yaml
+mkdir -p /opt/ws2m/data
 ```
-5. Modify logging.yaml file if desired (optional)
-```bash
-cp samples/logging.yaml config/logging.yaml
-vim config/logging.yaml
+
+### 5. Create configuration
+
+Create `/opt/ws2m/data/config.yaml`. You must set at minimum `mqtt_host`:
+
+```yaml
+mqtt_host: <your-broker>
+mqtt_username: <user>
+mqtt_password: <password>
+log_level: INFO
 ```
-6. If desired, pre-populate a sensors.yaml file with your existing sensors. This file will automatically be created if it doesn't exist. (see example below) (optional)
+
+Alternatively, set configuration via environment variables (`WS2M_MQTT_HOST`, etc.) in the systemd service file.
+
+### 6. Install the systemd service
+
+An example service file is included in the release package at `ws2m-hub.service.example`
+(also available in [`examples/hub/`](../examples/hub/) in the repository). Copy and install it:
+
 ```bash
-cp samples/sensors.yaml config/sensors.yaml
-vim config/sensors.yaml
+sudo cp /opt/ws2m/hub/ws2m-hub.service.example /etc/systemd/system/ws2m-hub.service
 ```
-7. Install dependencies
+
+Review and edit the installed file if your installation path differs from `/opt/ws2m/hub`.
+
+### 7. Start and enable the service
+
 ```bash
-sudo pip3 install -r requirements.txt
-```
-8. Configure the service
-```bash
-vim wyzesense2mqtt.service # Only modify if not using default application path
-sudo cp wyzesense2mqtt.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl start wyzesense2mqtt
-sudo systemctl status wyzesense2mqtt
-sudo systemctl enable wyzesense2mqtt # Enable start on reboot
+sudo systemctl start ws2m-hub
+sudo systemctl enable ws2m-hub
+sudo systemctl status ws2m-hub
 ```
-9. Pair sensors following the instructions at [Paring a Sensor](/readme.md#pairing-a-sensor). You do NOT need to re-pair sensors that were already paired, they should be found automatically on start and added to the config file with default values, though the sensor version will be unknown and the class will default to opening, i.e. a contact sensor. You should manually update these entries.
+
+### 8. View logs
+
+```bash
+journalctl -u ws2m-hub -f
+```
+
+### 9. Pair sensors
+
+Follow the [pairing instructions](../README.md#pairing-a-sensor) in the main README.
+
+---
+
+## Remote Bridge
+
+Run `ws2m-remote` on the machine that physically holds the WyzeSense USB dongle.
+
+### 1. Plug in the Wyze Sense Bridge
+
+Connect the USB dongle to the remote Linux host.
+
+### 2. Download the remote package
+
+Download the latest release from the [GitHub Releases page](https://github.com/raetha/wyzesense2mqtt/releases). Replace `X.Y.Z` with the version you want:
+
+```bash
+VERSION=X.Y.Z
+wget "https://github.com/raetha/wyzesense2mqtt/releases/download/v${VERSION}/ws2m-remote-${VERSION}.tar.gz"
+mkdir -p /opt/ws2m/remote
+tar -xzf "ws2m-remote-${VERSION}.tar.gz" -C /opt/ws2m/remote/
+```
+
+### 3. Install remote dependencies
+
+```bash
+pip3 install -r /opt/ws2m/remote/requirements.txt
+```
+
+### 4. Create the data directory
+
+```bash
+mkdir -p /opt/ws2m/remote-data
+```
+
+### 5. Install the systemd service
+
+An example service file is included in the release package at `ws2m-remote.service.example`
+(also available in [`examples/remote/`](../examples/remote/) in the repository). Copy and install it:
+
+```bash
+sudo cp /opt/ws2m/remote/ws2m-remote.service.example /etc/systemd/system/ws2m-remote.service
+```
+
+Review the installed file and uncomment/set `WS2M_HUB_URL` if mDNS discovery is not available on your network.
+
+### 6. Start and enable the service
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl start ws2m-remote
+sudo systemctl enable ws2m-remote
+sudo systemctl status ws2m-remote
+```
+
+### 7. View logs
+
+```bash
+journalctl -u ws2m-remote -f
+```
+
+### 8. Adopt the remote
+
+Follow the [adoption instructions](../README.md#adopting-a-remote) in the main README. The hub must have `hub_ws_enabled: true` in its configuration.
