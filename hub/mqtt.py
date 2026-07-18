@@ -311,10 +311,9 @@ def _build_chime_components(sensor_mac: str, sensor: dict, mac_topic: str) -> di
     return {
         "play": {
             "platform": "button",
-            "name": None,
+            "name": "Play sound",
             "command_topic": f"{mac_topic}/play",
             "payload_press": "PLAY",
-            "device_class": "sound",
         },
         "ring_id": {
             "platform": "number",
