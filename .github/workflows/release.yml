@@ -166,7 +166,7 @@ jobs:
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch sync to home-assistant-apps
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ secrets.HA_APPS_PAT }}
           repository: raetha/home-assistant-apps
