@@ -5,6 +5,7 @@ and discovery schema migration.
 MqttGateway tests use unittest.mock to avoid needing a real broker.
 """
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -108,7 +109,7 @@ def test_climate_sensor_components_structure():
 def test_signal_strength_disabled_by_default():
     from mqtt import _build_diagnostic_components
 
-    components = _build_diagnostic_components()
+    components = _build_diagnostic_components("motion")
     assert components["signal_strength"].get("enabled_by_default") is False
     assert "enabled_by_default" not in components["battery"]
 
@@ -116,7 +117,7 @@ def test_signal_strength_disabled_by_default():
 def test_diagnostic_components_present():
     from mqtt import _build_diagnostic_components
 
-    components = _build_diagnostic_components()
+    components = _build_diagnostic_components("motion")
     assert "signal_strength" in components
     assert "battery" in components
     assert components["signal_strength"]["device_class"] == "signal_strength"
@@ -127,10 +128,31 @@ def test_diagnostic_components_present():
 def test_diagnostic_components_returns_fresh_dicts():
     from mqtt import _build_diagnostic_components
 
-    first = _build_diagnostic_components()
-    second = _build_diagnostic_components()
+    first = _build_diagnostic_components("motion")
+    second = _build_diagnostic_components("motion")
     first["battery"]["unique_id"] = "wyzesense_AABBCCDD_battery"
     assert "unique_id" not in second["battery"]
+
+
+def test_diagnostic_components_chime_excludes_battery():
+    """Chime is plug-in only; battery/battery_voltage must not be published."""
+    from mqtt import _build_diagnostic_components
+
+    components = _build_diagnostic_components("chime")
+    assert "battery" not in components
+    assert "battery_voltage" not in components
+    # Still applicable regardless of power source:
+    assert "signal_strength" in components
+    assert "die_temp" in components
+
+
+def test_diagnostic_components_non_chime_includes_battery():
+    from mqtt import _build_diagnostic_components
+
+    for sensor_type in ("motion", "motionv2", "switch", "switchv2", "leak", "climate", "keypad"):
+        components = _build_diagnostic_components(sensor_type)
+        assert "battery" in components, sensor_type
+        assert "battery_voltage" in components, sensor_type
 
 
 def test_sensor_action_components_returns_fresh_dicts():
@@ -898,6 +920,18 @@ def test_publish_sensor_discovery_chime(sample_config, tmp_config_dir):
     assert mock_client.publish.called
     topic_args = [call.args[0] for call in mock_client.publish.call_args_list]
     assert any("ws2m_sensor_CHIMEMAC" in t for t in topic_args)
+
+    discovery_call = next(
+        call
+        for call, topic in zip(mock_client.publish.call_args_list, topic_args, strict=True)
+        if "ws2m_sensor_CHIMEMAC" in topic
+    )
+    payload = json.loads(discovery_call.kwargs["payload"])
+    components = payload["components"]
+    assert "battery" not in components
+    assert "battery_voltage" not in components
+    assert components["play"]["name"] == "Play sound"
+    assert "device_class" not in components["play"]
 
 
 # ---------------------------------------------------------------------------

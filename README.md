@@ -291,7 +291,7 @@ These can also be set directly in `sensors.yaml` and applied via [Reload](#reloa
 
 The **Keypad v2** (WSKP1) creates an `alarm_control_panel` entity, a `motion` binary sensor, and PIN management entities (`PIN count` sensor, `Arm PIN capture` button, `Clear all PINs` button). To add a PIN: press **Arm PIN capture** in HA, then enter the PIN on the physical keypad — ws2m captures it and adds it to the configured list automatically. See [docs/keypad.md](docs/keypad.md) for full setup instructions including entry/exit delay handling.
 
-The **Wyze Video Doorbell V1 Chime** (WCHIME1) creates a `button` entity to trigger playback and `number` entities for ring tone, volume, and repeat count. These settings are adjustable directly from the HA device page and are persisted to `sensors.yaml` automatically.
+The **Wyze Video Doorbell V1 Chime** (WCHIME1) creates a `button` entity to trigger playback and `number` entities for ring tone, volume, and repeat count. These settings are adjustable directly from the HA device page and are persisted to `sensors.yaml` automatically. It's a mains-powered accessory, so — unlike other sensor types — it does not get `battery`/`battery_voltage` diagnostic entities; it still gets signal strength and chip temperature.
 
 Discovery uses Home Assistant's device-based MQTT discovery format (one config topic per device, covering all of its entities). See [docs/HA_MQTT_COMPLIANCE.md](docs/HA_MQTT_COMPLIANCE.md) for the HA version this was last verified against and notes on the discovery schema and migrations.
 

@@ -286,7 +286,7 @@ This was previously documented as a percentage — it is not. The raw value happ
 | `motionv2`  | CR2450   | 3.0V | 2.4–3.2V | |
 | `leak`      | CR2450   | 3.0V | 2.4–3.2V | |
 | `climate`   | CR2450   | 3.0V | 2.4–3.2V | |
-| `chime`     | unknown  | —    | —        | Voltage published; no percentage estimate |
+| `chime`     | none (mains-powered) | — | — | Reports an `AON_BATMON` byte like other sensors, but this reflects the IC's supply rail, not a battery; ws2m does not publish `battery` or `battery_voltage` entities for this sensor type |
 | `keypad`    | separate | —    | 0–155 raw scale (not AON_BATMON) | normalised to 0–100% by ÷155 |
 
 For `switchv2`, the doubling brings the post-doubling range to 1.8–3.2V, matching the 3V coin cell scale for consistent display. The percentage estimate uses a linear discharge curve across the usable range per sensor type. CR2450/CR1632 Li/MnO₂ cells have very flat discharge curves followed by a sharp knee, so the linear approximation is intentionally conservative.

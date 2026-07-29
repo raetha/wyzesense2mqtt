@@ -890,6 +890,36 @@ def test_start_ws_listener_passes_callable_get_pairing_active(tmp_config_dir, sa
     assert isinstance(result, bool)
 
 
+def test_start_ws_listener_hardens_existing_token_permissions(tmp_config_dir, sample_config):
+    """Bridge._start_ws_listener migrates existing token file permissions on every startup."""
+    import threading
+    from unittest.mock import MagicMock, patch
+
+    from bridge import Bridge
+    from conftest import TEST_HUB_ID
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._config = {**sample_config, "hub_ws_port": 8765, "hub_ws_mdns": False}
+    bridge._hub_id = TEST_HUB_ID
+    bridge._logger = logging.getLogger("test.bridge")
+    bridge._workers = []
+    bridge._workers_lock = threading.Lock()
+    bridge._ws_listener = None
+    bridge._ws_listener_thread = None
+    bridge._zeroconf = None
+    bridge._remote_pairing_expires = 0.0
+    bridge._remote_pairing_lock = threading.Lock()
+
+    mock_listener_instance = MagicMock()
+
+    with patch("ws_listener.WebSocketListener", return_value=mock_listener_instance):
+        with patch("threading.Thread") as mock_thread:
+            mock_thread.return_value.start = MagicMock()
+            bridge._start_ws_listener()
+
+    mock_listener_instance.harden_existing_token_permissions.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # T2 — DongleWorker.reconnect_remote stops old dongle and starts new one
 # ---------------------------------------------------------------------------

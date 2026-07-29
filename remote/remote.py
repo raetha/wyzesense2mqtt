@@ -359,10 +359,11 @@ class DongleRelay:
         return None
 
     def _save_token(self, token: str) -> None:
-        """Save the hub token to <data_dir>/hub_token."""
+        """Save the hub token to <data_dir>/hub_token, owner-readable only."""
         token_file = self._token_file()
         token_file.parent.mkdir(parents=True, exist_ok=True)
         token_file.write_text(token)
+        token_file.chmod(0o600)
         self._logger.info("Adopted by hub. Token saved to %s", token_file)
 
     # ------------------------------------------------------------------
@@ -733,6 +734,7 @@ class Remote:
 
     def run(self) -> None:
         """Run relays for every resolved dongle.  Blocks until :meth:`stop`."""
+        self._harden_existing_token_permissions()
         devices = self._resolve_devices()
 
         self._relays = [self._make_relay(path) for path in devices]
@@ -773,6 +775,24 @@ class Remote:
             self._logger.error(f"Relay for {relay._device} exited with error", exc_info=True)
         finally:
             relay.dongle_ok = False
+
+    def _harden_existing_token_permissions(self) -> None:
+        """Fix permissions on a hub_token file saved before 4.0.1.
+
+        Tokens are now written 0600 at save time, but that only covers fresh
+        adoptions — a hub_token file saved under 4.0.0 has whatever
+        permissions the process default left it with. Safe to call
+        repeatedly (a no-op once already 0600) and if no file exists yet.
+        """
+        token_file = self._data_dir / "hub_token"
+        try:
+            if not token_file.is_file():
+                return
+            if (token_file.stat().st_mode & 0o777) != 0o600:
+                token_file.chmod(0o600)
+                self._logger.info(f"Fixed permissions on existing {token_file} (now 0600)")
+        except OSError as exc:
+            self._logger.warning(f"Could not fix permissions on {token_file}: {exc}")
 
     def _read_token(self) -> str | None:
         env_token = os.environ.get("WS2M_HUB_TOKEN")

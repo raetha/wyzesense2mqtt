@@ -4,7 +4,47 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [4.0.0] — 2026-06-29
+## [4.0.1] — 2026-07-29
+
+Hardening for the remote bridge feature (the connection between a hub and a
+remote dongle relay) introduced in 4.0.0, plus two chime fixes. Nothing here
+requires any action on your part — everything takes effect automatically on
+upgrade, including for remotes and chimes you already have set up.
+
+### Security
+
+- **A remote's name is now checked before it's used.** Each remote relay has
+  a name (`remote_id`) chosen during setup, which the hub used, unchecked,
+  when saving that remote's credential file and building its MQTT topics.
+  A deliberately crafted name could have caused the hub to write outside its
+  intended data folder, or interfered with other MQTT topics. Names are now
+  restricted to a safe set of characters, and anything else is rejected.
+- **Fixed a theoretical timing weakness** in how the hub checks a remote's
+  saved credential.
+- **A misbehaving or malicious connection can no longer make the hub hang.**
+  A remote reconnecting after a network hiccup can ask the hub to replay a
+  backlog of missed events; that backlog size is now capped to a sane limit
+  instead of being trusted blindly.
+- **Credential files are now created readable only by the account running
+  ws2m**, rather than inheriting more permissive default file permissions.
+  Existing credential files (from anyone already on 4.x) are corrected
+  automatically the next time the hub or remote starts — nothing to do.
+- Re-adopting a remote that lost its saved credential (for example, after
+  wiping its data volume) still works automatically, but the hub now logs a
+  clear warning when this happens so it doesn't go unnoticed.
+
+### Fixed
+
+- **The chime's "Play sound" button wasn't showing up in Home Assistant.**
+  An invalid setting in its device configuration caused Home Assistant to
+  reject the whole device, so the button and its other controls never
+  appeared. (#107)
+- **The chime no longer shows a battery.** It's a plug-in accessory with no
+  battery, but was incorrectly getting battery entities in Home Assistant.
+  Removed; signal strength and chip temperature are unaffected.
+
+## [4.0.0] — 2026-07-16
+
 
 ### Breaking changes
 
@@ -252,5 +292,6 @@ files automatically (originals kept at `dongles.migrated/`).
   default setup in repository security settings.
 
 
+[4.0.1]: https://github.com/raetha/wyzesense2mqtt/compare/v4.0.0...v4.0.1
 [4.0.0]: https://github.com/raetha/wyzesense2mqtt/compare/v3.1.0...v4.0.0
 [3.1.0]: https://github.com/raetha/wyzesense2mqtt/compare/v3.0.2...v3.1.0
