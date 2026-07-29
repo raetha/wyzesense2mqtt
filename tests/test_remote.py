@@ -123,6 +123,46 @@ class TestSaveToken:
         r._save_token("tok")
         assert (data_dir / "hub_token").exists()
 
+    def test_saved_token_file_is_owner_only(self, tmp_path):
+        r = _make_remote(tmp_path)
+        r._save_token("tok")
+        mode = (tmp_path / "hub_token").stat().st_mode & 0o777
+        assert mode == 0o600
+
+
+# ---------------------------------------------------------------------------
+# Remote._harden_existing_token_permissions — startup migration for
+# hub_token files saved before this hardening was added (existing 4.0.0
+# installs)
+# ---------------------------------------------------------------------------
+
+
+class TestHardenExistingTokenPermissions:
+    def test_fixes_loosely_permissioned_hub_token(self, tmp_path):
+        token_file = tmp_path / "hub_token"
+        token_file.write_text("some-token")
+        token_file.chmod(0o644)
+
+        sup = _make_supervisor(tmp_path)
+        sup._harden_existing_token_permissions()
+
+        assert (token_file.stat().st_mode & 0o777) == 0o600
+        assert token_file.read_text() == "some-token"  # content untouched
+
+    def test_noop_when_already_0600(self, tmp_path):
+        token_file = tmp_path / "hub_token"
+        token_file.write_text("some-token")
+        token_file.chmod(0o600)
+
+        sup = _make_supervisor(tmp_path)
+        sup._harden_existing_token_permissions()  # must not raise
+
+        assert (token_file.stat().st_mode & 0o777) == 0o600
+
+    def test_noop_when_no_token_file_exists(self, tmp_path):
+        sup = _make_supervisor(tmp_path / "does-not-exist")
+        sup._harden_existing_token_permissions()  # must not raise
+
 
 # ---------------------------------------------------------------------------
 # Remote._authenticate — outbound auth flow

@@ -770,10 +770,10 @@ def test_battery_voltage_none_for_chime_type():
 
 
 def test_diagnostic_components_include_battery_voltage():
-    """battery_voltage entity is present in diagnostic components."""
+    """battery_voltage entity is present in diagnostic components (non-chime sensors)."""
     import mqtt as mqtt_module
 
-    components = mqtt_module._build_diagnostic_components()
+    components = mqtt_module._build_diagnostic_components("motion")
     assert "battery_voltage" in components
     assert components["battery_voltage"]["device_class"] == "voltage"
     assert components["battery_voltage"]["unit_of_measurement"] == "V"
@@ -783,7 +783,7 @@ def test_diagnostic_components_include_die_temp():
     """die_temp entity is present in diagnostic components and disabled by default."""
     import mqtt as mqtt_module
 
-    components = mqtt_module._build_diagnostic_components()
+    components = mqtt_module._build_diagnostic_components("motion")
     assert "die_temp" in components
     assert components["die_temp"]["device_class"] == "temperature"
     assert components["die_temp"]["enabled_by_default"] is False

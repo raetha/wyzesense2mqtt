@@ -13,7 +13,10 @@ Each sensor type maps to a *component builder* function that returns a fresh
 dict of ``{ entity_key: component_payload_dict }``.  Additional builders
 are appended to every sensor regardless of type:
 
-  _build_diagnostic_components()               — signal_strength, battery
+  _build_diagnostic_components(sensor_type)    — signal_strength, die_temp,
+                                                  battery/battery_voltage
+                                                  (battery entities omitted
+                                                  for chime — no battery)
   _build_sensor_action_components(mac, topic)  — remove button
   _build_sensor_config_components(mac, sensor, mac_topic) — name/class/invert
 
@@ -362,14 +365,19 @@ _COMPONENT_BUILDERS: dict[str, Callable] = {
 }
 
 
-def _build_diagnostic_components() -> dict:
+def _build_diagnostic_components(sensor_type: str) -> dict:
     """Diagnostic entities appended to every sensor's component list.
 
     Returns a fresh dict on every call so the inject loop can safely mutate
     the component payloads without corrupting shared module-level state.
     To add a new universal diagnostic entity, add an entry here.
+
+    The chime (WCHIME1) is a plug-in accessory with no battery of its own;
+    the AON_BATMON byte in its heartbeat reflects the IC's supply rail, not
+    a battery, so battery_voltage/battery are omitted for that sensor type.
+    signal_strength and die_temp remain applicable regardless of power source.
     """
-    return {
+    components = {
         "signal_strength": {
             "platform": "sensor",
             "name": None,
@@ -379,24 +387,6 @@ def _build_diagnostic_components() -> dict:
             "suggested_display_precision": 0,
             "entity_category": "diagnostic",
             "enabled_by_default": False,
-        },
-        "battery_voltage": {
-            "platform": "sensor",
-            "name": "Battery voltage",
-            "device_class": "voltage",
-            "state_class": "measurement",
-            "unit_of_measurement": "V",
-            "suggested_display_precision": 3,
-            "entity_category": "diagnostic",
-        },
-        "battery": {
-            "platform": "sensor",
-            "name": None,
-            "device_class": "battery",
-            "state_class": "measurement",
-            "unit_of_measurement": "%",
-            "suggested_display_precision": 0,
-            "entity_category": "diagnostic",
         },
         "die_temp": {
             "platform": "sensor",
@@ -409,6 +399,26 @@ def _build_diagnostic_components() -> dict:
             "enabled_by_default": False,
         },
     }
+    if sensor_type != "chime":
+        components["battery_voltage"] = {
+            "platform": "sensor",
+            "name": "Battery voltage",
+            "device_class": "voltage",
+            "state_class": "measurement",
+            "unit_of_measurement": "V",
+            "suggested_display_precision": 3,
+            "entity_category": "diagnostic",
+        }
+        components["battery"] = {
+            "platform": "sensor",
+            "name": None,
+            "device_class": "battery",
+            "state_class": "measurement",
+            "unit_of_measurement": "%",
+            "suggested_display_precision": 0,
+            "entity_category": "diagnostic",
+        }
+    return components
 
 
 def _build_sensor_action_components(sensor_mac: str, remove_topic: str) -> dict:
@@ -1372,7 +1382,7 @@ class MqttGateway:
             components: dict = builder(sensor_mac, sensor, mac_topic, probe_available=probe_available)
         else:
             components: dict = builder(sensor_mac, sensor, mac_topic)
-        components.update(_build_diagnostic_components())
+        components.update(_build_diagnostic_components(sensor_type))
         components.update(_build_sensor_action_components(sensor_mac, remove_topic))
         components.update(_build_sensor_config_components(sensor_mac, sensor, mac_topic))
 

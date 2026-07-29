@@ -1461,6 +1461,7 @@ class Bridge:
             on_connection=self._on_remote_connection,
             logger=self._logger,
         )
+        self._ws_listener.harden_existing_token_permissions()
         self._ws_listener_thread = threading.Thread(
             target=self._ws_listener.serve_forever,
             name="ws-listener",

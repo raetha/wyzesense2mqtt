@@ -557,3 +557,206 @@ class TestReplayDoneEdgeCases:
         )
         listener._authenticate(ws, "127.0.0.1:1234")
         on_conn.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# remote_id validation — path traversal / MQTT topic injection hardening
+#
+# remote_id arrives before any authentication and is used both as a
+# filesystem path component (remotes_path/<remote_id>/token) and as an MQTT
+# topic segment throughout bridge.py, so unsafe values must be rejected here.
+# ---------------------------------------------------------------------------
+
+
+class TestUnsafeRemoteId:
+    @pytest.mark.parametrize(
+        "remote_id",
+        [
+            "../../etc/passwd",
+            "..",
+            "a/b",
+            "a\\b",
+            "remote+id",  # MQTT single-level wildcard
+            "remote#id",  # MQTT multi-level wildcard
+            "",
+            "x" * 65,  # over the length cap
+        ],
+    )
+    def test_unsafe_remote_id_rejected(self, remote_id):
+        listener, on_conn = _build_listener(get_pairing_active=lambda: True)
+        ws = _make_ws([_auth_msg(remote_id=remote_id)])
+        with pytest.raises(ValueError, match="unsafe remote_id"):
+            listener._authenticate(ws, "127.0.0.1:1234")
+        on_conn.assert_not_called()
+        text_sends = [c.args[0] for c in ws.send.call_args_list if isinstance(c.args[0], str)]
+        assert any("invalid_remote_id" in m for m in text_sends)
+
+    def test_unsafe_remote_id_does_not_touch_filesystem(self, tmp_path):
+        """A path-traversal remote_id must never reach mkdir/write."""
+        remotes_path = tmp_path / "remotes"
+        listener, _ = _build_listener(remotes_path=remotes_path, get_pairing_active=lambda: True)
+        ws = _make_ws([_auth_msg(remote_id="../../escaped")])
+        with pytest.raises(ValueError):
+            listener._authenticate(ws, "127.0.0.1:1234")
+        # Nothing should have been created outside (or even inside) remotes_path
+        assert not (tmp_path / "escaped").exists()
+        assert not remotes_path.exists()
+
+    @pytest.mark.parametrize("remote_id", ["pi-floor2", "remote_1", "a.b.c", "A" * 64])
+    def test_safe_remote_id_accepted(self, remote_id):
+        listener, on_conn = _build_listener(get_pairing_active=lambda: True)
+        ws = _make_ws([_auth_msg(remote_id=remote_id), json.dumps({"type": "auth_ack"})])
+        listener._authenticate(ws, "127.0.0.1:1234")
+        on_conn.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# queue_depth cap — a connection cannot force the hub to block reading an
+# unbounded number of frames
+# ---------------------------------------------------------------------------
+
+
+class TestQueueDepthCap:
+    def test_excessive_queue_depth_rejected(self):
+        token = "my-token"
+        listener, on_conn, _ = _build_listener_with_stored_token(token)
+        ws = _make_ws([_auth_msg(token=token, queue_depth=10_000_001)])
+        with pytest.raises(ValueError, match="queue_depth"):
+            listener._authenticate(ws, "127.0.0.1:1234")
+        on_conn.assert_not_called()
+        text_sends = [c.args[0] for c in ws.send.call_args_list if isinstance(c.args[0], str)]
+        assert any("invalid_queue_depth" in m for m in text_sends)
+
+    def test_negative_queue_depth_rejected(self):
+        token = "my-token"
+        listener, on_conn, _ = _build_listener_with_stored_token(token)
+        ws = _make_ws([_auth_msg(token=token, queue_depth=-1)])
+        with pytest.raises(ValueError, match="queue_depth"):
+            listener._authenticate(ws, "127.0.0.1:1234")
+        on_conn.assert_not_called()
+
+    def test_queue_depth_at_cap_accepted(self):
+        """queue_depth exactly at the cap is fine, as long as frames follow."""
+        token = "my-token"
+        listener, on_conn, _ = _build_listener_with_stored_token(token)
+        frame = b"\x01" * 64
+        ws = _make_ws([_auth_msg(token=token, queue_depth=1), frame, json.dumps({"type": "replay_done"})])
+        listener._authenticate(ws, "127.0.0.1:1234")
+        on_conn.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Token file permissions and non-string token handling
+# ---------------------------------------------------------------------------
+
+
+class TestTokenFilePermissions:
+    def test_adopted_token_file_is_owner_only(self, tmp_path):
+        remotes_path = tmp_path / "remotes"
+        listener, _ = _build_listener(remotes_path=remotes_path, get_pairing_active=lambda: True)
+        ws = _make_ws([_auth_msg(remote_id="pi-floor2"), json.dumps({"type": "auth_ack"})])
+        listener._authenticate(ws, "127.0.0.1:1234")
+
+        token_file = remotes_path / "pi-floor2" / "token"
+        assert token_file.exists()
+        mode = token_file.stat().st_mode & 0o777
+        assert mode == 0o600
+
+
+# ---------------------------------------------------------------------------
+# Startup migration: fix permissions on token files from before this
+# hardening was added (existing 4.0.0 installs)
+# ---------------------------------------------------------------------------
+
+
+class TestHardenExistingTokenPermissions:
+    def test_fixes_loosely_permissioned_token_file(self, tmp_path):
+        remotes_path = tmp_path / "remotes"
+        token_dir = remotes_path / "pi-floor2"
+        token_dir.mkdir(parents=True)
+        token_file = token_dir / "token"
+        token_file.write_text("some-token")
+        token_file.chmod(0o644)
+
+        listener, _ = _build_listener(remotes_path=remotes_path)
+        listener.harden_existing_token_permissions()
+
+        assert (token_file.stat().st_mode & 0o777) == 0o600
+        assert token_file.read_text() == "some-token"  # content untouched
+
+    def test_noop_when_already_0600(self, tmp_path):
+        remotes_path = tmp_path / "remotes"
+        token_dir = remotes_path / "pi-floor2"
+        token_dir.mkdir(parents=True)
+        token_file = token_dir / "token"
+        token_file.write_text("some-token")
+        token_file.chmod(0o600)
+
+        listener, _ = _build_listener(remotes_path=remotes_path)
+        listener.harden_existing_token_permissions()  # must not raise
+
+        assert (token_file.stat().st_mode & 0o777) == 0o600
+
+    def test_noop_when_remotes_path_does_not_exist(self, tmp_path):
+        listener, _ = _build_listener(remotes_path=tmp_path / "does-not-exist")
+        listener.harden_existing_token_permissions()  # must not raise
+
+    def test_fixes_multiple_remotes(self, tmp_path):
+        remotes_path = tmp_path / "remotes"
+        for remote_id in ("pi-floor1", "pi-floor2", "pi-floor3"):
+            token_dir = remotes_path / remote_id
+            token_dir.mkdir(parents=True)
+            (token_dir / "token").write_text(f"token-for-{remote_id}")
+            (token_dir / "token").chmod(0o644)
+
+        listener, _ = _build_listener(remotes_path=remotes_path)
+        listener.harden_existing_token_permissions()
+
+        for remote_id in ("pi-floor1", "pi-floor2", "pi-floor3"):
+            token_file = remotes_path / remote_id / "token"
+            assert (token_file.stat().st_mode & 0o777) == 0o600
+
+
+class TestNonStringToken:
+    def test_non_string_token_provided_does_not_crash(self):
+        """A JSON number/object for 'token' must fail auth cleanly, not raise TypeError."""
+        token = "my-valid-token"
+        remote_id = "test-remote-uuid"
+        listener, on_conn, _ = _build_listener_with_stored_token(token, remote_id)
+        msg = json.dumps(
+            {
+                "type": "auth",
+                "remote_id": remote_id,
+                "dongle_mac": "AABBCCDD",
+                "fresh_start": True,
+                "queue_depth": 0,
+                "token": 12345,
+            }
+        )
+        ws = _make_ws([msg])
+        with pytest.raises(ValueError, match="Invalid token"):
+            listener._authenticate(ws, "127.0.0.1:1234")
+        on_conn.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Re-adoption of an already-known remote_id — should proceed (a remote can
+# legitimately lose its persisted token) but log a visible warning.
+# ---------------------------------------------------------------------------
+
+
+class TestReAdoptionWarning:
+    def test_readopting_existing_remote_id_logs_warning(self, tmp_path, caplog):
+        remotes_path = tmp_path / "remotes"
+        (remotes_path / "pi-floor2").mkdir(parents=True)
+        (remotes_path / "pi-floor2" / "token").write_text("old-token")
+        listener, on_conn = _build_listener(remotes_path=remotes_path, get_pairing_active=lambda: True)
+        ws = _make_ws([_auth_msg(remote_id="pi-floor2"), json.dumps({"type": "auth_ack"})])
+
+        with caplog.at_level(logging.WARNING, logger=_logger.name + ".ws_listener"):
+            listener._authenticate(ws, "127.0.0.1:1234")
+
+        on_conn.assert_called_once()
+        assert any("Re-adopting" in r.message for r in caplog.records)
+        # The old token must actually have been replaced
+        assert (remotes_path / "pi-floor2" / "token").read_text() != "old-token"
