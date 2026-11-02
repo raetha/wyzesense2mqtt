@@ -1,6 +1,6 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge)](http://makeapullrequest.com)
 [![Release](https://img.shields.io/github/v/release/raetha/wyzesense2mqtt?style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/releases)
-[![Validation](https://img.shields.io/github/actions/workflow/status/raetha/wyzesense2mqtt/ci.yml?label=validation&style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/actions/workflows/ci.yml)
+[![Validation](https://img.shields.io/github/actions/workflow/status/raetha/wyzesense2mqtt/build.yml?branch=main&label=build&style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/actions/workflows/build.yml)
 [![Issues](https://img.shields.io/github/issues/raetha/wyzesense2mqtt?style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/issues)
 [![PRs](https://img.shields.io/github/issues-pr/raetha/wyzesense2mqtt?style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/pulls)
 [![License](https://img.shields.io/github/license/raetha/wyzesense2mqtt?style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/blob/main/LICENSE)
@@ -9,7 +9,7 @@
 
 Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use the same MQTT discovery mechanisms. The gateway allows direct local access to [Wyze Sense](https://wyze.com/wyze-sense.html) products without the need for a Wyze Cam or cloud services. This project and its dependencies have no relation to Wyze Labs Inc.
 
-Please submit pull requests against the devel branch.
+Please submit pull requests against the `dev` branch; see [docs/development.md](docs/development.md).
 
 ## Special Thanks
 * [HcLX](https://hclxing.wordpress.com) for [WyzeSensePy](https://github.com/HclX/WyzeSensePy), the core library this project forked.

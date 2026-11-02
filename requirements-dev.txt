@@ -1,0 +1,4 @@
+# Lint and test tools (CI and scripts/run_tests.sh); not part of the images.
+pytest==9.2.0
+pytest-cov==7.1.0
+ruff==0.17.3

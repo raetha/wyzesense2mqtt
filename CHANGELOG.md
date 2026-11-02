@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Home Assistant app: the hub now uses the dongle chosen in the app's
+  options.** Since 4.0.0 that option was ignored, so the hub inside the app
+  started without its USB dongle. Nothing to change on your side: the
+  existing option (`auto` by default) works again after updating the app.
+
+### Changed
+
+- **Docker images are now also tagged without the leading `v`**: each release
+  is published as `X.Y.Z` (for example `4.0.2`), `X.Y` (follows patch
+  releases) and `latest`. The `vX.Y.Z` tags are still published, so existing
+  pins keep working.
+- **Test builds** (from the development branch, now called `dev`) are
+  published as `dev` and `<version>-dev.<build>`. The old `devel` tag keeps
+  receiving them for now.
+
 ## [4.0.1] — 2026-07-29
 
 Hardening for the remote bridge feature (the connection between a hub and a
@@ -292,6 +311,7 @@ files automatically (originals kept at `dongles.migrated/`).
   default setup in repository security settings.
 
 
+[Unreleased]: https://github.com/raetha/wyzesense2mqtt/compare/v4.0.1...dev
 [4.0.1]: https://github.com/raetha/wyzesense2mqtt/compare/v4.0.0...v4.0.1
 [4.0.0]: https://github.com/raetha/wyzesense2mqtt/compare/v3.1.0...v4.0.0
 [3.1.0]: https://github.com/raetha/wyzesense2mqtt/compare/v3.0.2...v3.1.0
