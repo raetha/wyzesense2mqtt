@@ -6,12 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [4.0.2] - 2026-11-02
+
+Makes the Home Assistant apps usable with 4.x, and helps with old dongles
+whose pairing table has a corrupt entry. Nothing to do on upgrade, except in
+the Home Assistant app if you had set a specific dongle path (see below).
+
 ### Added
 
 - **`dongle_tool reset`** unpairs every sensor from a dongle, including a
   corrupt pairing slot that `unpair` and `fix` can't reach. It shows what's
   paired first and only acts with `--yes`; the sensors then need pairing
-  again. See [docs/cli_tools.md](docs/cli_tools.md#a-pairing-slot-that-cant-be-read).
+  again. See [docs/cli_tools.md](https://github.com/raetha/wyzesense2mqtt/blob/main/docs/cli_tools.md#a-pairing-slot-that-cant-be-read).
   ([#110](https://github.com/raetha/wyzesense2mqtt/issues/110))
 
 ### Fixed
@@ -42,7 +48,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **The CLI tools run straight from the images** (their working directory is
   now `/app`): `docker run … --entrypoint python3 ghcr.io/raetha/ws2m-hub -m
   cli.dongle_tool …`, or `docker exec ws2m-hub python3 -m cli.mqtt_tool …`.
-  [docs/cli_tools.md](docs/cli_tools.md) is updated for the current container
+  [docs/cli_tools.md](https://github.com/raetha/wyzesense2mqtt/blob/main/docs/cli_tools.md) is updated for the current container
   and image names.
 - **The images are built from exact dependency versions**, updated through
   reviewed pull requests rather than whatever was newest at build time.
@@ -335,7 +341,8 @@ files automatically (originals kept at `dongles.migrated/`).
   default setup in repository security settings.
 
 
-[Unreleased]: https://github.com/raetha/wyzesense2mqtt/compare/v4.0.1...dev
+[Unreleased]: https://github.com/raetha/wyzesense2mqtt/compare/v4.0.2...dev
+[4.0.2]: https://github.com/raetha/wyzesense2mqtt/compare/v4.0.1...v4.0.2
 [4.0.1]: https://github.com/raetha/wyzesense2mqtt/compare/v4.0.0...v4.0.1
 [4.0.0]: https://github.com/raetha/wyzesense2mqtt/compare/v3.1.0...v4.0.0
 [3.1.0]: https://github.com/raetha/wyzesense2mqtt/compare/v3.0.2...v3.1.0
