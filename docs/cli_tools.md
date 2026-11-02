@@ -25,7 +25,7 @@ docker run --rm -it \
   --device /dev/hidraw0:/dev/hidraw0 \
   --volume /docker/wyzesense2mqtt/data:/app/data \
   --entrypoint sh \
-  ghcr.io/raetha/wyzesense2mqtt:latest \
+  ghcr.io/raetha/ws2m-hub:latest \
   -c "python3 -m cli.dongle_tool --device /dev/hidraw0 list"
 ```
 

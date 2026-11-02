@@ -1,0 +1,220 @@
+name: Build and publish
+# Branches (docs/development.md -> "Branches and releases"): work lands on `dev`, and
+# each release is one squash-merged pull request from `dev` into `main`.
+# Every push and pull request: changelog check, ruff, byte-compile, tests.
+# Push to dev: publishes the test images (ghcr.io/raetha/ws2m-hub and ws2m-remote, tags
+# `dev`, `devel` and `<version>-dev.<run>`) and tells raetha/home-assistant-apps, whose
+# WS2M Hub (devel) app then installs `<version>-dev.<run>`.
+# Push to main: if hub/config.py's VERSION has no v<version> tag yet, publishes the release
+# images (`<version>`, `<major>.<minor>`, `latest`, `v<version>`), the tag and GitHub release
+# (notes from CHANGELOG.md, hub and remote packages attached), tells the app repository,
+# then resets `dev` to `main` (sync-dev) if `dev` has nothing newer.
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Actions are pinned to exact commits (version in the comment); Dependabot
+# (.github/dependabot.yml) proposes updates weekly.
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      release: ${{ steps.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Check the changelog and plan the release
+        id: plan
+        run: |
+          python3 scripts/release_notes.py check
+          python3 scripts/release_notes.py plan --github
+
+      - name: Install dependencies
+        run: pip install -r hub/requirements.txt -r remote/requirements.txt -r requirements-dev.txt
+
+      - name: Ruff
+        run: |
+          ruff check hub/ remote/ shared/ tests/ tools/ scripts/
+          ruff format --check hub/ remote/ shared/ tests/ tools/ scripts/
+
+      - name: Byte-compile
+        run: python -m compileall -q hub/ remote/ shared/
+
+      - name: Tests
+        run: pytest -q
+
+  images:
+    needs: checks
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/dev' || (github.ref == 'refs/heads/main' && needs.checks.outputs.release == 'true'))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: ws2m-hub
+            file: docker/Dockerfile.hub
+            platforms: linux/amd64,linux/arm64
+            title: WyzeSense2MQTT Hub
+            description: Hub process for WyzeSense2MQTT — runs the full sensor protocol and publishes to MQTT/Home Assistant
+          - name: ws2m-remote
+            file: docker/Dockerfile.remote
+            platforms: linux/amd64,linux/arm64,linux/arm/v7
+            title: WyzeSense2MQTT Remote
+            description: Remote bridge for WyzeSense2MQTT — relays raw HID frames from a USB dongle to the hub over WebSocket
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Choose the image tags
+        id: tags
+        env:
+          VERSION: ${{ needs.checks.outputs.version }}
+        run: |
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            # `v<version>` keeps the tag style of 4.0.x releases working for anyone pinned to it
+            tags="$VERSION ${VERSION%.*} latest v$VERSION"
+          else
+            # `devel` is the test tag from before the branch was renamed; kept so existing pulls still update
+            tags="dev devel $VERSION-dev.$GITHUB_RUN_NUMBER"
+          fi
+          {
+            echo "list<<EOF"
+            for t in $tags; do echo "type=raw,value=$t"; done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
+          flavor: latest=false
+          tags: ${{ steps.tags.outputs.list }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.version=${{ needs.checks.outputs.version }}
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: ${{ matrix.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,scope=${{ matrix.name }},mode=max
+
+  release:
+    needs: [checks, images]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.checks.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the hub and remote packages
+        env:
+          VERSION: ${{ needs.checks.outputs.version }}
+        run: |
+          set -e
+          for part in hub remote; do
+            pkg="$RUNNER_TEMP/ws2m-$part"
+            mkdir -p "$pkg"
+            cp -r "$part/." shared/. "$pkg/"
+            cp "examples/$part/ws2m-$part.service.example" "$pkg/"
+            tar -czf "ws2m-$part-$VERSION.tar.gz" -C "$pkg" .
+          done
+
+      - name: Create the tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.checks.outputs.version }}
+        run: |
+          set -e
+          python3 scripts/release_notes.py notes "$VERSION" > notes.md
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "WyzeSense2MQTT $VERSION" \
+            --notes-file notes.md "ws2m-hub-$VERSION.tar.gz" "ws2m-remote-$VERSION.tar.gz"
+
+  # The app repository bumps its WS2M Hub app (release) or WS2M Hub (devel) app (dev) to the
+  # image tag just published. Needs the HA_APPS_PAT secret (contents: write on that repository).
+  notify-ha-apps:
+    needs: [checks, images, release]
+    if: >-
+      always() && github.event_name == 'push' && needs.images.result == 'success' &&
+      (needs.release.result == 'success' || needs.release.result == 'skipped')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Dispatch to raetha/home-assistant-apps
+        env:
+          GH_TOKEN: ${{ secrets.HA_APPS_PAT }}
+          VERSION: ${{ needs.checks.outputs.version }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::HA_APPS_PAT is not set: the app repository was not told about this build"
+            exit 0
+          fi
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            event=ws2m-release; app_version="$VERSION"
+          else
+            event=ws2m-dev; app_version="$VERSION-dev.$GITHUB_RUN_NUMBER"
+          fi
+          gh api repos/raetha/home-assistant-apps/dispatches \
+            -f event_type="$event" -f "client_payload[version]=$app_version"
+          echo "sent $event $app_version"
+
+  sync-dev:
+    needs: [checks, release]
+    if: >-
+      always() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.checks.result == 'success' &&
+      (needs.release.result == 'success' || needs.release.result == 'skipped')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Reset dev to main if they match
+        run: |
+          set -e
+          git rev-parse -q --verify origin/dev >/dev/null || { echo "no dev branch"; exit 0; }
+          if git diff --quiet origin/main origin/dev; then
+            git push --force origin origin/main:refs/heads/dev
+            echo "dev reset to main"
+          else
+            echo "dev has changes that aren't on main: left as it is"
+          fi
