@@ -866,3 +866,55 @@ class TestLocalTransport:
             t = LocalTransport("/dev/hidraw0")
         # LocalTransport has no remote_id attribute — that lives on RemoteTransport
         assert not hasattr(t, "remote_id")
+
+
+# ---------------------------------------------------------------------------
+# Dongle.list() / count() — an incomplete list (issue #110)
+# ---------------------------------------------------------------------------
+
+
+def _bare_dongle(count: int, sent: list[bytes]):
+    """A Dongle with no transport: the count reply is *count*; the list sends *sent*, then times out."""
+    import dongle_protocol as dp
+
+    dongle = dp.Dongle.__new__(dp.Dongle)
+    dongle._do_simple_command = lambda pkt, timeout=2: dp.Packet(pkt.cmd + 1, bytes([count]))
+
+    def _do_command(pkt, handler, timeout=2):
+        import threading
+
+        done = threading.Event()
+        for mac in sent:
+            handler(dp.Packet(pkt.cmd + 1, mac), done)
+        if not done.is_set():
+            raise TimeoutError("Dongle command timed out")
+
+    dongle._do_command = _do_command
+    return dongle
+
+
+def test_list_returns_all_sensors_when_complete():
+    dongle = _bare_dongle(2, [b"AAAAAAAA", b"BBBBBBBB"])
+    assert dongle.list() == ["AAAAAAAA", "BBBBBBBB"]
+    assert dongle.count() == 2
+
+
+def test_list_incomplete_keeps_received_macs():
+    import dongle_protocol as dp
+
+    dongle = _bare_dongle(4, [b"777D8B6F", b"777D8C76", b"77A89797"])
+    with pytest.raises(dp.SensorListIncomplete) as exc:
+        dongle.list()
+    assert exc.value.sensors == ["777D8B6F", "777D8C76", "77A89797"]
+    assert exc.value.expected == 4
+    assert isinstance(exc.value, TimeoutError)  # callers catching TimeoutError still do
+
+
+def test_list_incomplete_with_nothing_received():
+    import dongle_protocol as dp
+
+    dongle = _bare_dongle(1, [])
+    with pytest.raises(dp.SensorListIncomplete) as exc:
+        dongle.list()
+    assert exc.value.sensors == []
+    assert exc.value.expected == 1

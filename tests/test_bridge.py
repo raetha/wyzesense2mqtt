@@ -3035,3 +3035,44 @@ def test_remote_health_per_remote_isolation(tmp_config_dir, sample_config):
     published = {c.args[0]: c.args[1] for c in bridge._gateway.publish.call_args_list}
     assert published["wyzesense2mqtt/remote/r1/health"] == "degraded"
     assert "wyzesense2mqtt/remote/r2/health" not in published
+
+
+# ---------------------------------------------------------------------------
+# _init_sensors — the dongle's list is incomplete or times out (issue #110)
+# ---------------------------------------------------------------------------
+
+
+def _init_worker(tmp_config_dir, sample_config, list_effect):
+    worker = _make_worker(tmp_config_dir, sample_config)
+    worker._config = {**sample_config, "hass_discovery": False}
+    worker._gateway.is_connected = False
+    worker._dongle = MagicMock()
+    worker._dongle.mac = TEST_DONGLE_MAC
+    worker._dongle.list.side_effect = list_effect
+    worker._registry.reconcile_with_dongle.return_value = []
+    worker._registry.state = {"CCCCCCCC": {"dongle": TEST_DONGLE_MAC}}
+    return worker
+
+
+def test_init_sensors_incomplete_list_uses_received_macs(tmp_config_dir, sample_config):
+    import dongle_protocol
+
+    incomplete = dongle_protocol.SensorListIncomplete(["AAAAAAAA", "BBBBBBBB"], 3)
+    worker = _init_worker(tmp_config_dir, sample_config, incomplete)
+
+    worker._init_sensors(wait=False)
+
+    worker._registry.reconcile_with_dongle.assert_called_once_with(
+        TEST_DONGLE_MAC, ["AAAAAAAA", "BBBBBBBB"], prune=False
+    )
+    # received sensors and the ones this dongle already owns all count as paired
+    assert set(worker._paired_macs) == {"AAAAAAAA", "BBBBBBBB", "CCCCCCCC"}
+
+
+def test_init_sensors_list_timeout_keeps_owned_sensors_paired(tmp_config_dir, sample_config):
+    worker = _init_worker(tmp_config_dir, sample_config, TimeoutError("Dongle command timed out"))
+
+    worker._init_sensors(wait=False)
+
+    worker._registry.reconcile_with_dongle.assert_not_called()
+    assert worker._paired_macs == ["CCCCCCCC"]

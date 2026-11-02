@@ -25,6 +25,6 @@ WyzeSense2MQTT (ws2m): a local bridge from WyzeSense USB dongles to Home Assista
 ## Hard-won facts
 
 - Home Assistant's Supervisor pulls `<image>:<version>` from the app's `config.yaml`, so every app version must be an image tag that exists (releases `X.Y.Z`, test builds `X.Y.Z-dev.<run>`). Its `image:` can only hold `{arch}`, nothing else in braces.
-- The apps' option is still `usb_dongle`; `hub/service.sh` reads `dongle`, falling back to `usb_dongle`. An empty `WS2M_*` variable overrides the default, and an empty `dongle` means no local dongle.
+- `hub/service.sh` maps each app option to its `WS2M_*` variable by the same name (`dongle` → `WS2M_DONGLE`). An option the app doesn't send becomes an empty variable, which overrides the default; an empty `dongle` means no local dongle (the apps' `usb_dongle` did exactly that in 4.0.0–4.0.1).
 - `repository_dispatch` runs the receiving repository's default-branch (`main`) workflow.
 - Sessions can't read Actions settings, secrets or security alerts, or rename branches, through the proxy: ask the owner.

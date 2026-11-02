@@ -6,12 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`dongle_tool reset`** unpairs every sensor from a dongle, including a
+  corrupt pairing slot that `unpair` and `fix` can't reach. It shows what's
+  paired first and only acts with `--yes`; the sensors then need pairing
+  again. See [docs/cli_tools.md](docs/cli_tools.md#a-pairing-slot-that-cant-be-read).
+  ([#110](https://github.com/raetha/wyzesense2mqtt/issues/110))
+
 ### Fixed
 
-- **Home Assistant app: the hub now uses the dongle chosen in the app's
-  options.** Since 4.0.0 that option was ignored, so the hub inside the app
-  started without its USB dongle. Nothing to change on your side: the
-  existing option (`auto` by default) works again after updating the app.
+- **A dongle with an unreadable pairing slot no longer hides its other
+  sensors.** When an old dongle's sensor list stops short, the hub now uses
+  the sensors it did receive instead of none, and no longer counts the
+  dongle's sensors as unpaired (which could mark them orphaned). `list` and
+  `fix` in `dongle_tool` show what they could read and point to `reset`.
+  ([#110](https://github.com/raetha/wyzesense2mqtt/issues/110))
+- **`dongle_tool unpair` says when a MAC wasn't paired**, instead of always
+  reporting it removed.
+- **Home Assistant app: the dongle setting works again.** The hub had stopped
+  reading the app's `usb_dongle` option in 4.0.0 and started without a local
+  dongle; the app's option is now called `dongle`, like everywhere else. If
+  you had set a specific device path, set it again (the default, `auto`,
+  needs nothing).
 
 ### Changed
 
@@ -22,6 +39,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Test builds** (from the development branch, now called `dev`) are
   published as `dev` and `<version>-dev.<build>`. The old `devel` tag keeps
   receiving them for now.
+- **The CLI tools run straight from the images** (their working directory is
+  now `/app`): `docker run … --entrypoint python3 ghcr.io/raetha/ws2m-hub -m
+  cli.dongle_tool …`, or `docker exec ws2m-hub python3 -m cli.mqtt_tool …`.
+  [docs/cli_tools.md](docs/cli_tools.md) is updated for the current container
+  and image names.
+- **The images are built from exact dependency versions**, updated through
+  reviewed pull requests rather than whatever was newest at build time.
 
 ## [4.0.1] — 2026-07-29
 
