@@ -71,28 +71,20 @@ design pass.
 
 ## Infrastructure / process
 
-### Docker images run as root; some dependencies use unpinned ranges
+### Docker images run as root
 
-**Where:** `docker/Dockerfile.hub`, `docker/Dockerfile.remote`,
-`hub/requirements.txt`, `remote/requirements.txt`.
+**Where:** `docker/Dockerfile.hub`, `docker/Dockerfile.remote`.
 
 **Issue:** neither Dockerfile has a `USER` directive, so both containers run
-as root. `PyYAML`, `retrying`, `websockets >= 12`, and `zeroconf>=0.131` have
-no upper bound, so a build can pick up a new major version unexpectedly
-(or, in the worst case, a compromised release of a dependency).
+as root.
 
 **Why deferred:** running as root is a long-standing, common trade-off for
 containers that need direct USB device access (`/dev/hidrawN`); moving off
 it would need a proper device-cgroup-rule / group-permissions story, not
-just adding `USER`. Pinning dependency versions is a process decision
-(trades automatic security-patch pickup for reproducible builds) rather than
-a bug fix — worth deciding deliberately rather than as a drive-by change.
+just adding `USER`.
 
-**Possible approach:** for root — investigate a dedicated non-root user with
-device cgroup rules granting access to the specific dongle device node. For
-dependency pinning — consider `pip-compile`/lockfile-style pinning with a
-scheduled Dependabot-driven bump, so versions are explicit but still get
-patched automatically via PRs.
+**Possible approach:** a dedicated non-root user with device cgroup rules
+granting access to the specific dongle device node.
 
 ---
 

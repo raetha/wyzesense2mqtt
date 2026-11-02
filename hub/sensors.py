@@ -501,7 +501,7 @@ class SensorRegistry:
     # Reconciliation helpers (called during init_sensors)
     # ------------------------------------------------------------------
 
-    def reconcile_with_dongle(self, dongle_mac: str, linked_macs: list[str]) -> list[str]:
+    def reconcile_with_dongle(self, dongle_mac: str, linked_macs: list[str], prune: bool = True) -> list[str]:
         """Reconcile *dongle_mac*'s paired-sensor list with the registry.
 
         For each valid MAC in *linked_macs*:
@@ -512,7 +512,8 @@ class SensorRegistry:
             dongle), logged so the user can clean up the old pairing
 
         State entries owned by this dongle but absent from *linked_macs* are
-        pruned.  Returns a list of MACs that were auto-added.
+        pruned, unless *prune* is False (an incomplete list, where absence
+        proves nothing).  Returns a list of MACs that were auto-added.
         """
         auto_added = []
         with self._lock:
@@ -538,7 +539,8 @@ class SensorRegistry:
                         f"{dongle_mac}; remove the stale pairing from {dongle_mac} if unintended",
                     )
 
-            self.prune_state_for_dongle(dongle_mac, linked_macs)
+            if prune:
+                self.prune_state_for_dongle(dongle_mac, linked_macs)
         return auto_added
 
     def ensure_owned_have_state(self, dongle_mac: str) -> None:

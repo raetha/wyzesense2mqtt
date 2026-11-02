@@ -1,4 +1,3 @@
-# ws2m remote relay requirements
-websockets >= 12
-
-zeroconf>=0.131
+# Remote runtime dependencies, pinned exactly; Dependabot proposes updates (into dev).
+websockets==17.4
+zeroconf==0.153.0

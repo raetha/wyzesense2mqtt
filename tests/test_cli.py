@@ -216,3 +216,92 @@ class TestSchemaFromTopic:
         from cli.mqtt_tool import _schema_from_topic
 
         assert _schema_from_topic("ha/discovery/device/ws2m_sensor_X/config", "ha/discovery") == "v2"
+
+
+# ---------------------------------------------------------------------------
+# dongle_tool commands against a mocked dongle (issue #110)
+# ---------------------------------------------------------------------------
+
+
+def _mock_dongle(**kwargs):
+    from unittest.mock import MagicMock
+
+    dongle = MagicMock()
+    for name, value in kwargs.items():
+        setattr(dongle, name, value)
+    return dongle
+
+
+def test_dongle_tool_reset_parses_yes():
+    import cli.dongle_tool as dt
+
+    assert dt.build_parser().parse_args(["reset"]).yes is False
+    assert dt.build_parser().parse_args(["reset", "--yes"]).yes is True
+
+
+def test_list_incomplete_shows_received_and_hint(capsys):
+    from unittest.mock import MagicMock
+
+    import cli.dongle_tool as dt
+    import dongle_protocol as dp
+
+    dongle = _mock_dongle(list=MagicMock(side_effect=dp.SensorListIncomplete(["AAAAAAAA"], 2)))
+    dt.cmd_list(dongle, None)
+    out = capsys.readouterr().out
+    assert "reports 2 sensor(s) paired; 1 could be read" in out
+    assert "AAAAAAAA" in out
+    assert "reset --yes" in out
+
+
+def test_unpair_reports_mac_that_was_not_paired(capsys):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    import cli.dongle_tool as dt
+
+    dongle = _mock_dongle(count=MagicMock(side_effect=[1, 1, 1, 0]))
+    dt.cmd_unpair(dongle, SimpleNamespace(mac=["AAAAAAAA", "BBBBBBBB"]))
+    out = capsys.readouterr().out
+    assert "Not paired: nothing was removed" in out  # AAAAAAAA: 1 → 1
+    assert out.rstrip().endswith("Removed")  # BBBBBBBB: 1 → 0
+
+
+def test_fix_with_unreadable_slot_removes_invalid_and_points_to_reset(capsys):
+    from unittest.mock import MagicMock
+
+    import cli.dongle_tool as dt
+    import dongle_protocol as dp
+
+    dongle = _mock_dongle(list=MagicMock(side_effect=dp.SensorListIncomplete(["AAAAAAAA", "\x00" * 8], 3)))
+    dt.cmd_fix(dongle, None)
+    out = capsys.readouterr().out
+    dongle.delete.assert_called_once_with("\x00" * 8)
+    assert "1 paired slot(s) never arrived" in out
+
+
+def test_reset_without_yes_changes_nothing(capsys):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    import cli.dongle_tool as dt
+
+    dongle = _mock_dongle(list=MagicMock(return_value=["AAAAAAAA"]))
+    dt.cmd_reset(dongle, SimpleNamespace(yes=False))
+    dongle.delete_all.assert_not_called()
+    assert "--yes" in capsys.readouterr().out
+
+
+def test_reset_with_yes_unpairs_all_and_confirms(capsys):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    import cli.dongle_tool as dt
+    import dongle_protocol as dp
+
+    dongle = _mock_dongle(
+        list=MagicMock(side_effect=dp.SensorListIncomplete([], 1)),
+        count=MagicMock(return_value=0),
+    )
+    dt.cmd_reset(dongle, SimpleNamespace(yes=True))
+    dongle.delete_all.assert_called_once_with()
+    assert "no sensors paired" in capsys.readouterr().out

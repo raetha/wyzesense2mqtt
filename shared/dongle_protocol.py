@@ -27,7 +27,8 @@ Dongle
     .mac         – dongle MAC address string
     .version     – firmware version string
     .enr         – ENR bytes
-    .list()      – list paired sensor MACs
+    .count()     – number of sensors the dongle reports paired
+    .list()      – list paired sensor MACs (SensorListIncomplete if some never arrive)
     .scan()      – pair a new sensor (blocks up to 60 s)
     .delete(mac) – remove a paired sensor
     .delete_all()
@@ -701,6 +702,20 @@ class SensorEvent:
 # ---------------------------------------------------------------------------
 
 
+class SensorListIncomplete(TimeoutError):
+    """The dongle reported more paired sensors than it sent before the list timed out.
+
+    Seen with a corrupt pairing slot: the count includes it, but the dongle never sends
+    its record.  *sensors* holds the MACs that did arrive; only delete_all() clears such
+    a slot, since its MAC is unknown.
+    """
+
+    def __init__(self, sensors: list[str], expected: int):
+        super().__init__(f"dongle reports {expected} paired sensor(s) but sent {len(sensors)}")
+        self.sensors = sensors
+        self.expected = expected
+
+
 class Dongle:
     """Manages the USB HID connection to the WyzeSense bridge dongle."""
 
@@ -902,10 +917,13 @@ class Dongle:
         resp = self._do_simple_command(Packet.finish_auth())
         assert len(resp.payload) == 0
 
-    def _get_sensors(self) -> list[str]:
+    def _get_sensor_count(self) -> int:
         resp = self._do_simple_command(Packet.get_sensor_count())
         assert len(resp.payload) == 1
-        count = resp.payload[0]
+        return resp.payload[0]
+
+    def _get_sensors(self) -> list[str]:
+        count = self._get_sensor_count()
 
         if count == 0:
             _logger.debug("No sensors paired")
@@ -943,7 +961,7 @@ class Dongle:
                 ctx.count,
                 ctx.sensors,
             )
-            raise
+            raise SensorListIncomplete(list(ctx.sensors), count) from None
 
         return ctx.sensors
 
@@ -965,8 +983,16 @@ class Dongle:
     # Public API
     # ------------------------------------------------------------------
 
+    def count(self) -> int:
+        """Return how many sensors the dongle reports paired (a corrupt slot counts too)."""
+        return self._get_sensor_count()
+
     def list(self) -> list[str]:
-        """Return the list of sensor MACs currently paired with the dongle."""
+        """Return the list of sensor MACs currently paired with the dongle.
+
+        Raises SensorListIncomplete (a TimeoutError) when fewer MACs arrive than the
+        dongle's count; it carries the ones that did.
+        """
         return self._get_sensors()
 
     def scan(self, timeout: int = 60) -> tuple[str, str, str] | None:
