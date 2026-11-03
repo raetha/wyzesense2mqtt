@@ -33,15 +33,25 @@ jobs:
       release: ${{ steps.plan.outputs.release }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
 
+      # On dev VERSION is the expected next one, undated until the release pull request; into and
+      # on main it must have its dated section.
       - name: Check the changelog and plan the release
         id: plan
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          python3 scripts/release_notes.py check
+          if [ "$BASE_REF" = main ] || [ "$GITHUB_REF" = refs/heads/main ]; then
+            python3 scripts/release_notes.py check --release
+          else
+            python3 scripts/release_notes.py check
+          fi
           python3 scripts/release_notes.py plan --github
 
       - name: Install dependencies
@@ -82,6 +92,8 @@ jobs:
             description: Remote bridge for WyzeSense2MQTT — relays raw HID frames from a USB dongle to the hub over WebSocket
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Choose the image tags
         id: tags
@@ -143,6 +155,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Build the hub and remote packages
         env:
@@ -218,3 +232,19 @@ jobs:
           else
             echo "dev has changes that aren't on main: left as it is"
           fi
+
+  # The one check the main ruleset requires: passes only when every check job above did, so
+  # jobs can be added or renamed without touching the ruleset.
+  ci:
+    name: CI passed
+    if: always()
+    needs: [checks]
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Every check job passed
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          if echo "$RESULTS" | grep -qE '"(failure|cancelled)"'; then exit 1; fi

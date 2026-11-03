@@ -64,19 +64,26 @@ def tag_exists(tag: str) -> bool:
     return bool(out.strip())
 
 
-def check() -> None:
+def check(release: bool) -> None:
+    """On dev, VERSION is the expected next version, which has no section until the release
+    pull request dates it; `release` (pull requests into and pushes to main) requires that dated
+    section, so an undated release can't merge."""
     have = sections()
     current = version()
     problems = []
     if "Unreleased" not in have:
         problems.append("CHANGELOG.md has no '## [Unreleased]' section")
-    if current not in have:
-        problems.append(f"CHANGELOG.md has no section for {current} (VERSION in hub/config.py)")
-    elif have[current][0] is None:
+    if current in have and have[current][0] is None:
         problems.append(f"CHANGELOG.md's {current} section has no date ('## [{current}] - YYYY-MM-DD')")
+    elif release and current not in have:
+        problems.append(
+            f"CHANGELOG.md has no dated section for {current} (VERSION in hub/config.py): "
+            "date it in the release pull request"
+        )
     if problems:
         sys.exit("\n".join(problems))
-    print(f"changelog OK: [Unreleased] and {current}")
+    status = f" and {current}" if current in have else f"; {current} is the expected next version"
+    print(f"changelog OK: [Unreleased]{status}")
 
 
 def plan(github: bool) -> None:
@@ -114,14 +121,15 @@ def notes(name: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("check")
+    chk = sub.add_parser("check")
+    chk.add_argument("--release", action="store_true", help="also require a dated section for VERSION")
     p = sub.add_parser("plan")
     p.add_argument("--github", action="store_true", help="also write version/release to $GITHUB_OUTPUT")
     n = sub.add_parser("notes")
     n.add_argument("version", help="X.Y.Z, or Unreleased")
     args = ap.parse_args()
     if args.cmd == "check":
-        check()
+        check(args.release)
     elif args.cmd == "plan":
         plan(args.github)
     else:

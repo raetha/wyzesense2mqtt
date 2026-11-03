@@ -1,6 +1,6 @@
 # Design: Remote Bridge (ESPHome / ESP32)
 
-This document covers the ESP32-based remote bridge. For the Python/Docker implementation see [`docs/design_remote_bridge.md`](design_remote_bridge.md).
+This document covers the ESP32-based remote bridge. For the Python/Docker implementation see [`docs/design-remote-bridge.md`](design-remote-bridge.md).
 
 ---
 
@@ -377,4 +377,4 @@ The work is divided across three components:
 
 **Total: ~4.5–5.5 sessions.** The USB Host driver is the highest-risk piece — it requires C++ and physical hardware. If USB enumeration proves problematic for this specific dongle, this is where the project could stall.
 
-**Prerequisite:** the hub-side WebSocket listener (from `design_remote_bridge.md`) must be implemented first so the ESP32 has something to connect to.
+**Prerequisite:** the hub-side WebSocket listener (from `design-remote-bridge.md`) must be implemented first so the ESP32 has something to connect to.

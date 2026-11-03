@@ -47,7 +47,7 @@ for logging.
 ### No TLS on the remote↔hub WebSocket (`ws://`, not `wss://`)
 
 **Where:** `hub/ws_listener.py` (server), `remote/remote.py` (client),
-`design_remote_bridge.md`.
+`design-remote-bridge.md`.
 
 **Issue:** the remote bridge auth token is sent in cleartext on every
 handshake (not just once), over `ws://`. Anyone who can passively observe
@@ -94,7 +94,7 @@ These were already tracked in project notes before this file existed; moved
 here so there's one place to look.
 
 - **ESPHome remote bridge** — design doc exists
-  (`docs/design_remote_bridge_esphome.md`), implementation not started.
+  (`docs/design-remote-bridge-esphome.md`), implementation not started.
   Generic `usb_hid_host` / `websocket_client` ESPHome components are planned
   as separate repos; the ws2m-specific `wyzesense_bridge` component stays in
   this repo.

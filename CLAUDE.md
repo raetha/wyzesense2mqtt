@@ -1,13 +1,13 @@
 # Notes for Claude sessions
 
-WyzeSense2MQTT (ws2m): a local bridge from WyzeSense USB dongles to Home Assistant over MQTT, run as Docker images (`ws2m-hub`, `ws2m-remote`) or as a Home Assistant app (raetha/home-assistant-apps). The canonical guide is `docs/development.md`; known work for later is in `docs/BACKLOG.md`; the dongle protocol is `docs/protocol.md`. This file is the short version of what a new session needs.
+WyzeSense2MQTT (ws2m): a local bridge from WyzeSense USB dongles to Home Assistant over MQTT, run as Docker images (`ws2m-hub`, `ws2m-remote`) or as a Home Assistant app (raetha/home-assistant-apps). The canonical guide is `docs/development.md`; known work for later is in `docs/backlog.md`; the dongle protocol is `docs/protocol.md`. This file is the short version of what a new session needs.
 
 ## How we work
 
-- Sessions push to this repository: work on `dev` or a `try/<topic>` branch and open pull requests. No zip packages.
-- **Branches** (`docs/development.md` → "Branches and releases"): never push to `main`; it gets one squash-merged pull request per release. Adopted work goes on `dev`; experiments that may be dropped go on `try/<topic>` branches off `dev`, merged into `dev` by pull request. Each push to `dev` publishes the test images (`dev`, `<version>-dev.<run>`), which the WS2M Hub (devel) app installs.
+- Sessions push to this repository. No zip packages.
+- **Branches** (`docs/development.md` → "Branches and releases"): never push to `main`; it gets one squash-merged pull request per release, which the owner merges. Claude runs `dev`: small, settled changes go straight to it, anything else through a `try/<topic>` branch and pull request that Claude squash-merges once CI is green. `dev` must stay releasable; a change that needs the owner's decision waits on its `try/` branch. Each push to `dev` publishes the test images (`dev`, `<version>-dev.<run>`), which the WS2M Hub (devel) app installs.
 - Record each change users would notice under `## [Unreleased]` in `CHANGELOG.md`, written for people installing ws2m (no internal file names unless they need them). Fixes to something not yet released fold into its existing line. Released sections are frozen.
-- Never bump `VERSION` (`hub/config.py`) or date the changelog unless asked: that's the release pull request (`dev` → `main`), which the owner squash-merges. CI then tags `v<version>`, publishes the images and GitHub release, updates the app repository and resets `dev` to `main`.
+- **`dev` holds the expected next version:** with the first change after a release, set `VERSION` (`hub/config.py`) to what that change calls for under semver, and raise it when a later change calls for more; say what and why in a line. Never date the changelog or open the release pull request unless asked: that pull request (`dev` → `main`), which the owner squash-merges, dates the section. CI then tags `v<version>`, publishes the images and GitHub release, updates the app repository and resets `dev` to `main`.
 - Propose the approach before implementing anything non-trivial; ask when a decision is ambiguous. Settled design decisions (global sensor registry, multi-dongle remote, health isolation) aren't revisited without the owner asking.
 - Update `README.md` and the relevant `docs/*.md` in the same change as the feature.
 
