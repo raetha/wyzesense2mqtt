@@ -448,7 +448,7 @@ class DongleWorker:
             # sweep would otherwise mark them).
             self._logger.error(
                 f"Dongle {self._dongle.mac} {exc}; using the {len(exc.sensors)} it sent. "
-                "A slot that never arrives is usually corrupt: see 'dongle_tool reset' in docs/cli_tools.md"
+                "A slot that never arrives is usually corrupt: see 'dongle_tool reset' in docs/cli-tools.md"
             )
             received = [m for m in exc.sensors if registry.is_valid_mac(m)]
             auto_added = registry.reconcile_with_dongle(self._dongle.mac, received, prune=False)

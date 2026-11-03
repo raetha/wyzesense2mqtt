@@ -1,6 +1,6 @@
 # Design: Remote Bridge (Python / Docker)
 
-This document covers the Python-based remote bridge implementation. For the ESP32/ESPHome variant see [`docs/design_remote_bridge_esphome.md`](design_remote_bridge_esphome.md).
+This document covers the Python-based remote bridge implementation. For the ESP32/ESPHome variant see [`docs/design-remote-bridge-esphome.md`](design-remote-bridge-esphome.md).
 
 ---
 
@@ -268,6 +268,6 @@ Same as local dongles: the "Cleanup removed dongles" button diffs known dongle M
 5. **Config changes** — `bridge_token`, `bridge_port`, `"incoming"` mode in `usb_dongle` — ~0.25 session
 6. **Tests** — mock WebSocket transport, auth/reconnect scenarios, replay, race conditions — ~1 session
 7. **Docker + CI** — `remote/Dockerfile`, `remote_release.yml`, `examples/remote/` — ~0.25 session
-8. **Docs** — update README, cli_tools.md, deployment guide — ~0.25 session
+8. **Docs** — update README, cli-tools.md, deployment guide — ~0.25 session
 
 **Total: ~4.25 sessions.** Step 1 (restructure) is a prerequisite for everything else and should be a standalone PR. The transport abstraction (step 2) is the most invasive change to existing hub code.

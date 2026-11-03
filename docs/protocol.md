@@ -307,4 +307,4 @@ Signal strength is dongle-appended — it is not transmitted over the air by the
 - **Keypad display feedback**: `CMD_SEND_KEYPAD_EVENT` packet structure is confirmed from C# source, but physical effect on the keypad display and speaker has not been verified with hardware.
 - **Keypad sub-event `0x0C`**: described as "Some sort of alarm event?" in AK5nowman's code — exact trigger and semantics unknown.
 
-Contributions welcome — see `docs/contributing_hid_captures.md`.
+Contributions welcome — see `docs/contributing-hid-captures.md`.
