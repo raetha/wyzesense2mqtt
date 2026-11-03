@@ -65,7 +65,7 @@ if [[ ! -f "$VENV/bin/activate" ]]; then
     echo "[ setup ] Installing dependencies..."
     "$VENV/bin/pip" install --upgrade pip -q
     "$VENV/bin/pip" install -r hub/requirements.txt -r remote/requirements.txt -q
-    "$VENV/bin/pip" install pytest pytest-cov ruff -q
+    "$VENV/bin/pip" install -r requirements-dev.txt -q
     echo "[ setup ] Done."
     echo ""
 fi
@@ -87,12 +87,12 @@ echo ""
 FAILED=0
 
 # ── Step 1: ruff check ────────────────────────────────────────────────────────
-echo "[ 1/$STEPS ] ruff check hub/ remote/ shared/ tests/ tools/..."
-ruff check hub/ remote/ shared/ tests/ tools/ && echo "        PASS" || { echo "        FAIL"; FAILED=1; }
+echo "[ 1/$STEPS ] ruff check hub/ remote/ shared/ tests/ tools/ scripts/..."
+ruff check hub/ remote/ shared/ tests/ tools/ scripts/ && echo "        PASS" || { echo "        FAIL"; FAILED=1; }
 
 # ── Step 2: ruff format check ─────────────────────────────────────────────────
-echo "[ 2/$STEPS ] ruff format --check hub/ remote/ shared/ tests/ tools/..."
-ruff format --check hub/ remote/ shared/ tests/ tools/ && echo "        PASS" || { echo "        FAIL"; FAILED=1; }
+echo "[ 2/$STEPS ] ruff format --check hub/ remote/ shared/ tests/ tools/ scripts/..."
+ruff format --check hub/ remote/ shared/ tests/ tools/ scripts/ && echo "        PASS" || { echo "        FAIL"; FAILED=1; }
 
 # ── Step 3: pytest unit / integration tests ───────────────────────────────────
 echo "[ 3/$STEPS ] pytest (unit + integration tests)..."

@@ -1,10 +1,19 @@
-# Set update schedule for GitHub Actions
-
+# Keeps the CI actions, the base images and the Python dependencies up to date
+# (weekly pull requests into dev, so they ship with the next release).
 version: 2
 updates:
-
-  - package-ecosystem: "github-actions"
-    directory: "/"
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
     schedule:
-      # Check for updates to GitHub Actions every week
-      interval: "weekly"
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /docker
+    target-branch: dev
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directories: [/, /hub, /remote]
+    target-branch: dev
+    schedule:
+      interval: weekly

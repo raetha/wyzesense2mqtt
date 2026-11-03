@@ -442,9 +442,24 @@ class DongleWorker:
             else:
                 self._logger.warning("Dongle returned empty sensor list")
                 registry.ensure_owned_have_state(self._dongle.mac)
+        except dongle_protocol.SensorListIncomplete as exc:
+            # The MACs that arrived are real pairings; which one is missing is unknown, so
+            # nothing is pruned and this dongle's sensors stay counted as paired (the orphan
+            # sweep would otherwise mark them).
+            self._logger.error(
+                f"Dongle {self._dongle.mac} {exc}; using the {len(exc.sensors)} it sent. "
+                "A slot that never arrives is usually corrupt: see 'dongle_tool reset' in docs/cli-tools.md"
+            )
+            received = [m for m in exc.sensors if registry.is_valid_mac(m)]
+            auto_added = registry.reconcile_with_dongle(self._dongle.mac, received, prune=False)
+            for mac in auto_added:
+                self._logger.warning(f"Auto-added unconfigured sensor {mac} — update sensors.yaml to set name/type")
+            registry.ensure_owned_have_state(self._dongle.mac)
+            self._paired_macs = list(dict.fromkeys(received + registry.macs_owned_by(self._dongle.mac)))
         except TimeoutError:
             self._logger.error("Timed out fetching sensor list from dongle")
             registry.ensure_owned_have_state(self._dongle.mac)
+            self._paired_macs = registry.macs_owned_by(self._dongle.mac)
 
         # Discovery schema migration (run once per schema bump)
         if self._config["hass_discovery"]:

@@ -4,12 +4,82 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [4.0.1] — 2026-07-29
+## [Unreleased]
+
+## [4.0.2] - 2026-11-02
+
+Makes the Home Assistant apps usable with 4.x, and helps with old dongles
+whose pairing table has a corrupt entry. Nothing to do on upgrade, except in
+the Home Assistant app if you had set a specific dongle path (see below).
+
+### Added
+
+- **`dongle_tool reset`** unpairs every sensor from a dongle, including a
+  corrupt pairing slot that `unpair` and `fix` can't reach. It shows what's
+  paired first and only acts with `--yes`; the sensors then need pairing
+  again. See [docs/cli-tools.md](https://github.com/raetha/wyzesense2mqtt/blob/main/docs/cli-tools.md#a-pairing-slot-that-cant-be-read).
+  ([#110](https://github.com/raetha/wyzesense2mqtt/issues/110))
+
+### Changed
+
+- **Docker images are now also tagged without the leading `v`**: each release
+  is published as `X.Y.Z` (for example `4.0.2`), `X.Y` (follows patch
+  releases) and `latest`. The `vX.Y.Z` tags are still published, so existing
+  pins keep working.
+- **Test builds** (from the development branch, now called `dev`) are
+  published as `dev` and `<version>-dev.<build>`. The old `devel` tag keeps
+  receiving them for now.
+- **The CLI tools run straight from the images** (their working directory is
+  now `/app`): `docker run … --entrypoint python3 ghcr.io/raetha/ws2m-hub -m
+  cli.dongle_tool …`, or `docker exec ws2m-hub python3 -m cli.mqtt_tool …`.
+  [docs/cli-tools.md](https://github.com/raetha/wyzesense2mqtt/blob/main/docs/cli-tools.md) is updated for the current container
+  and image names.
+- **The images are built from exact dependency versions**, updated through
+  reviewed pull requests rather than whatever was newest at build time.
+
+### Fixed
+
+- **A dongle with an unreadable pairing slot no longer hides its other
+  sensors.** When an old dongle's sensor list stops short, the hub now uses
+  the sensors it did receive instead of none, and no longer counts the
+  dongle's sensors as unpaired (which could mark them orphaned). `list` and
+  `fix` in `dongle_tool` show what they could read and point to `reset`.
+  ([#110](https://github.com/raetha/wyzesense2mqtt/issues/110))
+- **`dongle_tool unpair` says when a MAC wasn't paired**, instead of always
+  reporting it removed.
+- **Home Assistant app: the dongle setting works again.** The hub had stopped
+  reading the app's `usb_dongle` option in 4.0.0 and started without a local
+  dongle; the app's option is now called `dongle`, like everywhere else. If
+  you had set a specific device path, set it again (the default, `auto`,
+  needs nothing).
+
+### Internal
+
+- CI hardening: a single `CI passed` check gates releases, and no job keeps
+  the workflow token on disk unless it pushes with git
+  (`persist-credentials: false`).
+- `dev` carries the expected next version from now on, so test builds are
+  numbered as the release they lead to.
+- Developer docs: file names under `docs/` are now lowercase (for example
+  `docs/cli-tools.md`), and this changelog follows Keep a Changelog's
+  section names and order throughout.
+
+## [4.0.1] - 2026-07-29
 
 Hardening for the remote bridge feature (the connection between a hub and a
 remote dongle relay) introduced in 4.0.0, plus two chime fixes. Nothing here
 requires any action on your part — everything takes effect automatically on
 upgrade, including for remotes and chimes you already have set up.
+
+### Fixed
+
+- **The chime's "Play sound" button wasn't showing up in Home Assistant.**
+  An invalid setting in its device configuration caused Home Assistant to
+  reject the whole device, so the button and its other controls never
+  appeared. (#107)
+- **The chime no longer shows a battery.** It's a plug-in accessory with no
+  battery, but was incorrectly getting battery entities in Home Assistant.
+  Removed; signal strength and chip temperature are unaffected.
 
 ### Security
 
@@ -33,66 +103,7 @@ upgrade, including for remotes and chimes you already have set up.
   wiping its data volume) still works automatically, but the hub now logs a
   clear warning when this happens so it doesn't go unnoticed.
 
-### Fixed
-
-- **The chime's "Play sound" button wasn't showing up in Home Assistant.**
-  An invalid setting in its device configuration caused Home Assistant to
-  reject the whole device, so the button and its other controls never
-  appeared. (#107)
-- **The chime no longer shows a battery.** It's a plug-in accessory with no
-  battery, but was incorrectly getting battery entities in Home Assistant.
-  Removed; signal strength and chip temperature are unaffected.
-
-## [4.0.0] — 2026-07-16
-
-
-### Breaking changes
-
-**Container image renamed and environment variables updated** — the hub image
-is now `ghcr.io/<owner>/ws2m-hub` (was `ghcr.io/<owner>/wyzesense2mqtt`).
-Updating to the new image requires editing your compose file; while there,
-all environment variables must also be updated to use a `WS2M_` prefix
-(e.g. `MQTT_HOST` → `WS2M_MQTT_HOST`). Unprefixed names are no longer
-accepted. Updated compose and env file examples are in `examples/hub/`;
-Dockerfiles are `docker/Dockerfile.hub` and `docker/Dockerfile.remote`.
-The remote image is `ghcr.io/<owner>/ws2m-remote` (new — see Added).
-
-**Data directory renamed** — the default data directory inside the container
-has been renamed from `config/` to `data/` (`/app/config` → `/app/data`).
-On first start, `service.sh` creates a symlink so existing mounts continue
-to work. To migrate cleanly, update your volume mount to `/app/data` and
-remove the symlink.
-
-**Logging** — logs now go to stdout only (`docker logs` / `journalctl`).
-`config/logging.yaml` and the `logs/` directory are no longer used; remove
-the `VOL_LOGS` volume mount from your compose file.
-
-**Default topic prefix and client ID** — `self_topic_root` and
-`mqtt_client_id` now default to `ws2m` instead of `wyzesense2mqtt`. Installs
-with these values set explicitly are unaffected. If your broker has ACL rules
-or HA automations referencing `wyzesense2mqtt`, update them or pin the old
-values in your config.
-
-**Sensor data payload attributes** renamed: `wyzesense2mqtt_version` →
-`ws2m_version`, `discovery_schema_version` → `ws2m_discovery_schema`. Update
-any HA templates or automations that reference these attributes.
-
-**Hub HA device identity** — the single `ws2m_bridge_<mac>` device is now
-two devices: `ws2m_hub_<uuid>` (software) and `ws2m_dongle_<mac>`
-(hardware). On first 4.0 startup the bridge clears all pre-4.0 retained
-topics automatically (schema v1→v2). Delete the stale bridge device from HA's
-device registry manually after upgrading.
-
-**Scan and remove MQTT topics are now dongle-scoped** — `ws2m/scan` and
-`ws2m/remove` are now `ws2m/dongle/<mac>/scan` and `ws2m/dongle/<mac>/remove`.
-
-**Shared code moved to `shared/`** — `dongle_protocol.py` and the new
-`device_discovery.py` are shared by the hub and the remote. Docker images and
-release packages flatten `shared/` alongside the app code, so nothing changes
-for Docker users; git-clone native installs must keep `shared/` next to
-`hub/`/`remote/` (the entry points pick it up automatically).
-
-**Python 3.12+ required.**
+## [4.0.0] - 2026-07-16
 
 ### Added
 
@@ -201,6 +212,54 @@ for Docker users; git-clone native installs must keep `shared/` next to
 
 ### Changed
 
+#### Breaking changes
+
+**Container image renamed and environment variables updated** — the hub image
+is now `ghcr.io/<owner>/ws2m-hub` (was `ghcr.io/<owner>/wyzesense2mqtt`).
+Updating to the new image requires editing your compose file; while there,
+all environment variables must also be updated to use a `WS2M_` prefix
+(e.g. `MQTT_HOST` → `WS2M_MQTT_HOST`). Unprefixed names are no longer
+accepted. Updated compose and env file examples are in `examples/hub/`;
+Dockerfiles are `docker/Dockerfile.hub` and `docker/Dockerfile.remote`.
+The remote image is `ghcr.io/<owner>/ws2m-remote` (new — see Added).
+
+**Data directory renamed** — the default data directory inside the container
+has been renamed from `config/` to `data/` (`/app/config` → `/app/data`).
+On first start, `service.sh` creates a symlink so existing mounts continue
+to work. To migrate cleanly, update your volume mount to `/app/data` and
+remove the symlink.
+
+**Logging** — logs now go to stdout only (`docker logs` / `journalctl`).
+`config/logging.yaml` and the `logs/` directory are no longer used; remove
+the `VOL_LOGS` volume mount from your compose file.
+
+**Default topic prefix and client ID** — `self_topic_root` and
+`mqtt_client_id` now default to `ws2m` instead of `wyzesense2mqtt`. Installs
+with these values set explicitly are unaffected. If your broker has ACL rules
+or HA automations referencing `wyzesense2mqtt`, update them or pin the old
+values in your config.
+
+**Sensor data payload attributes** renamed: `wyzesense2mqtt_version` →
+`ws2m_version`, `discovery_schema_version` → `ws2m_discovery_schema`. Update
+any HA templates or automations that reference these attributes.
+
+**Hub HA device identity** — the single `ws2m_bridge_<mac>` device is now
+two devices: `ws2m_hub_<uuid>` (software) and `ws2m_dongle_<mac>`
+(hardware). On first 4.0 startup the bridge clears all pre-4.0 retained
+topics automatically (schema v1→v2). Delete the stale bridge device from HA's
+device registry manually after upgrading.
+
+**Scan and remove MQTT topics are now dongle-scoped** — `ws2m/scan` and
+`ws2m/remove` are now `ws2m/dongle/<mac>/scan` and `ws2m/dongle/<mac>/remove`.
+
+**Shared code moved to `shared/`** — `dongle_protocol.py` and the new
+`device_discovery.py` are shared by the hub and the remote. Docker images and
+release packages flatten `shared/` alongside the app code, so nothing changes
+for Docker users; git-clone native installs must keep `shared/` next to
+`hub/`/`remote/` (the entry points pick it up automatically).
+
+**Python 3.12+ required.**
+
 - **Global sensor registry** — `<data>/sensors.yaml` and `<data>/state.yaml`
   hold the whole sensor fleet across every dongle (local and remote); 3.1.0
   files load as-is. Sensor configuration (name, class, invert_state, PINs,
@@ -237,6 +296,17 @@ for Docker users; git-clone native installs must keep `shared/` next to
 - Per-sensor `timeout` override removed from `sensors.yaml`; timeouts are now
   type-driven (V1: 8 h, V2: 4 h, Chime: 24 h); silently stripped on first load.
 
+#### Migration notes
+
+Existing 3.1.0 `config.yaml`, `sensors.yaml`, and `state.yaml` files are
+compatible — no manual changes required; sensors are claimed by their dongle
+on first start. Removed config keys (`mqtt_qos`, `mqtt_retain`,
+`publish_sensor_name`, per-sensor `timeout`) are silently stripped on first
+load. `migrations.yaml` records `discovery_schema_version: 2` after the v1→v2
+migration runs; subsequent starts skip the migration. Interim 4.0.0-devel
+per-dongle `dongles/<mac>/` directories are merged into the flat registry
+files automatically (originals kept at `dongles.migrated/`).
+
 ### Fixed
 
 - **Climate signal strength offset corrected** — signal strength was read from
@@ -258,20 +328,10 @@ for Docker users; git-clone native installs must keep `shared/` next to
   `payload_on`/`payload_off` in HA discovery for contact and motion sensors.
 - Non-ASCII MAC bytes no longer crash event parsing; decoded via latin-1 with a
   warning.
-### Migration notes
 
-Existing 3.1.0 `config.yaml`, `sensors.yaml`, and `state.yaml` files are
-compatible — no manual changes required; sensors are claimed by their dongle
-on first start. Removed config keys (`mqtt_qos`, `mqtt_retain`,
-`publish_sensor_name`, per-sensor `timeout`) are silently stripped on first
-load. `migrations.yaml` records `discovery_schema_version: 2` after the v1→v2
-migration runs; subsequent starts skip the migration. Interim 4.0.0-devel
-per-dongle `dongles/<mac>/` directories are merged into the flat registry
-files automatically (originals kept at `dongles.migrated/`).
+## [3.1.0] - 2026-06-13
 
-## [3.1.0] — 2026-06-13
-
-### Maintenance
+### Internal
 
 - Migrated MQTT client to `paho-mqtt` v2 (`CallbackAPIVersion.VERSION2`),
   updating `on_connect`/`on_disconnect` callback signatures and pinning
@@ -291,7 +351,8 @@ files automatically (originals kept at `dongles.migrated/`).
 - Removed `codeql-analysis.yml`; CodeQL scanning enabled via GitHub's
   default setup in repository security settings.
 
-
+[Unreleased]: https://github.com/raetha/wyzesense2mqtt/compare/v4.0.2...dev
+[4.0.2]: https://github.com/raetha/wyzesense2mqtt/compare/v4.0.1...v4.0.2
 [4.0.1]: https://github.com/raetha/wyzesense2mqtt/compare/v4.0.0...v4.0.1
 [4.0.0]: https://github.com/raetha/wyzesense2mqtt/compare/v3.1.0...v4.0.0
 [3.1.0]: https://github.com/raetha/wyzesense2mqtt/compare/v3.0.2...v3.1.0

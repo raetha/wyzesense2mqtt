@@ -66,22 +66,52 @@ def _on_event(dongle: dp.Dongle, event) -> None:
 # ---------------------------------------------------------------------------
 
 
+_CORRUPT_SLOT_HINT = (
+    "  {n} paired slot(s) never arrived from the dongle, which usually means a corrupt pairing slot.\n"
+    "  'unpair' can't reach it (its MAC is unknown); 'reset --yes' unpairs every sensor, including it."
+)
+
+
+def _display(mac: str) -> str:
+    """The MAC as typed for 'unpair': itself if ASCII, else 16 hex characters."""
+    try:
+        mac.encode("ascii")
+        return mac
+    except UnicodeEncodeError:
+        return "".join(f"{ord(c):02x}" for c in mac)
+
+
+def _read_list(dongle: dp.Dongle) -> tuple[list[str], int]:
+    """The paired MACs the dongle sends, and how many it counts but never sends."""
+    try:
+        return dongle.list(), 0
+    except dp.SensorListIncomplete as exc:
+        return exc.sensors, exc.expected - len(exc.sensors)
+
+
+def _count_or_none(dongle: dp.Dongle) -> int | None:
+    try:
+        return dongle.count()
+    except (TimeoutError, AssertionError):
+        return None
+
+
 def cmd_list(dongle: dp.Dongle, _args) -> None:
     """List all sensors currently paired with the dongle."""
     try:
-        sensors = dongle.list()
+        sensors, missing = _read_list(dongle)
     except TimeoutError:
         print("Error: timed out while retrieving sensor list")
         return
 
-    print(f"{len(sensors)} sensor(s) paired:")
+    if missing:
+        print(f"Dongle reports {len(sensors) + missing} sensor(s) paired; {len(sensors)} could be read:")
+    else:
+        print(f"{len(sensors)} sensor(s) paired:")
     for mac in sensors:
-        try:
-            mac.encode("ascii")
-            display = mac
-        except UnicodeEncodeError:
-            display = "".join(f"{ord(c):02x}" for c in mac)
-        print(f"  {display}")
+        print(f"  {_display(mac)}")
+    if missing:
+        print(_CORRUPT_SLOT_HINT.format(n=missing))
 
 
 def cmd_pair(dongle: dp.Dongle, _args) -> None:
@@ -100,6 +130,8 @@ def cmd_unpair(dongle: dp.Dongle, args) -> None:
 
     Accepts 8-character ASCII MACs or 16-character hex-encoded MACs
     (as displayed by 'list' for sensors with non-ASCII addresses).
+    The dongle acknowledges any MAC, paired or not, so its sensor count
+    before and after tells whether anything was removed.
     """
     if not args.mac:
         print("Error: provide at least one MAC address")
@@ -117,32 +149,42 @@ def cmd_unpair(dongle: dp.Dongle, args) -> None:
             print(f"Invalid MAC (must be 8 or 16 chars): {mac}")
             continue
 
-        display = mac if mac.isascii() else "".join(f"{ord(c):02x}" for c in mac)
+        display = _display(mac)
         print(f"Unpairing {display}…")
+        before = _count_or_none(dongle)
         try:
             dongle.delete(mac)
-            print("  Removed")
         except TimeoutError:
             print(f"  Error: timed out while removing {display}")
+            continue
         except AssertionError as err:
             print(f"  Error: {err}")
+            continue
+        after = _count_or_none(dongle)
+        if before is None or after is None:
+            print("  Removed (the dongle didn't report its sensor count to confirm)")
+        elif after < before:
+            print("  Removed")
+        else:
+            print("  Not paired: nothing was removed")
 
 
 def cmd_fix(dongle: dp.Dongle, _args) -> None:
     """Remove invalid (corrupt/null) sensor MACs from dongle NVRAM.
 
-    Fetches the actual paired sensor list from the dongle, identifies entries
-    with invalid MACs (all-zero, all-0xFF, non-printable ASCII), and removes
-    them.  Healthy sensors are left untouched.
+    Fetches the paired sensor list from the dongle, identifies entries with
+    invalid MACs (all-zero, all-0xFF, non-printable ASCII), and removes them.
+    Healthy sensors are left untouched.  Slots the dongle counts but never
+    sends can't be removed this way; 'reset' clears them.
     """
     print("Fetching paired sensor list from dongle…")
     try:
-        macs = dongle.list()
+        macs, missing = _read_list(dongle)
     except (TimeoutError, Exception) as exc:
         print(f"  Error: could not retrieve sensor list — {exc}")
         return
 
-    if not macs:
+    if not macs and not missing:
         print("  No sensors paired — nothing to fix.")
         return
 
@@ -155,10 +197,6 @@ def cmd_fix(dongle: dp.Dongle, _args) -> None:
 
     print(f"  Found {len(macs)} paired sensor(s): {len(valid)} valid, {len(invalid)} invalid.")
 
-    if not invalid:
-        print("  No corrupt entries found — nothing to remove.")
-        return
-
     for mac in invalid:
         display = dp.bytes_to_hex(mac.encode("latin-1"))
         try:
@@ -167,7 +205,48 @@ def cmd_fix(dongle: dp.Dongle, _args) -> None:
         except (TimeoutError, AssertionError, Exception) as exc:
             print(f"  Failed to remove {display}: {exc}")
 
+    if missing:
+        print(_CORRUPT_SLOT_HINT.format(n=missing))
+    elif not invalid:
+        print("  No corrupt entries found — nothing to remove.")
+        return
+
     print("Done.")
+
+
+def cmd_reset(dongle: dp.Dongle, args) -> None:
+    """Unpair every sensor, corrupt slots included (the dongle's delete-all command)."""
+    try:
+        sensors, missing = _read_list(dongle)
+    except TimeoutError:
+        sensors, missing = [], 0
+        print("Could not read the paired sensor list.")
+    if sensors or missing:
+        print(f"Paired now ({len(sensors) + missing}, of which {missing} unreadable):" if missing else "Paired now:")
+        for mac in sensors:
+            print(f"  {_display(mac)}")
+
+    if not args.yes:
+        print(
+            "'reset' unpairs every sensor from this dongle; each one then has to be paired again.\n"
+            "Run it again with --yes to go ahead."
+        )
+        return
+
+    print("Unpairing all sensors…")
+    try:
+        dongle.delete_all()
+    except (TimeoutError, AssertionError) as exc:
+        print(f"  Error: {exc or 'the dongle did not confirm'}")
+        return
+
+    remaining = _count_or_none(dongle)
+    if remaining == 0:
+        print("  Done: no sensors paired. Pair them again with 'pair' or from Home Assistant.")
+    elif remaining is None:
+        print("  Sent, but the dongle didn't report its sensor count to confirm.")
+    else:
+        print(f"  The dongle still reports {remaining} paired sensor(s).")
 
 
 def cmd_chime(dongle: dp.Dongle, args) -> None:
@@ -228,6 +307,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("monitor", help="Monitor and print live sensor events")
     sub.add_parser("fix", help="Remove known-bad corrupt sensor MACs")
 
+    reset_p = sub.add_parser("reset", help="Unpair every sensor, including corrupt slots")
+    reset_p.add_argument("--yes", action="store_true", help="Unpair them all (without it, only shows what's paired)")
+
     unpair_p = sub.add_parser("unpair", help="Unpair sensor(s) by MAC address")
     unpair_p.add_argument("mac", nargs="+", metavar="MAC", help="8-char or 16-char hex MAC address(es)")
 
@@ -253,6 +335,7 @@ _COMMANDS = {
     "pair": cmd_pair,
     "unpair": cmd_unpair,
     "fix": cmd_fix,
+    "reset": cmd_reset,
     "chime": cmd_chime,
     "raw": cmd_raw,
     "monitor": cmd_monitor,

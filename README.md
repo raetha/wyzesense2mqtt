@@ -1,6 +1,6 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge)](http://makeapullrequest.com)
 [![Release](https://img.shields.io/github/v/release/raetha/wyzesense2mqtt?style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/releases)
-[![Validation](https://img.shields.io/github/actions/workflow/status/raetha/wyzesense2mqtt/ci.yml?label=validation&style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/actions/workflows/ci.yml)
+[![Validation](https://img.shields.io/github/actions/workflow/status/raetha/wyzesense2mqtt/build.yml?branch=main&label=build&style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/actions/workflows/build.yml)
 [![Issues](https://img.shields.io/github/issues/raetha/wyzesense2mqtt?style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/issues)
 [![PRs](https://img.shields.io/github/issues-pr/raetha/wyzesense2mqtt?style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/pulls)
 [![License](https://img.shields.io/github/license/raetha/wyzesense2mqtt?style=for-the-badge)](https://github.com/raetha/wyzesense2mqtt/blob/main/LICENSE)
@@ -9,7 +9,7 @@
 
 Configurable WyzeSense to MQTT Gateway intended for use with Home Assistant or other platforms that use the same MQTT discovery mechanisms. The gateway allows direct local access to [Wyze Sense](https://wyze.com/wyze-sense.html) products without the need for a Wyze Cam or cloud services. This project and its dependencies have no relation to Wyze Labs Inc.
 
-Please submit pull requests against the devel branch.
+Please submit pull requests against the `dev` branch; see [docs/development.md](docs/development.md).
 
 ## Special Thanks
 * [HcLX](https://hclxing.wordpress.com) for [WyzeSensePy](https://github.com/HclX/WyzeSensePy), the core library this project forked.
@@ -24,7 +24,7 @@ Please submit pull requests against the devel branch.
     - [Docker](#docker)
     - [Remote Bridge (Docker)](#remote-bridge-docker)
     - [Home Assistant App](#home-assistant-app)
-    - [Linux Systemd](docs/linux_systemd_installation.md)
+    - [Linux Systemd](docs/linux-systemd-installation.md)
   - [Remote Bridge](#remote-bridge)
   - [Configuration Files](#configuration-files)
     - [config.yaml](#configyaml)
@@ -34,7 +34,7 @@ Please submit pull requests against the devel branch.
     - [Removing a Sensor](#removing-a-sensor)
     - [Removing a Dongle](#removing-a-dongle)
     - [Reload Sensors](#reload-sensors)
-    - [CLI Tools](docs/cli_tools.md)
+    - [CLI Tools](docs/cli-tools.md)
   - [Home Assistant](#home-assistant)
   - [Compatible Hardware](#compatible-hardware)
 
@@ -90,7 +90,7 @@ for full installation and configuration documentation.
 
 ### Linux Systemd
 
-For hub and remote installations without Docker, see [docs/linux_systemd_installation.md](docs/linux_systemd_installation.md). This method is not actively tested.
+For hub and remote installations without Docker, see [docs/linux-systemd-installation.md](docs/linux-systemd-installation.md). This method is not actively tested.
 
 ## Remote Bridge
 
@@ -274,11 +274,11 @@ Cleanup also happens automatically in stages: an hourly sweep marks any sensor n
 
 > **Note:** Only press this button after a deliberate permanent removal. If a dongle is temporarily disconnected or experiencing a USB fault, wait until it is reconnected before using this button to avoid losing its sensor configuration.
 
-For surgical single-dongle removal from the command line, see [CLI Tools](docs/cli_tools.md).
+For surgical single-dongle removal from the command line, see [CLI Tools](docs/cli-tools.md).
 
 ### CLI Tools
 
-For situations requiring direct dongle access or surgical MQTT cleanup outside the normal service workflow — such as pairing sensors without the bridge running, diagnosing a dongle the bridge cannot open, or clearing orphaned HA discovery topics — see [docs/cli_tools.md](docs/cli_tools.md).
+For situations requiring direct dongle access or surgical MQTT cleanup outside the normal service workflow — such as pairing sensors without the bridge running, diagnosing a dongle the bridge cannot open, or clearing orphaned HA discovery topics — see [docs/cli-tools.md](docs/cli-tools.md).
 
 ## Home Assistant
 Home Assistant simply needs to be configured with the MQTT broker that the gateway publishes topics to. Once configured, the MQTT integration will automatically add a device for each sensor, along with entities for state, battery, and signal strength (plus temperature/humidity for climate and leak sensors). By default these entities will have a `device_class` of `opening` for contact sensors, `motion` for motion sensors, and `moisture` for leak sensors, and the device will be named `WyzeSense <MAC>`. The following settings are adjustable live from the HA sensor device page and are written back to `sensors.yaml` automatically:
@@ -293,7 +293,7 @@ The **Keypad v2** (WSKP1) creates an `alarm_control_panel` entity, a `motion` bi
 
 The **Wyze Video Doorbell V1 Chime** (WCHIME1) creates a `button` entity to trigger playback and `number` entities for ring tone, volume, and repeat count. These settings are adjustable directly from the HA device page and are persisted to `sensors.yaml` automatically. It's a mains-powered accessory, so — unlike other sensor types — it does not get `battery`/`battery_voltage` diagnostic entities; it still gets signal strength and chip temperature.
 
-Discovery uses Home Assistant's device-based MQTT discovery format (one config topic per device, covering all of its entities). See [docs/HA_MQTT_COMPLIANCE.md](docs/HA_MQTT_COMPLIANCE.md) for the HA version this was last verified against and notes on the discovery schema and migrations.
+Discovery uses Home Assistant's device-based MQTT discovery format (one config topic per device, covering all of its entities). See [docs/ha-mqtt-compliance.md](docs/ha-mqtt-compliance.md) for the HA version this was last verified against and notes on the discovery schema and migrations.
 
 ## Compatible Hardware
 ### Wyze Branded

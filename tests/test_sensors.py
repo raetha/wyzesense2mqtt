@@ -751,3 +751,17 @@ def test_add_pin_handles_legacy_string_pin(tmp_dongle_dir):
     assert isinstance(pins, list)
     assert "1234" in pins
     assert "5678" in pins
+
+
+def test_reconcile_without_prune_keeps_unlisted_state(tmp_dongle_dir):
+    """An incomplete dongle list adds what arrived but proves nothing about what didn't."""
+    from sensors import SensorRegistry
+
+    r = SensorRegistry()
+    r.load_sensors()
+    r.load_state()
+    r.ensure_state_entry("BBBBBBBB", TEST_DONGLE_MAC)
+
+    auto = r.reconcile_with_dongle(TEST_DONGLE_MAC, ["AAAAAAAA"], prune=False)
+    assert auto == ["AAAAAAAA"]
+    assert "BBBBBBBB" in r.state
