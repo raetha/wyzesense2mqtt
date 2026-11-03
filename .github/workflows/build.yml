@@ -5,8 +5,8 @@ name: Build and publish
 # Push to dev: publishes the test images (ghcr.io/raetha/ws2m-hub and ws2m-remote, tags
 # `dev`, `devel` and `<version>-dev.<run>`) and tells raetha/home-assistant-apps, whose
 # WS2M Hub (devel) app then installs `<version>-dev.<run>`.
-# Push to main: if hub/config.py's VERSION has no v<version> tag yet, publishes the release
-# images (`<version>`, `<major>.<minor>`, `latest`, `v<version>`), the tag and GitHub release
+# Push to main: if hub/config.py's VERSION isn't tagged yet (`<version>`, or `v<version>` for
+# 4.0.2 and earlier), publishes the release images (`<version>`, `<major>.<minor>`, `latest`), the tag and GitHub release
 # (notes from CHANGELOG.md, hub and remote packages attached), tells the app repository,
 # then resets `dev` to `main` (sync-dev) if `dev` has nothing newer.
 
@@ -101,8 +101,7 @@ jobs:
           VERSION: ${{ needs.checks.outputs.version }}
         run: |
           if [ "$GITHUB_REF" = refs/heads/main ]; then
-            # `v<version>` keeps the tag style of 4.0.x releases working for anyone pinned to it
-            tags="$VERSION ${VERSION%.*} latest v$VERSION"
+            tags="$VERSION ${VERSION%.*} latest"
           else
             # `devel` is the test tag from before the branch was renamed; kept so existing pulls still update
             tags="dev devel $VERSION-dev.$GITHUB_RUN_NUMBER"
@@ -178,7 +177,7 @@ jobs:
         run: |
           set -e
           python3 scripts/release_notes.py notes "$VERSION" > notes.md
-          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "WyzeSense2MQTT $VERSION" \
+          gh release create "$VERSION" --target "$GITHUB_SHA" --title "WyzeSense2MQTT $VERSION" \
             --notes-file notes.md "ws2m-hub-$VERSION.tar.gz" "ws2m-remote-$VERSION.tar.gz"
 
   # The app repository bumps its WS2M Hub app (release) or WS2M Hub (devel) app (dev) to the

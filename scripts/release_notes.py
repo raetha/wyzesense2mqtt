@@ -2,7 +2,7 @@
 """Changelog checks and release notes for WyzeSense2MQTT.
 
   python3 scripts/release_notes.py check            # CHANGELOG.md has [Unreleased] and the current version
-  python3 scripts/release_notes.py plan [--github]  # version, and whether its v<version> tag is missing
+  python3 scripts/release_notes.py plan [--github]  # version, and whether it's tagged yet
   python3 scripts/release_notes.py notes <version>  # release notes: that changelog section + install text
   python3 scripts/release_notes.py notes Unreleased # what's on dev but not released yet
 
@@ -88,11 +88,9 @@ def check(release: bool) -> None:
 
 def plan(github: bool) -> None:
     current = version()
-    tag = f"v{current}"
-    release = not tag_exists(tag)
-    print(
-        f"version {current}: " + (f"{tag} not tagged yet, a push to main releases it" if release else f"{tag} released")
-    )
+    # releases up to 4.0.2 are tagged v<version>
+    release = not (tag_exists(current) or tag_exists(f"v{current}"))
+    print(f"version {current}: " + ("not tagged yet, a push to main releases it" if release else "released"))
     if github and os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as out:
             out.write(f"version={current}\nrelease={'true' if release else 'false'}\n")
@@ -112,7 +110,7 @@ def notes(name: str) -> None:
 ---
 
 **Docker:** `ghcr.io/raetha/ws2m-hub:{name}` and `ghcr.io/raetha/ws2m-remote:{name}` \
-(also tagged `{minor}`, `latest` and `v{name}`).
+(also tagged `{minor}` and `latest`).
 **Home Assistant:** update the WS2M Hub app from the [app repository](https://github.com/raetha/home-assistant-apps).
 **Without Docker:** the hub and remote packages are attached below; see \
 [Linux Systemd]({GITHUB}#linux-systemd) in the README.""")

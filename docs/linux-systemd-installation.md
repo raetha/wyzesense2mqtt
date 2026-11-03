@@ -18,11 +18,11 @@ Connect the USB dongle to the Linux host.
 
 ### 2. Download the hub package
 
-Download the latest release from the [GitHub Releases page](https://github.com/raetha/wyzesense2mqtt/releases). Replace `X.Y.Z` with the version you want:
+Download the latest release from the [GitHub Releases page](https://github.com/raetha/wyzesense2mqtt/releases). Replace `X.Y.Z` with the version you want (for 4.0.2 and earlier, the download path starts `download/v${VERSION}/`):
 
 ```bash
 VERSION=X.Y.Z
-wget "https://github.com/raetha/wyzesense2mqtt/releases/download/v${VERSION}/ws2m-hub-${VERSION}.tar.gz"
+wget "https://github.com/raetha/wyzesense2mqtt/releases/download/${VERSION}/ws2m-hub-${VERSION}.tar.gz"
 mkdir -p /opt/ws2m/hub
 tar -xzf "ws2m-hub-${VERSION}.tar.gz" -C /opt/ws2m/hub/
 ```
@@ -98,7 +98,7 @@ Download the latest release from the [GitHub Releases page](https://github.com/r
 
 ```bash
 VERSION=X.Y.Z
-wget "https://github.com/raetha/wyzesense2mqtt/releases/download/v${VERSION}/ws2m-remote-${VERSION}.tar.gz"
+wget "https://github.com/raetha/wyzesense2mqtt/releases/download/${VERSION}/ws2m-remote-${VERSION}.tar.gz"
 mkdir -p /opt/ws2m/remote
 tar -xzf "ws2m-remote-${VERSION}.tar.gz" -C /opt/ws2m/remote/
 ```

@@ -33,7 +33,7 @@ Dependencies: `hub/requirements.txt` and `remote/requirements.txt` go into the i
 
 | Branch | What goes there | What a push does |
 | --- | --- | --- |
-| `main` | One squash-merged commit per release. Never pushed to directly. | Releases the version in `hub/config.py` if `v<version>` isn't tagged yet; resets `dev` to `main`. |
+| `main` | One squash-merged commit per release. Never pushed to directly. | Releases the version in `hub/config.py` if it isn't tagged yet (`X.Y.Z`; `vX.Y.Z` for 4.0.2 and earlier); resets `dev` to `main`. |
 | `dev` | Work that's been adopted, ready for the next release, and Dependabot's merges. `## [Unreleased]` in `CHANGELOG.md` is kept up to date here. | Publishes the test images and updates the WS2M Hub (devel) app. |
 | `try/<topic>` | Experiments that may be dropped. Branched from `dev`. | Nothing by itself; open a (draft) pull request into `dev` to run CI. |
 
@@ -47,10 +47,10 @@ Day to day:
 
 Releasing (only when the owner asks):
 
-1. On `dev`: rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` with a fresh empty `## [Unreleased]` above it, update the compare links at the bottom (`[Unreleased]: …/compare/vX.Y.Z...dev`, `[X.Y.Z]: …/compare/v<previous>...vX.Y.Z`), and check `VERSION` in `hub/config.py` is still right for what's in the release. Check the notes as they'll appear: `python3 scripts/release_notes.py notes X.Y.Z`.
+1. On `dev`: rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` with a fresh empty `## [Unreleased]` above it, update the compare links at the bottom (`[Unreleased]: …/compare/X.Y.Z...dev`, `[X.Y.Z]: …/compare/<previous>...X.Y.Z`, where the previous tag is `v4.0.2` for the first release after it), and check `VERSION` in `hub/config.py` is still right for what's in the release. Check the notes as they'll appear: `python3 scripts/release_notes.py notes X.Y.Z`.
 2. Open a pull request from `dev` into `main` titled "WyzeSense2MQTT X.Y.Z", with the new changelog section as its description.
 3. The owner squash-merges it.
-4. CI on `main` publishes the images, creates the tag `vX.Y.Z` and the GitHub release (the changelog section plus install notes, with the hub and remote packages attached), bumps the WS2M Hub app, and resets `dev` to `main` if `dev` has no newer work. If it does, reset by hand once that work is released: `git checkout dev && git reset --hard origin/main && git push --force-with-lease`.
+4. CI on `main` publishes the images, creates the tag `X.Y.Z` (no leading "v" after 4.0.2) and the GitHub release (the changelog section plus install notes, with the hub and remote packages attached), bumps the WS2M Hub app, and resets `dev` to `main` if `dev` has no newer work. If it does, reset by hand once that work is released: `git checkout dev && git reset --hard origin/main && git push --force-with-lease`.
 
 Versions follow [Semantic Versioning](https://semver.org/).
 
@@ -69,7 +69,7 @@ Repository settings (owner, one time):
 - **Every push and pull request:** `scripts/release_notes.py check` (fails without `[Unreleased]`; for pull requests into `main` and pushes to `main`, also without a dated section for the current version, so an undated release can't merge), ruff check and format, byte-compile, pytest.
 - **`CI passed`:** a gate job that passes only when every check above did; it's the one status check the `main` ruleset requires. Every checkout uses `persist-credentials: false` except sync-dev's, the one job that pushes with git.
 - **Push to `dev`:** builds both images for every platform and pushes the tags `dev`, `devel` (the test tag before the branch rename, kept for existing pulls) and `<version>-dev.<run>`; then sends `ws2m-dev` with that version to raetha/home-assistant-apps.
-- **Push to `main` with an untagged version:** pushes the images as `X.Y.Z`, `X.Y`, `latest` and `vX.Y.Z` (the tag style of earlier releases), creates the tag and GitHub release, sends `ws2m-release` to the app repository.
+- **Push to `main` with an untagged version:** pushes the images as `X.Y.Z`, `X.Y` and `latest` (releases up to 4.0.2 were also tagged `vX.Y.Z`), creates the tag and GitHub release, sends `ws2m-release` to the app repository.
 - **Every push to `main`:** `sync-dev`.
 
 Secrets are only used on pushes, never on pull requests.

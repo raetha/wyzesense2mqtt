@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Release tags and Docker image tags no longer start with "v": this release is `4.0.3`, and its images are `ghcr.io/raetha/ws2m-hub:4.0.3` (and `4.0`, `latest`), with no `v4.0.3`. If you pin a `vX.Y.Z` image, switch to `X.Y.Z` (4.0.2 is published under both). Releases up to 4.0.2 keep their `v` tags.
+
 ## [4.0.2] - 2026-11-02
 
 Makes the Home Assistant apps usable with 4.x, and helps with old dongles

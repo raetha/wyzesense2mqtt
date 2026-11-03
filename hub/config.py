@@ -13,7 +13,7 @@ import uuid
 
 import yaml
 
-VERSION = "4.0.2"
+VERSION = "4.0.3"
 
 # ---------------------------------------------------------------------------
 # Directory / file name constants
