@@ -1,5 +1,5 @@
 # Hub runtime dependencies, pinned exactly; Dependabot proposes updates (into dev).
-paho-mqtt==2.1.0
+paho-mqtt==2.2.0
 PyYAML==6.0.3
 retrying==1.4.2
 websockets==17.4
