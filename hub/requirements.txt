@@ -3,4 +3,4 @@ paho-mqtt==2.1.0
 PyYAML==6.0.3
 retrying==1.4.2
 websockets==17.4
-zeroconf==0.153.0
+zeroconf==0.154.0
