@@ -301,9 +301,10 @@ Discovery uses Home Assistant's device-based MQTT discovery format (one config t
 * Wyze Sense Bridge Sensors
     * Contact Sensor v1
     * Motion Sensor v1
-* Wyze Sense Hub Sensors - Requires installing the Wyze Sense Hub firmware onto a Wyze Sense Bridge (unsupported)
+* Wyze Sense Hub Sensors that also pair with the stock Wyze Sense Bridge firmware ([#52](https://github.com/raetha/wyzesense2mqtt/issues/52))
     * Entry Sensor v2 (WSES2)
     * Motion Sensor v2 (WSMS2)
+* Wyze Sense Hub Sensors - Requires installing the Wyze Sense Hub firmware onto a Wyze Sense Bridge (unsupported)
     * Climate Sensor (WSCS1)
     * Leak Sensor (WSLS1)
     * Keypad v2 (WSKP1) — See [docs/keypad.md](docs/keypad.md) for setup with Home Assistant and Alarmo
